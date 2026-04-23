@@ -29,7 +29,7 @@ export default function BeneficiaryList() {
           .order('name'),
         supabase.from('meals').select('id, name, english_name, type, is_snack, created_at').order('type').order('is_snack').order('name'),
       ]);
-      if (bensResult.data) setBeneficiaries(bensResult.data as Beneficiary[]);
+      if (bensResult.data) setBeneficiaries(bensResult.data as unknown as Beneficiary[]);
       if (mealsResult.data) setMeals(mealsResult.data as Meal[]);
     } catch (err) {
       console.error('Fetch error:', err);
