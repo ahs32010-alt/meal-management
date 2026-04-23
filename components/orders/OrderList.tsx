@@ -38,7 +38,7 @@ export default function OrderList() {
         supabase.from('exclusions').select('meal_id'),
       ]);
 
-      if (ordersResult.data) setOrders(ordersResult.data as DailyOrder[]);
+      if (ordersResult.data) setOrders(ordersResult.data as unknown as DailyOrder[]);
       if (mealsResult.data) setMeals(mealsResult.data as Meal[]);
       if (bensResult.count != null) setTotalBeneficiaries(bensResult.count);
 

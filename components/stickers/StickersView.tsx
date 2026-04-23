@@ -7,32 +7,68 @@ import { MEAL_TYPE_LABELS, MEAL_TYPE_EN } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
 import { transliterate } from '@/lib/transliterate';
 
-// splits: beneficiary_id → set of meal_ids that go to a separate sticker
-type SplitsMap = Record<string, Set<string>>;
+// splits[ben_id][meal_id] = groupIndex  (0 = main sticker, 1 = sticker 2, …)
+// meal_ids not present default to group 0
+type GroupMap  = Record<string, number>;
+type SplitsMap = Record<string, GroupMap>;
+
+const GROUP_COLORS = [
+  { bg: 'bg-slate-700',   text: 'text-white', border: 'border-slate-700',   label: 'أصلي'   },
+  { bg: 'bg-violet-600',  text: 'text-white', border: 'border-violet-600',  label: 'ستيكر ٢' },
+  { bg: 'bg-rose-500',    text: 'text-white', border: 'border-rose-500',    label: 'ستيكر ٣' },
+  { bg: 'bg-amber-500',   text: 'text-white', border: 'border-amber-500',   label: 'ستيكر ٤' },
+  { bg: 'bg-emerald-600', text: 'text-white', border: 'border-emerald-600', label: 'ستيكر ٥' },
+];
+
+function serializeSplits(gm: GroupMap): string[] {
+  return Object.entries(gm).filter(([, g]) => g > 0).map(([id, g]) => `${id}:${g}`);
+}
+function deserializeSplits(arr: string[]): GroupMap {
+  const gm: GroupMap = {};
+  for (const s of arr) {
+    const idx = s.lastIndexOf(':');
+    if (idx === -1) { gm[s] = 1; }
+    else { gm[s.slice(0, idx)] = parseInt(s.slice(idx + 1)) || 1; }
+  }
+  return gm;
+}
+function maxGroup(gm: GroupMap): number {
+  return Math.max(0, ...Object.values(gm));
+}
 
 // ── Word export ───────────────────────────────────────────────────────────────
 function buildWordCell(
   detail: ReportData['beneficiaryDetails'][0],
   mealTypeAr: string,
   mealTypeEn: string,
-  customDict: Record<string, string>
+  customDict: Record<string, string>,
+  groupIndex: number
 ): string {
   const ben = detail.beneficiary;
   const items = detail.excludedItems ?? [];
   const excludedNames = items.map(({ meal }) => meal.name).join('، ');
   const excludedTranslit = items.map(({ meal }) => transliterate(meal.name, customDict)).join(' | ');
-  const altNames = items.map(({ alternative }) => alternative ? alternative.name : '—').join('، ');
-  const altTranslit = items.map(({ alternative }) => alternative ? transliterate(alternative.name, customDict) : '—').join(' | ');
+  const fixedMealsToday = (detail.fixedItems ?? []).map(m => m.name);
+  const altItems = items.filter(e => e.alternative);
+  const allBadilNames = [...altItems.map(e => e.alternative!.name), ...fixedMealsToday];
+  const altTranslit = allBadilNames.map(n => transliterate(n, customDict)).join(' | ');
+
+  const gc = GROUP_COLORS[groupIndex] ?? GROUP_COLORS[0];
+  const headerBg = groupIndex === 0 ? '#1e293b' : (
+    groupIndex === 1 ? '#7c3aed' : groupIndex === 2 ? '#f43f5e' : groupIndex === 3 ? '#f59e0b' : '#059669'
+  );
 
   const metaLine = [
     `<strong style="font-size:10.5pt;">${ben.code}</strong>`,
     ben.villa ? `<span style="font-size:10pt;">فيلا ${ben.villa}</span>` : '',
   ].filter(Boolean).join(' &nbsp;|&nbsp; ');
 
+  const groupLabel = groupIndex > 0 ? ` ★ ${gc.label}` : '';
+
   return `<td style="width:25%;vertical-align:top;border:2pt solid #1e293b;padding:0;direction:rtl;text-align:right;">
-  <div style="background:#1e293b;color:white;padding:5pt 8pt;display:flex;justify-content:space-between;align-items:center;">
+  <div style="background:${headerBg};color:white;padding:5pt 8pt;display:flex;justify-content:space-between;align-items:center;">
     <span style="font-size:13pt;font-weight:800;">${mealTypeAr}</span>
-    <span style="font-size:9pt;opacity:0.65;letter-spacing:1px;">${mealTypeEn}</span>
+    <span style="font-size:9pt;opacity:0.65;letter-spacing:1px;">${mealTypeEn}${groupLabel}</span>
   </div>
   <div style="padding:6pt 8pt;">
     <div style="margin-bottom:4pt;">${metaLine}</div>
@@ -44,7 +80,7 @@ function buildWordCell(
       <div style="font-size:11pt;font-weight:800;color:#cc0000;">no</div>
       <div style="font-size:8.5pt;color:#9ca3af;font-style:italic;direction:ltr;text-align:left;margin-bottom:5pt;">${excludedTranslit}</div>
       <div style="font-size:11pt;font-weight:800;color:#059669;">بديل</div>
-      <div style="font-size:10.5pt;font-weight:700;color:#059669;margin-bottom:1pt;">${altNames}</div>
+      <div style="font-size:10.5pt;font-weight:700;color:#059669;margin-bottom:1pt;">${allBadilNames.join('، ')}</div>
       <div style="font-size:11pt;font-weight:800;color:#059669;">yes</div>
       <div style="font-size:8.5pt;color:#9ca3af;font-style:italic;direction:ltr;text-align:left;">${altTranslit}</div>
     </div>
@@ -54,7 +90,7 @@ function buildWordCell(
 }
 
 function exportStickersWord(
-  displayDetails: Array<ReportData['beneficiaryDetails'][0]>,
+  displayDetails: Array<ReportData['beneficiaryDetails'][0] & { groupIndex: number }>,
   mealTypeAr: string,
   mealTypeEn: string,
   filename: string,
@@ -63,7 +99,7 @@ function exportStickersWord(
   const rows: string[] = [];
   for (let i = 0; i < displayDetails.length; i += 4) {
     const group = displayDetails.slice(i, i + 4);
-    const cells = group.map(d => buildWordCell(d, mealTypeAr, mealTypeEn, customDict));
+    const cells = group.map(d => buildWordCell(d, mealTypeAr, mealTypeEn, customDict, d.groupIndex));
     while (cells.length < 4) cells.push('<td style="width:25%;border:none;"></td>');
     rows.push(`<tr style="vertical-align:top;">${cells.join('')}</tr>`);
   }
@@ -109,40 +145,59 @@ function EditableField({ value, onChange, className, dir = 'rtl' }: {
 }
 
 // ── Sticker Card ──────────────────────────────────────────────────────────────
-function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, isSplitCard = false }: {
+function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 0 }: {
   detail: ReportData['beneficiaryDetails'][0];
   mealTypeAr: string;
   mealTypeEn: string;
   customDict: Record<string, string>;
-  isSplitCard?: boolean;
+  groupIndex?: number;
 }) {
+  const gc = GROUP_COLORS[groupIndex] ?? GROUP_COLORS[0];
   const ben = detail.beneficiary;
   const [nameAr, setNameAr] = useState(ben.name);
   const [nameEn, setNameEn] = useState(ben.english_name ?? '');
   const [code, setCode] = useState(ben.code);
   const [villa, setVilla] = useState(ben.villa ?? '');
 
+  // Excluded items — both the excluded name and its alternative are editable
   const [exclusions, setExclusions] = useState(
     detail.excludedItems.map(({ meal, alternative }) => ({
       excludedName: meal.name,
-      alternativeName: alternative?.name ?? '',   // empty = no alternative
+      alternativeName: alternative?.name ?? '',
     }))
   );
   const updateExclusion = (idx: number, field: 'excludedName' | 'alternativeName', val: string) =>
     setExclusions(prev => prev.map((e, i) => i === idx ? { ...e, [field]: val } : e));
 
-  // Fixed meals already filtered for today's day+mealType by the API
-  const fixedMealsToday = (detail.fixedItems ?? []).map(m => m.name);
+  // Fixed meals shown in بديل — editable independently
+  const [fixedMeals, setFixedMeals] = useState(
+    (detail.fixedItems ?? []).map(m => m.name)
+  );
+  const updateFixed = (idx: number, val: string) =>
+    setFixedMeals(prev => prev.map((n, i) => i === idx ? val : n));
 
-  const altItems = exclusions.filter(e => e.alternativeName.trim() !== '');
-  const allBadilNames = [...altItems.map(e => e.alternativeName), ...fixedMealsToday];
-  const allBadilTranslit = allBadilNames.map(n => transliterate(n, customDict));
+  // All بديل items in order: alt names (from exclusions) + fixed meals
+  const altNames   = exclusions.map(e => e.alternativeName);
+  const allBadil   = [...altNames, ...fixedMeals];
+  const hasAnyBadil = allBadil.some(n => n.trim() !== '');
+
+  const t = (s: string) => transliterate(s, customDict);
+
+  const headerStyle = groupIndex > 0
+    ? { background: groupIndex === 1 ? '#7c3aed' : groupIndex === 2 ? '#f43f5e' : groupIndex === 3 ? '#f59e0b' : '#059669' }
+    : undefined;
+  const cardBorderStyle = groupIndex > 0
+    ? { borderColor: groupIndex === 1 ? '#7c3aed' : groupIndex === 2 ? '#f43f5e' : groupIndex === 3 ? '#f59e0b' : '#059669' }
+    : undefined;
 
   return (
-    <div className="sticker-card" style={isSplitCard ? { borderColor: '#7c3aed' } : undefined}>
-      <div className="sticker-header" style={isSplitCard ? { background: '#7c3aed' } : undefined}>
+    <div className="sticker-card" style={cardBorderStyle}>
+      <div className="sticker-header" style={headerStyle}>
         <span className="sticker-mode-ar">{mealTypeAr}</span>
-        <span className="sticker-mode-en">{mealTypeEn}{isSplitCard ? ' ★' : ''}</span>
+        <span className="sticker-mode-en">
+          {mealTypeEn}
+          {groupIndex > 0 && <span className="opacity-70"> ★ {gc.label}</span>}
+        </span>
       </div>
 
       <div className="sticker-meta">
@@ -156,36 +211,50 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, isSplitCard =
       </div>
 
       <div className="sticker-exclusions">
+        {/* ── مستبعد ── */}
         <div className="sticker-section-label" style={{ color: '#dc2626' }}>مستبعد</div>
-        <div className="sticker-names-row sticker-item-excluded">
-          {exclusions.map((e, i) => (
+        <div className="sticker-names-row">
+          {exclusions.length === 0 ? (
+            <span className="sticker-no-alt">—</span>
+          ) : exclusions.map((e, i) => (
             <span key={i}>
-              {i > 0 && <span className="text-slate-400">، </span>}
+              {i > 0 && <span style={{ color: '#94a3b8' }}>، </span>}
               <EditableField value={e.excludedName} onChange={v => updateExclusion(i, 'excludedName', v)} className="sticker-item-excluded" />
             </span>
           ))}
         </div>
         <div className="sticker-section-label" style={{ color: '#dc2626', marginTop: 2 }}>no</div>
-        <div className="sticker-translit-line" style={{ direction: 'ltr', textAlign: 'left', display: 'block' }}>
-          {exclusions.map(e => transliterate(e.excludedName, customDict)).join(' | ')}
+        <div className="sticker-translit-line" style={{ direction: 'ltr', unicodeBidi: 'embed', display: 'block', textAlign: 'left' }}>
+          {exclusions.length === 0 ? '—' : exclusions.map(e => t(e.excludedName) || e.excludedName).join(' | ')}
         </div>
 
+        {/* ── بديل ── */}
         <div className="sticker-section-label" style={{ color: '#059669', marginTop: 6 }}>بديل</div>
-        <div className="sticker-names-row sticker-item-alt">
-          {allBadilNames.length === 0 ? (
+        <div className="sticker-names-row">
+          {!hasAnyBadil ? (
             <span className="sticker-no-alt">لا يوجد</span>
           ) : (
-            allBadilNames.map((name, i) => (
-              <span key={i}>
-                {i > 0 && <span className="text-slate-400">، </span>}
-                <span className="sticker-item-alt font-semibold">{name}</span>
-              </span>
-            ))
+            <>
+              {/* Alt names — one per exclusion, editable */}
+              {exclusions.map((e, i) => e.alternativeName.trim() !== '' && (
+                <span key={`alt-${i}`}>
+                  {(i > 0 || fixedMeals.some(f => f.trim() !== '')) && altNames.slice(0, i).some(n => n.trim() !== '') && <span style={{ color: '#94a3b8' }}>، </span>}
+                  <EditableField value={e.alternativeName} onChange={v => updateExclusion(i, 'alternativeName', v)} className="sticker-item-alt" />
+                </span>
+              ))}
+              {/* Fixed meals — editable */}
+              {fixedMeals.map((name, i) => name.trim() !== '' && (
+                <span key={`fix-${i}`}>
+                  <span style={{ color: '#94a3b8' }}>، </span>
+                  <EditableField value={name} onChange={v => updateFixed(i, v)} className="sticker-item-alt" />
+                </span>
+              ))}
+            </>
           )}
         </div>
         <div className="sticker-section-label" style={{ color: '#059669', marginTop: 2 }}>yes</div>
-        <div className="sticker-translit-line" style={{ direction: 'ltr', textAlign: 'left', display: 'block' }}>
-          {allBadilTranslit.join(' | ') || '—'}
+        <div className="sticker-translit-line" style={{ direction: 'ltr', unicodeBidi: 'embed', display: 'block', textAlign: 'left' }}>
+          {!hasAnyBadil ? '—' : allBadil.filter(n => n.trim() !== '').map(n => t(n) || n).join(' | ')}
         </div>
       </div>
 
@@ -210,12 +279,14 @@ function SplitSection({
   onSplitsChange: (next: SplitsMap) => void;
   saveStatus: 'idle' | 'saving' | 'saved' | 'error';
 }) {
-  const [expanded, setExpanded] = useState<string | null>(null);
-
-  const toggle = (meal_id: string, ben_id: string) => {
-    const current = new Set(splits[ben_id] ?? []);
-    current.has(meal_id) ? current.delete(meal_id) : current.add(meal_id);
-    onSplitsChange({ ...splits, [ben_id]: current });
+  const setGroup = (meal_id: string, ben_id: string, g: number) => {
+    const prevGm = { ...(splits[ben_id] ?? {}) };
+    if (g === 0) {
+      delete prevGm[meal_id];
+    } else {
+      prevGm[meal_id] = g;
+    }
+    onSplitsChange({ ...splits, [ben_id]: prevGm });
   };
 
   const clearSplit = (ben_id: string) => {
@@ -224,10 +295,11 @@ function SplitSection({
     onSplitsChange(next);
   };
 
-  const hasSplits = Object.values(splits).some(s => s.size > 0);
+  const hasSplits = Object.values(splits).some(gm => Object.values(gm).some(g => g > 0));
 
   return (
     <div className="card overflow-hidden no-print">
+      {/* Header */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-slate-50">
         <div className="flex items-center gap-2">
           <svg className="w-4 h-4 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -236,7 +308,7 @@ function SplitSection({
           <h3 className="font-bold text-slate-700 text-sm">فصل الستيكرات</h3>
           {hasSplits && (
             <span className="badge bg-violet-100 text-violet-700 text-xs">
-              {Object.values(splits).filter(s => s.size > 0).length} مستفيد مفصول
+              {Object.values(splits).filter(gm => Object.values(gm).some(g => g > 0)).length} مستفيد مفصول
             </span>
           )}
         </div>
@@ -255,92 +327,116 @@ function SplitSection({
               تم الحفظ
             </span>
           )}
-          {saveStatus === 'error' && (
-            <span className="text-red-500">خطأ في الحفظ</span>
-          )}
+          {saveStatus === 'error' && <span className="text-red-500">خطأ في الحفظ</span>}
         </div>
       </div>
 
-      <div className="p-4 space-y-2">
-        <p className="text-xs text-slate-500 mb-3">اضغط على الأصناف المستبعدة لنقلها إلى ستيكر منفصل. الأصناف الخضراء ستنتقل لستيكر جديد والبقية تبقى في الأصلي.</p>
+      <div className="p-4 space-y-3">
+        {/* Legend */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {GROUP_COLORS.map((gc, i) => (
+            <span key={i} className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full ${gc.bg} ${gc.text}`}>
+              <span>{gc.label}</span>
+            </span>
+          ))}
+          <span className="text-xs text-slate-400 mr-1">— اضغط أي صنف لتحديد الستيكر المناسب</span>
+        </div>
+
         {stickerDetails.map(detail => {
           const ben = detail.beneficiary;
-          const splitSet = splits[ben.id] ?? new Set<string>();
-          const isOpen = expanded === ben.id;
-          const splitCount = splitSet.size;
+          const gm = splits[ben.id] ?? {};
+          const nGroups = maxGroup(gm);
+          const splitCount = Object.values(gm).filter(g => g > 0).length;
+
+          const exclItems = detail.excludedItems.map(({ meal, alternative }) => ({
+            id: meal.id, label: meal.name, sub: alternative?.name ?? null, type: 'excl' as const,
+          }));
+          const fixedChips = (detail.fixedItems ?? []).map(m => ({
+            id: m.id, label: m.name, sub: null, type: 'fixed' as const,
+          }));
+          const allItems = [...exclItems, ...fixedChips];
+
+          // How many group buttons to show per item: 0..nGroups + 1 new slot (capped at 4)
+          const maxButtonGroup = Math.min(nGroups + 1, GROUP_COLORS.length - 1);
 
           return (
-            <div key={ben.id} className={`border rounded-xl overflow-hidden transition-all ${splitCount > 0 ? 'border-violet-300' : 'border-slate-200'}`}>
-              {/* Row header */}
-              <button type="button" onClick={() => setExpanded(isOpen ? null : ben.id)}
-                className="w-full flex items-center justify-between px-4 py-2.5 text-right hover:bg-slate-50 transition-colors">
-                <div className="flex items-center gap-3">
+            <div key={ben.id} className={`border rounded-xl overflow-hidden ${nGroups > 0 ? 'border-violet-300' : 'border-slate-200'}`}>
+              {/* Beneficiary header */}
+              <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border-b border-slate-100">
+                <div className="flex items-center gap-2">
                   <span className="font-semibold text-sm text-slate-800">{ben.name}</span>
                   <code className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">{ben.code}</code>
-                  <span className="text-xs text-slate-400">{detail.excludedItems.length} محظور</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  {splitCount > 0 && (
-                    <span className="badge bg-violet-100 text-violet-700 text-xs">{splitCount} منقول</span>
+                  {nGroups > 0 && (
+                    <span className="text-xs text-violet-600 font-semibold">{nGroups + 1} ستيكرات</span>
                   )}
                   {splitCount > 0 && (
-                    <button type="button" onClick={e => { e.stopPropagation(); clearSplit(ben.id); }}
+                    <button type="button" onClick={() => clearSplit(ben.id)}
                       className="text-xs text-slate-400 hover:text-red-500 px-1.5 py-0.5 rounded hover:bg-red-50 transition-colors">
-                      مسح
+                      مسح الكل
                     </button>
                   )}
-                  <svg className={`w-4 h-4 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
                 </div>
-              </button>
+              </div>
 
-              {/* Expanded: show exclusion chips */}
-              {isOpen && (
-                <div className="px-4 pb-4 pt-1 border-t border-slate-100 bg-slate-50/50">
-                  <div className="flex gap-4">
-                    {/* Main sticker side */}
-                    <div className="flex-1">
-                      <div className="text-xs font-semibold text-slate-500 mb-2">يبقى في الأصلي</div>
-                      <div className="flex flex-wrap gap-2 min-h-[40px] p-2 bg-white rounded-lg border border-slate-200">
-                        {detail.excludedItems.filter(item => !splitSet.has(item.meal.id)).map(({ meal, alternative }) => (
-                          <button key={meal.id} type="button" onClick={() => toggle(meal.id, ben.id)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-100 text-red-700 rounded-lg text-xs font-semibold hover:bg-violet-100 hover:text-violet-700 transition-colors group">
-                            <span>{meal.name}</span>
-                            {alternative && <span className="text-red-400 group-hover:text-violet-400">← {alternative.name}</span>}
-                            <svg className="w-3 h-3 opacity-50 group-hover:opacity-100" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                            </svg>
-                          </button>
-                        ))}
-                        {detail.excludedItems.filter(item => !splitSet.has(item.meal.id)).length === 0 && (
-                          <span className="text-xs text-slate-400 m-auto">لا يوجد</span>
+              {/* Items */}
+              <div className="p-3 flex flex-wrap gap-2">
+                {allItems.map(item => {
+                  const currentGroup = gm[item.id] ?? 0;
+                  const activeGc = GROUP_COLORS[currentGroup] ?? GROUP_COLORS[0];
+
+                  return (
+                    <div key={item.id} className="flex items-stretch rounded-lg overflow-hidden border border-slate-200 shadow-sm">
+                      {/* Item chip */}
+                      <div className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                        currentGroup > 0
+                          ? `${activeGc.bg} ${activeGc.text}`
+                          : item.type === 'fixed'
+                            ? 'bg-blue-50 text-blue-700'
+                            : 'bg-red-50 text-red-700'
+                      }`}>
+                        <span>{item.label}</span>
+                        {item.sub && <span className="opacity-60">← {item.sub}</span>}
+                        {item.type === 'fixed' && <span className="opacity-50 text-[10px]">ثابت</span>}
+                      </div>
+
+                      {/* Group selector buttons */}
+                      <div className="flex border-r border-slate-200">
+                        {Array.from({ length: maxButtonGroup + 1 }, (_, g) => {
+                          const gc = GROUP_COLORS[g] ?? GROUP_COLORS[0];
+                          const isActive = currentGroup === g;
+                          return (
+                            <button key={g} type="button"
+                              onClick={() => setGroup(item.id, ben.id, g)}
+                              title={gc.label}
+                              className={`w-7 h-full flex items-center justify-center text-[10px] font-bold border-r border-slate-200 last:border-r-0 transition-colors ${
+                                isActive
+                                  ? `${gc.bg} ${gc.text}`
+                                  : 'bg-white text-slate-400 hover:bg-slate-100'
+                              }`}
+                            >
+                              {g === 0 ? '١' : `${g + 1}`}
+                            </button>
+                          );
+                        })}
+                        {/* + button to unlock one more group level */}
+                        {maxButtonGroup < GROUP_COLORS.length - 1 && (
+                          <button type="button"
+                            onClick={() => setGroup(item.id, ben.id, maxButtonGroup + 1)}
+                            title={`إضافة ${GROUP_COLORS[maxButtonGroup + 1]?.label}`}
+                            className="w-7 h-full flex items-center justify-center text-[11px] font-bold bg-white text-slate-300 hover:bg-violet-50 hover:text-violet-500 transition-colors"
+                          >+</button>
                         )}
                       </div>
                     </div>
+                  );
+                })}
 
-                    {/* Split sticker side */}
-                    <div className="flex-1">
-                      <div className="text-xs font-semibold text-violet-600 mb-2">ينتقل للستيكر المفصول ★</div>
-                      <div className="flex flex-wrap gap-2 min-h-[40px] p-2 bg-white rounded-lg border border-violet-200">
-                        {detail.excludedItems.filter(item => splitSet.has(item.meal.id)).map(({ meal, alternative }) => (
-                          <button key={meal.id} type="button" onClick={() => toggle(meal.id, ben.id)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-100 text-violet-700 rounded-lg text-xs font-semibold hover:bg-red-100 hover:text-red-700 transition-colors group">
-                            <svg className="w-3 h-3 opacity-50 group-hover:opacity-100" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                            </svg>
-                            <span>{meal.name}</span>
-                            {alternative && <span className="text-violet-400 group-hover:text-red-400">← {alternative.name}</span>}
-                          </button>
-                        ))}
-                        {splitSet.size === 0 && (
-                          <span className="text-xs text-slate-400 m-auto">اضغط على صنف لنقله هنا</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
+                {allItems.length === 0 && (
+                  <span className="text-xs text-slate-300 italic py-1.5">لا توجد أصناف</span>
+                )}
+              </div>
             </div>
           );
         })}
@@ -366,8 +462,7 @@ export default function StickersView() {
 
   useEffect(() => {
     supabase.from('daily_orders').select('id, date, meal_type, created_at').order('date', { ascending: false })
-      .then(({ data }) => { if (data) setOrders(data as DailyOrder[]); setLoadingOrders(false); })
-      .catch(err => { console.error('Error fetching orders:', err); setLoadingOrders(false); });
+      .then(({ data }) => { if (data) setOrders(data as unknown as DailyOrder[]); setLoadingOrders(false); });
   }, [supabase]);
 
   useEffect(() => {
@@ -381,7 +476,7 @@ export default function StickersView() {
       });
   }, [supabase]);
 
-  // Auto-save splits whenever they change (debounced 800ms)
+  // Auto-save splits (debounced 800ms)
   useEffect(() => {
     if (!selectedOrderId) return;
     if (isFirstSplitsLoad.current) { isFirstSplitsLoad.current = false; return; }
@@ -391,11 +486,11 @@ export default function StickersView() {
       try {
         await supabase.from('sticker_splits').delete().eq('order_id', selectedOrderId);
         const rows = Object.entries(splits)
-          .filter(([, set]) => set.size > 0)
-          .map(([beneficiary_id, set]) => ({
+          .filter(([, gm]) => Object.values(gm).some(g => g > 0))
+          .map(([beneficiary_id, gm]) => ({
             order_id: selectedOrderId,
             beneficiary_id,
-            split_meal_ids: Array.from(set),
+            split_meal_ids: serializeSplits(gm),
           }));
         if (rows.length > 0) await supabase.from('sticker_splits').insert(rows);
         setSaveStatus('saved');
@@ -420,11 +515,10 @@ export default function StickersView() {
       if (!reportRes.ok) { setError(data.error || 'حدث خطأ'); }
       else {
         setReport(data);
-        // Load saved splits
         if (splitsRes.data) {
           const loaded: SplitsMap = {};
           splitsRes.data.forEach((row: { beneficiary_id: string; split_meal_ids: string[] }) => {
-            loaded[row.beneficiary_id] = new Set(row.split_meal_ids);
+            loaded[row.beneficiary_id] = deserializeSplits(row.split_meal_ids);
           });
           setSplits(loaded);
         }
@@ -433,19 +527,27 @@ export default function StickersView() {
     setLoading(false);
   };
 
-  const stickerDetails = report?.beneficiaryDetails.filter(d => d.excludedItems.length > 0) ?? [];
+  const stickerDetails = report?.beneficiaryDetails.filter(d =>
+    d.excludedItems.length > 0 || (d.fixedItems ?? []).length > 0
+  ) ?? [];
   const mealTypeAr = report ? MEAL_TYPE_LABELS[report.order.meal_type] : '';
   const mealTypeEn = report ? MEAL_TYPE_EN[report.order.meal_type] : '';
 
-  // Expand splits into separate detail objects
+  // Expand splits into per-group sticker details
   const displayDetails = stickerDetails.flatMap(detail => {
-    const splitSet = splits[detail.beneficiary.id];
-    if (!splitSet || splitSet.size === 0) return [{ ...detail, isSplit: false }];
-    const mainItems = detail.excludedItems.filter(item => !splitSet.has(item.meal.id));
-    const splitItems = detail.excludedItems.filter(item => splitSet.has(item.meal.id));
-    const result: Array<typeof detail & { isSplit: boolean }> = [];
-    if (mainItems.length > 0) result.push({ ...detail, excludedItems: mainItems, isSplit: false });
-    if (splitItems.length > 0) result.push({ ...detail, excludedItems: splitItems, isSplit: true });
+    const gm = splits[detail.beneficiary.id] ?? {};
+    const nGroups = maxGroup(gm);
+
+    if (nGroups === 0) return [{ ...detail, groupIndex: 0 }];
+
+    const result: Array<typeof detail & { groupIndex: number }> = [];
+    for (let g = 0; g <= nGroups; g++) {
+      const groupExcluded = detail.excludedItems.filter(item => (gm[item.meal.id] ?? 0) === g);
+      const groupFixed    = (detail.fixedItems ?? []).filter(m => (gm[m.id] ?? 0) === g);
+      if (groupExcluded.length > 0 || groupFixed.length > 0) {
+        result.push({ ...detail, excludedItems: groupExcluded, fixedItems: groupFixed, groupIndex: g });
+      }
+    }
     return result;
   });
 
@@ -516,14 +618,14 @@ export default function StickersView() {
               )}
             </div>
             <div className="sticker-grid">
-              {displayDetails.map((detail, idx) => (
+              {displayDetails.map((detail) => (
                 <StickerCard
-                  key={`${detail.beneficiary.id}_${idx}`}
+                  key={`${detail.beneficiary.id}_g${detail.groupIndex}_${detail.excludedItems.map(i => i.meal.id).join(',')}_${(detail.fixedItems ?? []).map(m => m.id).join(',')}`}
                   detail={detail}
                   mealTypeAr={mealTypeAr}
                   mealTypeEn={mealTypeEn}
                   customDict={customDict}
-                  isSplitCard={(detail as typeof detail & { isSplit: boolean }).isSplit}
+                  groupIndex={detail.groupIndex}
                 />
               ))}
             </div>

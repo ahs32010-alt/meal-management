@@ -34,7 +34,7 @@ export default function DashboardHome() {
           meals: mealsResult.count || 0,
           orders: ordersResult.count || 0,
         });
-        if (recentResult.data) setRecentOrders(recentResult.data);
+        if (recentResult.data) setRecentOrders(recentResult.data as unknown as DailyOrder[]);
       } catch (err) {
         console.error('Error fetching stats:', err);
       } finally {

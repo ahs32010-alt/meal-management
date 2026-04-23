@@ -111,8 +111,7 @@ export default function ReportView({ initialOrderId }: Props) {
 
   useEffect(() => {
     supabase.from('daily_orders').select('id, date, meal_type, created_at').order('date', { ascending: false })
-      .then(({ data }) => { if (data) setOrders(data as DailyOrder[]); setLoadingOrders(false); })
-      .catch(err => { console.error('Error fetching orders:', err); setLoadingOrders(false); });
+      .then(({ data }) => { if (data) setOrders(data as unknown as DailyOrder[]); setLoadingOrders(false); });
   }, [supabase]);
 
   const generateReport = useCallback(async (orderId: string) => {
