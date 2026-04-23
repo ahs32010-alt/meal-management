@@ -103,7 +103,7 @@ export default function DashboardHome() {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-800">لوحة التحكم</h1>
-        <p className="text-slate-500 text-sm mt-1">مرحباً بك في نظام إدارة وجبات المستفيدين</p>
+        <p className="text-slate-500 text-sm mt-1">مرحباً بك في نظام إدارة وجبات المستفيدين لمركز خطوة أمل</p>
       </div>
 
       {/* Stats */}
