@@ -47,7 +47,7 @@ export default function DashboardHome() {
 
   const statCards = [
     {
-      label: 'إجمالي المستفيدين',
+      label: 'إجماااااااالي المستفيدين',
       value: stats.beneficiaries,
       color: 'bg-blue-50 text-blue-700 border-blue-100',
       iconBg: 'bg-blue-100',
