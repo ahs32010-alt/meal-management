@@ -69,14 +69,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
   const updateDisplayName = (meal_id: string, value: string) =>
     setSelected(prev => prev.map(s => s.meal_id === meal_id ? { ...s, display_name: value } : s));
 
-  const updateExtra = (meal_id: string, delta: number) =>
-    setSelected(prev => prev.map(s => s.meal_id === meal_id ? { ...s, extra_quantity: Math.max(0, s.extra_quantity + delta) } : s));
-
-  const setExtra = (meal_id: string, value: string) => {
-    const n = parseInt(value) || 0;
-    setSelected(prev => prev.map(s => s.meal_id === meal_id ? { ...s, extra_quantity: Math.max(0, n) } : s));
-  };
-
   const beneficiaryCount = (meal_id: string) =>
     Math.max(0, totalBeneficiaries - (exclusionCounts[meal_id] ?? 0));
 
@@ -273,36 +265,19 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                           )}
                         </div>
 
-                        {/* Count badge */}
-                        <div className="text-center shrink-0">
-                          <div className="text-xs text-slate-500 mb-0.5">المستفيدون</div>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-base font-bold text-emerald-700">{count}</span>
-                            {item.extra_quantity > 0 && (
-                              <span className="text-xs text-blue-600 font-semibold">+{item.extra_quantity}</span>
-                            )}
-                          </div>
-                          {item.extra_quantity > 0 && (
-                            <div className="text-xs text-slate-400">= {total} إجمالي</div>
-                          )}
-                        </div>
-
-                        {/* Extra qty */}
-                        <div className="shrink-0">
-                          <div className="text-xs text-slate-500 text-center mb-1">إضافي</div>
-                          <div className="flex items-center gap-1">
-                            <button type="button" onClick={() => updateExtra(item.meal_id, -1)}
-                              className="w-6 h-6 flex items-center justify-center rounded-md bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 text-sm font-bold">−</button>
-                            <input
-                              type="number"
-                              min={0}
-                              value={item.extra_quantity}
-                              onChange={e => setExtra(item.meal_id, e.target.value)}
-                              className="w-10 text-center text-sm font-semibold border border-slate-200 rounded-md py-0.5 focus:outline-none focus:border-emerald-400"
-                            />
-                            <button type="button" onClick={() => updateExtra(item.meal_id, 1)}
-                              className="w-6 h-6 flex items-center justify-center rounded-md bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 text-sm font-bold">+</button>
-                          </div>
+                        {/* Editable final quantity */}
+                        <div className="shrink-0 text-center">
+                          <div className="text-xs text-slate-500 mb-1">الكمية</div>
+                          <input
+                            type="number"
+                            min={0}
+                            value={total}
+                            onChange={e => {
+                              const n = parseInt(e.target.value);
+                              if (!isNaN(n)) setSelected(prev => prev.map(s => s.meal_id === item.meal_id ? { ...s, extra_quantity: n - count } : s));
+                            }}
+                            className="w-16 text-center text-base font-bold text-emerald-700 border border-slate-200 rounded-lg py-1 focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200"
+                          />
                         </div>
 
                         {/* Remove */}

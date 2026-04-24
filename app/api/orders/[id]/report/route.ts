@@ -177,6 +177,12 @@ export async function GET(
     .map(([id, qty]) => ({ meal: allMealDetails[id], qty }))
     .filter(x => x.meal && x.meal.is_snack);
 
+  // Fixed meals summary (unique fixed meals today with counts)
+  const fixedSummary = Object.entries(fixedQty)
+    .map(([id, qty]) => ({ meal: allMealDetails[id], qty }))
+    .filter(x => x.meal)
+    .sort((a, b) => b.qty - a.qty);
+
   const reportData: ReportData = {
     order,
     itemsSummary,
@@ -185,11 +191,13 @@ export async function GET(
     snackMealsSummary,
     altSummary,
     snackAltSummary,
+    fixedSummary,
   } as ReportData & {
     mainMealsSummary: typeof mainMealsSummary;
     snackMealsSummary: typeof snackMealsSummary;
     altSummary: typeof altSummary;
     snackAltSummary: typeof snackAltSummary;
+    fixedSummary: typeof fixedSummary;
   };
 
   return NextResponse.json(reportData);

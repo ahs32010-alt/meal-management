@@ -27,6 +27,7 @@ interface FullReport {
   snackMealsSummary: MealCount[];
   altSummary: MealCount[];
   snackAltSummary: MealCount[];
+  fixedSummary: MealCount[];
 }
 
 function SummaryPair({
@@ -136,12 +137,17 @@ export default function ReportView({ initialOrderId }: Props) {
           <p className="text-slate-500 text-sm mt-0.5">تقرير تفصيلي لأمر التشغيل</p>
         </div>
         {report && (
-          <button onClick={() => window.print()} className="btn-primary no-print">
+          <a
+            href={`/orders/${selectedOrderId}/print`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-primary no-print"
+          >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            طباعة
-          </button>
+            تصدير PDF
+          </a>
         )}
       </div>
 
@@ -227,6 +233,26 @@ export default function ReportView({ initialOrderId }: Props) {
             </div>
           )}
 
+          {/* ── الأصناف الثابتة ── */}
+          {report.fixedSummary && report.fixedSummary.length > 0 && (
+            <div className="card overflow-hidden">
+              <div className="px-5 py-3 bg-violet-700 flex items-center justify-between">
+                <h3 className="font-bold text-white text-sm">الأصناف الثابتة اليومية</h3>
+                <span className="text-violet-200 text-xs">
+                  المجموع: {report.fixedSummary.reduce((s, x) => s + (x.qty || 0), 0)}
+                </span>
+              </div>
+              <div className="p-4 grid grid-cols-3 md:grid-cols-6 gap-2">
+                {report.fixedSummary.map(({ meal, qty }) => (
+                  <div key={meal.id} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-violet-50 border-violet-200">
+                    <span className="text-xs font-medium text-slate-700 truncate">{meal.name}</span>
+                    <span className="text-sm font-bold flex-shrink-0 text-violet-700">{qty}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* ── الإحصاء الكلي ── */}
           <div className="card overflow-hidden">
             <div className="px-5 py-3 bg-slate-800 flex items-center justify-between">
@@ -299,7 +325,7 @@ export default function ReportView({ initialOrderId }: Props) {
                                   <div key={meal.id}>
                                     {alternative
                                       ? <span className="badge bg-emerald-100 text-emerald-700 text-xs">{alternative.name}</span>
-                                      : <span className="badge bg-orange-100 text-orange-700 text-xs">لا يوجد</span>}
+                                      : null}
                                   </div>
                                 ))}
                               </div>}

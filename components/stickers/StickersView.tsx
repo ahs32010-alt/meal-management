@@ -280,8 +280,8 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
   );
 }
 
-// ── Split Section ─────────────────────────────────────────────────────────────
-function SplitSection({
+// ── Sticker Splitter (new two-panel UX) ──────────────────────────────────────
+function StickerSplitter({
   stickerDetails,
   splits,
   onSplitsChange,
@@ -292,13 +292,20 @@ function SplitSection({
   onSplitsChange: (next: SplitsMap) => void;
   saveStatus: 'idle' | 'saving' | 'saved' | 'error';
 }) {
+  const [selectedBenId, setSelectedBenId] = useState<string>(stickerDetails[0]?.beneficiary.id ?? '');
+  const [search, setSearch] = useState('');
+
+  const filtered = stickerDetails.filter(d =>
+    d.beneficiary.name.includes(search) ||
+    d.beneficiary.code.includes(search) ||
+    (d.beneficiary.villa ?? '').includes(search)
+  );
+
+  const selectedDetail = stickerDetails.find(d => d.beneficiary.id === selectedBenId) ?? null;
+
   const setGroup = (meal_id: string, ben_id: string, g: number) => {
     const prevGm = { ...(splits[ben_id] ?? {}) };
-    if (g === 0) {
-      delete prevGm[meal_id];
-    } else {
-      prevGm[meal_id] = g;
-    }
+    if (g === 0) { delete prevGm[meal_id]; } else { prevGm[meal_id] = g; }
     onSplitsChange({ ...splits, [ben_id]: prevGm });
   };
 
@@ -308,24 +315,27 @@ function SplitSection({
     onSplitsChange(next);
   };
 
-  const hasSplits = Object.values(splits).some(gm => Object.values(gm).some(g => g > 0));
+  // Navigate through list
+  const currentIdx = filtered.findIndex(d => d.beneficiary.id === selectedBenId);
+  const goPrev = () => { if (currentIdx > 0) setSelectedBenId(filtered[currentIdx - 1].beneficiary.id); };
+  const goNext = () => { if (currentIdx < filtered.length - 1) setSelectedBenId(filtered[currentIdx + 1].beneficiary.id); };
 
   return (
     <div className="card overflow-hidden no-print">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-slate-50">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-slate-50">
         <div className="flex items-center gap-2">
           <svg className="w-4 h-4 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
           </svg>
           <h3 className="font-bold text-slate-700 text-sm">فصل الستيكرات</h3>
-          {hasSplits && (
+          {Object.values(splits).some(gm => Object.values(gm).some(g => g > 0)) && (
             <span className="badge bg-violet-100 text-violet-700 text-xs">
-              {Object.values(splits).filter(gm => Object.values(gm).some(g => g > 0)).length} مستفيد مفصول
+              {Object.values(splits).filter(gm => Object.values(gm).some(g => g > 0)).length} مفصول
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex items-center gap-1.5 text-xs">
           {saveStatus === 'saving' && (
             <span className="flex items-center gap-1 text-slate-400">
               <div className="w-3 h-3 border border-slate-400 border-t-transparent rounded-full animate-spin" />
@@ -344,115 +354,217 @@ function SplitSection({
         </div>
       </div>
 
-      <div className="p-4 space-y-3">
-        {/* Legend */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {GROUP_COLORS.map((gc, i) => (
-            <span key={i} className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full ${gc.bg} ${gc.text}`}>
-              <span>{gc.label}</span>
+      <div className="flex" style={{ minHeight: 360 }}>
+        {/* ── Left: Beneficiary List ── */}
+        <div className="w-64 shrink-0 border-l border-slate-100 flex flex-col">
+          {/* Search */}
+          <div className="p-2 border-b border-slate-100">
+            <div className="relative">
+              <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="بحث..."
+                className="w-full pr-8 pl-2 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-violet-400 bg-slate-50"
+              />
+            </div>
+          </div>
+
+          {/* List */}
+          <div className="flex-1 overflow-y-auto">
+            {filtered.map(detail => {
+              const ben = detail.beneficiary;
+              const gm = splits[ben.id] ?? {};
+              const nGroups = maxGroup(gm);
+              const isSelected = ben.id === selectedBenId;
+              return (
+                <button
+                  key={ben.id}
+                  type="button"
+                  onClick={() => setSelectedBenId(ben.id)}
+                  className={`w-full text-right px-3 py-2.5 border-b border-slate-50 transition-colors flex items-center justify-between gap-2 ${
+                    isSelected ? 'bg-violet-50 border-r-2 border-r-violet-500' : 'hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className={`text-xs font-semibold truncate ${isSelected ? 'text-violet-800' : 'text-slate-700'}`}>
+                      {ben.name}
+                    </div>
+                    <div className="text-[10px] text-slate-400 flex items-center gap-1.5 mt-0.5">
+                      <span>{ben.code}</span>
+                      {ben.villa && <span>• {ben.villa}</span>}
+                    </div>
+                  </div>
+                  {nGroups > 0 ? (
+                    <span className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700">
+                      {nGroups + 1}
+                    </span>
+                  ) : (
+                    <span className="shrink-0 w-2 h-2 rounded-full bg-slate-200" />
+                  )}
+                </button>
+              );
+            })}
+            {filtered.length === 0 && (
+              <div className="p-4 text-center text-xs text-slate-400">لا نتائج</div>
+            )}
+          </div>
+
+          {/* Navigation footer */}
+          <div className="p-2 border-t border-slate-100 flex items-center justify-between">
+            <button type="button" onClick={goPrev} disabled={currentIdx <= 0}
+              className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30 transition-colors">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+            <span className="text-[10px] text-slate-400">
+              {currentIdx + 1} / {filtered.length}
             </span>
-          ))}
-          <span className="text-xs text-slate-400 mr-1">— اضغط أي صنف لتحديد الستيكر المناسب</span>
+            <button type="button" onClick={goNext} disabled={currentIdx >= filtered.length - 1}
+              className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30 transition-colors">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+          </div>
         </div>
 
-        {stickerDetails.map(detail => {
-          const ben = detail.beneficiary;
-          const gm = splits[ben.id] ?? {};
-          const nGroups = maxGroup(gm);
-          const splitCount = Object.values(gm).filter(g => g > 0).length;
+        {/* ── Right: Item Assigner ── */}
+        <div className="flex-1 p-5 overflow-y-auto">
+          {!selectedDetail ? (
+            <div className="flex items-center justify-center h-full text-sm text-slate-400">
+              اختر مستفيداً من القائمة
+            </div>
+          ) : (() => {
+            const ben = selectedDetail.beneficiary;
+            const gm = splits[ben.id] ?? {};
+            const nGroups = maxGroup(gm);
+            const splitCount = Object.values(gm).filter(g => g > 0).length;
+            const maxButtonGroup = Math.min(nGroups + 1, GROUP_COLORS.length - 1);
 
-          const exclItems = detail.excludedItems.map(({ meal, alternative }) => ({
-            id: meal.id, label: meal.name, sub: alternative?.name ?? null, type: 'excl' as const,
-          }));
-          const fixedChips = (detail.fixedItems ?? []).map(m => ({
-            id: m.id, label: m.name, sub: null, type: 'fixed' as const,
-          }));
-          const allItems = [...exclItems, ...fixedChips];
+            const exclItems = selectedDetail.excludedItems.map(({ meal, alternative }) => ({
+              id: meal.id, label: meal.name, sub: alternative?.name ?? null, type: 'excl' as const,
+            }));
+            const fixedChips = (selectedDetail.fixedItems ?? []).map(m => ({
+              id: m.id, label: m.name, sub: null, type: 'fixed' as const,
+            }));
+            const allItems = [...exclItems, ...fixedChips];
 
-          // How many group buttons to show per item: 0..nGroups + 1 new slot (capped at 4)
-          const maxButtonGroup = Math.min(nGroups + 1, GROUP_COLORS.length - 1);
-
-          return (
-            <div key={ben.id} className={`border rounded-xl overflow-hidden ${nGroups > 0 ? 'border-violet-300' : 'border-slate-200'}`}>
-              {/* Beneficiary header */}
-              <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border-b border-slate-100">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-sm text-slate-800">{ben.name}</span>
-                  <code className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">{ben.code}</code>
-                </div>
-                <div className="flex items-center gap-2">
-                  {nGroups > 0 && (
-                    <span className="text-xs text-violet-600 font-semibold">{nGroups + 1} ستيكرات</span>
-                  )}
+            return (
+              <div className="space-y-4">
+                {/* Beneficiary info */}
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h4 className="font-bold text-slate-800 text-base">{ben.name}</h4>
+                    {ben.english_name && <p className="text-xs text-slate-400 mt-0.5 direction-ltr">{ben.english_name}</p>}
+                    <div className="flex items-center gap-2 mt-1">
+                      <code className="text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-600">{ben.code}</code>
+                      {ben.villa && <span className="badge bg-blue-50 text-blue-600 text-xs">{ben.villa}</span>}
+                      {nGroups > 0 && (
+                        <span className="badge bg-violet-100 text-violet-700 text-xs">{nGroups + 1} ستيكرات</span>
+                      )}
+                    </div>
+                  </div>
                   {splitCount > 0 && (
                     <button type="button" onClick={() => clearSplit(ben.id)}
-                      className="text-xs text-slate-400 hover:text-red-500 px-1.5 py-0.5 rounded hover:bg-red-50 transition-colors">
+                      className="text-xs text-slate-400 hover:text-red-500 px-2 py-1 rounded-lg hover:bg-red-50 transition-colors border border-slate-200">
                       مسح الكل
                     </button>
                   )}
                 </div>
-              </div>
 
-              {/* Items */}
-              <div className="p-3 flex flex-wrap gap-2">
-                {allItems.map(item => {
-                  const currentGroup = gm[item.id] ?? 0;
-                  const activeGc = GROUP_COLORS[currentGroup] ?? GROUP_COLORS[0];
+                {/* Legend */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {GROUP_COLORS.slice(0, maxButtonGroup + 2).map((gc, i) => (
+                    <span key={i} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${gc.bg} ${gc.text}`}>
+                      {gc.label}
+                    </span>
+                  ))}
+                </div>
 
-                  return (
-                    <div key={item.id} className="flex items-stretch rounded-lg overflow-hidden border border-slate-200 shadow-sm">
-                      {/* Item chip */}
-                      <div className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${
-                        currentGroup > 0
-                          ? `${activeGc.bg} ${activeGc.text}`
-                          : item.type === 'fixed'
-                            ? 'bg-blue-50 text-blue-700'
-                            : 'bg-red-50 text-red-700'
-                      }`}>
-                        <span>{item.label}</span>
-                        {item.sub && <span className="opacity-60">← {item.sub}</span>}
-                        {item.type === 'fixed' && <span className="opacity-50 text-[10px]">ثابت</span>}
+                {/* Items */}
+                <div className="space-y-2">
+                  {allItems.map(item => {
+                    const currentGroup = gm[item.id] ?? 0;
+                    const activeGc = GROUP_COLORS[currentGroup] ?? GROUP_COLORS[0];
+                    return (
+                      <div key={item.id} className="flex items-center gap-3 p-2.5 rounded-xl border border-slate-200 bg-slate-50">
+                        {/* Item info */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-md ${
+                              item.type === 'fixed' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'
+                            }`}>
+                              {item.label}
+                            </span>
+                            {item.sub && (
+                              <span className="text-xs text-slate-500">← <span className="font-medium text-emerald-700">{item.sub}</span></span>
+                            )}
+                            {item.type === 'fixed' && (
+                              <span className="text-[10px] text-blue-400">ثابت</span>
+                            )}
+                          </div>
+                          {currentGroup > 0 && (
+                            <div className={`text-[10px] mt-0.5 font-semibold ${activeGc.bg.replace('bg-', 'text-').replace('-600', '-700').replace('-500', '-600')}`}>
+                              → {activeGc.label}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Group buttons */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          {Array.from({ length: maxButtonGroup + 1 }, (_, g) => {
+                            const gc = GROUP_COLORS[g] ?? GROUP_COLORS[0];
+                            const isActive = currentGroup === g;
+                            return (
+                              <button key={g} type="button"
+                                onClick={() => setGroup(item.id, ben.id, g)}
+                                title={gc.label}
+                                className={`w-8 h-8 rounded-lg text-xs font-bold transition-all ${
+                                  isActive
+                                    ? `${gc.bg} ${gc.text} shadow-sm scale-105`
+                                    : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'
+                                }`}
+                              >
+                                {g === 0 ? '١' : `${g + 1}`}
+                              </button>
+                            );
+                          })}
+                          {maxButtonGroup < GROUP_COLORS.length - 1 && (
+                            <button type="button"
+                              onClick={() => setGroup(item.id, ben.id, maxButtonGroup + 1)}
+                              title={`إضافة ${GROUP_COLORS[maxButtonGroup + 1]?.label}`}
+                              className="w-8 h-8 rounded-lg text-sm font-bold bg-white border border-dashed border-slate-300 text-slate-400 hover:border-violet-400 hover:text-violet-500 transition-all"
+                            >+</button>
+                          )}
+                        </div>
                       </div>
+                    );
+                  })}
 
-                      {/* Group selector buttons */}
-                      <div className="flex border-r border-slate-200">
-                        {Array.from({ length: maxButtonGroup + 1 }, (_, g) => {
-                          const gc = GROUP_COLORS[g] ?? GROUP_COLORS[0];
-                          const isActive = currentGroup === g;
-                          return (
-                            <button key={g} type="button"
-                              onClick={() => setGroup(item.id, ben.id, g)}
-                              title={gc.label}
-                              className={`w-7 h-full flex items-center justify-center text-[10px] font-bold border-r border-slate-200 last:border-r-0 transition-colors ${
-                                isActive
-                                  ? `${gc.bg} ${gc.text}`
-                                  : 'bg-white text-slate-400 hover:bg-slate-100'
-                              }`}
-                            >
-                              {g === 0 ? '١' : `${g + 1}`}
-                            </button>
-                          );
-                        })}
-                        {/* + button to unlock one more group level */}
-                        {maxButtonGroup < GROUP_COLORS.length - 1 && (
-                          <button type="button"
-                            onClick={() => setGroup(item.id, ben.id, maxButtonGroup + 1)}
-                            title={`إضافة ${GROUP_COLORS[maxButtonGroup + 1]?.label}`}
-                            className="w-7 h-full flex items-center justify-center text-[11px] font-bold bg-white text-slate-300 hover:bg-violet-50 hover:text-violet-500 transition-colors"
-                          >+</button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                  {allItems.length === 0 && (
+                    <p className="text-xs text-slate-400 text-center py-4">لا توجد أصناف</p>
+                  )}
+                </div>
 
-                {allItems.length === 0 && (
-                  <span className="text-xs text-slate-300 italic py-1.5">لا توجد أصناف</span>
+                {/* Next button */}
+                {currentIdx < filtered.length - 1 && (
+                  <button type="button" onClick={goNext}
+                    className="w-full py-2 text-xs font-semibold text-violet-600 border border-violet-200 rounded-xl hover:bg-violet-50 transition-colors flex items-center justify-center gap-1.5">
+                    التالي: {filtered[currentIdx + 1]?.beneficiary.name}
+                    <svg className="w-3.5 h-3.5 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
                 )}
               </div>
-            </div>
-          );
-        })}
+            );
+          })()}
+        </div>
       </div>
     </div>
   );
@@ -644,8 +756,8 @@ export default function StickersView() {
             </div>
           </div>
 
-          {/* Split section */}
-          <SplitSection
+          {/* Splitter */}
+          <StickerSplitter
             stickerDetails={stickerDetails}
             splits={splits}
             onSplitsChange={setSplits}
