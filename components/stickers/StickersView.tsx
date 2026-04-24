@@ -361,9 +361,9 @@ function StickerSplitter({
         </div>
       </div>
 
-      <div className="flex" style={{ minHeight: 360 }}>
+      <div className="flex sticker-split-container" style={{ minHeight: 360 }}>
         {/* ── Left: Beneficiary List ── */}
-        <div className="w-64 shrink-0 border-l border-slate-100 flex flex-col">
+        <div className="w-64 shrink-0 border-l border-slate-100 flex flex-col sticker-split-list">
           {/* Search */}
           <div className="p-2 border-b border-slate-100">
             <div className="relative">
@@ -441,7 +441,7 @@ function StickerSplitter({
         </div>
 
         {/* ── Right: Item Assigner ── */}
-        <div className="flex-1 p-5 overflow-y-auto">
+        <div className="flex-1 p-5 overflow-y-auto sticker-split-editor">
           {!selectedDetail ? (
             <div className="flex items-center justify-center h-full text-sm text-slate-400">
               اختر مستفيداً من القائمة

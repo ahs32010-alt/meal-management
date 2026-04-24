@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { createClient } from '@/lib/supabase-client';
-import MobileToggle from './MobileToggle';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, type PageKey } from '@/lib/permissions';
 
@@ -178,11 +177,6 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
           );
         })}
       </nav>
-
-      {/* Mobile toggle */}
-      <div className="px-3 pb-2">
-        <MobileToggle className="w-full justify-between" />
-      </div>
 
       {/* Logout */}
       <div className="px-3 py-4 border-t border-slate-700/50">

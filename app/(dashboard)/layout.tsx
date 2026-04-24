@@ -31,6 +31,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     const saved = localStorage.getItem('sidebar-desktop');
     if (saved !== null) setDesktopOpen(saved === 'true');
+    // Clear retired "mobile mode" flag so it never re-applies
+    document.documentElement.removeAttribute('data-mobile');
+    localStorage.removeItem('mobile-mode');
   }, []);
 
   const toggleDesktop = () => {

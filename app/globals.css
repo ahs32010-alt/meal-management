@@ -221,6 +221,46 @@ html { scroll-behavior: smooth; }
   transform: translateX(0) !important;
 }
 
+/* ── Opt-out: Dense data tables should stay as horizontally-scrollable tables ── */
+[data-mobile="true"] .no-mobile-card { overflow-x: auto !important; }
+[data-mobile="true"] .no-mobile-card table,
+[data-mobile="true"] .no-mobile-card table tbody,
+[data-mobile="true"] .no-mobile-card table tbody tr {
+  display: revert !important;
+  grid-template-columns: none !important;
+  background: revert !important;
+  border-radius: revert !important;
+  border: revert !important;
+  padding: revert !important;
+  box-shadow: none !important;
+  gap: 0 !important;
+}
+[data-mobile="true"] .no-mobile-card table thead { display: table-header-group !important; }
+[data-mobile="true"] .no-mobile-card table tbody tr { display: table-row !important; }
+[data-mobile="true"] .no-mobile-card table tbody tr td {
+  display: table-cell !important;
+  padding: 8px 10px !important;
+  border-bottom: 1px solid #f1f5f9 !important;
+  font-size: 12px !important;
+}
+[data-mobile="true"] .no-mobile-card table tbody tr td:first-child { display: table-cell !important; }
+[data-mobile="true"] .no-mobile-card table tbody tr td:last-child {
+  grid-column: auto !important;
+  border-top: none !important;
+  margin: 0 !important;
+  justify-content: flex-start !important;
+}
+[data-mobile="true"] .no-mobile-card table { min-width: 760px !important; }
+
+/* Stickers split panel: stack vertically on phones */
+@media (max-width: 768px) {
+  .sticker-split-container { flex-direction: column !important; min-height: auto !important; }
+  .sticker-split-container .sticker-split-list { width: 100% !important; max-height: 280px !important; border-left: none !important; border-bottom: 1px solid #e2e8f0 !important; }
+  .sticker-split-container .sticker-split-editor { padding: 14px !important; }
+}
+[data-mobile="true"] .sticker-split-container { flex-direction: column !important; min-height: auto !important; }
+[data-mobile="true"] .sticker-split-container .sticker-split-list { width: 100% !important; max-height: 280px !important; border-left: none !important; border-bottom: 1px solid #e2e8f0 !important; }
+
 /* ── Sticker styles ────────────────────────────────────────────── */
 
 /* Outer wrapper — provides the top and right borders of the grid */

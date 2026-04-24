@@ -282,7 +282,7 @@ export default function ReportView({ initialOrderId }: Props) {
                 <div className="px-5 py-3 bg-slate-50 border-b border-slate-200">
                   <h3 className="font-bold text-slate-800 text-sm">تفاصيل المستفيدين ذوي التخصيصات ({withCustom.length})</h3>
                 </div>
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto no-mobile-card">
                   <table className="w-full">
                     <thead>
                       <tr className="bg-slate-50">

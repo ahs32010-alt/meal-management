@@ -243,7 +243,7 @@ export default function SettingsView() {
             <p className="text-xs mt-1">أضف أصنافاً من صفحة الأصناف وستظهر هنا تلقائياً</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto no-mobile-card">
             <table className="w-full">
               <thead>
                 <tr className="bg-slate-50">
