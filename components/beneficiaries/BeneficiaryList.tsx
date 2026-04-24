@@ -1,12 +1,65 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import type { Beneficiary, Meal } from '@/lib/types';
 import { DAY_LABELS, DAYS_ORDER } from '@/lib/types';
 import BeneficiaryModal from './BeneficiaryModal';
 import ImportModal from '@/components/shared/ImportModal';
 import { exportXLSX } from '@/lib/xlsx-utils';
+
+// ─── Collapsible pills with popover ────────────────────────────────────────
+function PillGroup({ pills, max = 3 }: {
+  pills: { key: string; label: React.ReactNode; className: string }[];
+  max?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const extra = pills.length - max;
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <div className="flex flex-wrap gap-1.5 items-center">
+        {pills.slice(0, max).map(p => (
+          <span key={p.key} className={`text-xs px-2 py-0.5 rounded-full border ${p.className}`}>
+            {p.label}
+          </span>
+        ))}
+        {extra > 0 && (
+          <button
+            type="button"
+            onClick={() => setOpen(o => !o)}
+            className="text-xs px-2 py-0.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 font-semibold border border-slate-200 transition-colors"
+          >
+            +{extra} المزيد
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className="absolute top-full mt-1.5 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-2xl p-3 flex flex-wrap gap-1.5 min-w-[220px] max-w-[340px]">
+          <div className="w-full text-[10px] text-slate-400 font-semibold mb-1 border-b border-slate-100 pb-1">
+            كل الأصناف ({pills.length})
+          </div>
+          {pills.map(p => (
+            <span key={p.key} className={`text-xs px-2 py-0.5 rounded-full border ${p.className}`}>
+              {p.label}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function BeneficiaryList() {
   const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
@@ -253,42 +306,41 @@ export default function BeneficiaryList() {
                   <td className="table-cell">
                     {(b.fixed_meals ?? []).length === 0 ? (
                       <span className="text-slate-300 text-xs">لا يوجد</span>
-                    ) : (
-                      <div className="flex flex-wrap gap-1.5">
-                        {(() => {
-                          // Group by meal_id, collect days sorted by DAYS_ORDER
-                          const map = new Map<string, { name: string; days: number[] }>();
-                          for (const fm of b.fixed_meals ?? []) {
-                            const name = (fm as any).meals?.name ?? fm.meal_id;
-                            if (!map.has(fm.meal_id)) map.set(fm.meal_id, { name, days: [] });
-                            map.get(fm.meal_id)!.days.push(fm.day_of_week);
-                          }
-                          return Array.from(map.values()).map(({ name, days }) => {
-                            const sortedDays = DAYS_ORDER.filter(d => days.includes(d));
-                            const dayLabels = sortedDays.map(d => DAY_LABELS[d]);
-                            return (
-                              <span key={name} className="inline-flex items-center gap-1 text-xs bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-full">
-                                <span className="font-semibold">{name}</span>
-                                <span className="text-emerald-400">·</span>
-                                <span className="text-emerald-600">{dayLabels.join('، ')}</span>
-                              </span>
-                            );
-                          });
-                        })()}
-                      </div>
-                    )}
+                    ) : (() => {
+                      const map = new Map<string, { name: string; days: number[] }>();
+                      for (const fm of b.fixed_meals ?? []) {
+                        const name = (fm as any).meals?.name ?? fm.meal_id;
+                        if (!map.has(fm.meal_id)) map.set(fm.meal_id, { name, days: [] });
+                        map.get(fm.meal_id)!.days.push(fm.day_of_week);
+                      }
+                      const pills = Array.from(map.values()).map(({ name, days }) => {
+                        const sortedDays = DAYS_ORDER.filter(d => days.includes(d));
+                        return {
+                          key: name,
+                          className: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+                          label: (
+                            <span className="inline-flex items-center gap-1">
+                              <span className="font-semibold">{name}</span>
+                              <span className="opacity-40">·</span>
+                              <span className="opacity-75">{sortedDays.map(d => DAY_LABELS[d]).join('، ')}</span>
+                            </span>
+                          ),
+                        };
+                      });
+                      return <PillGroup pills={pills} />;
+                    })()}
                   </td>
                   <td className="table-cell">
                     {(b.exclusions ?? []).length === 0 ? (
                       <span className="text-slate-300 text-xs">لا يوجد</span>
                     ) : (
-                      <div className="flex flex-wrap gap-1">
-                        {(b.exclusions ?? []).map(e => (
-                          <span key={e.id} className="text-xs bg-red-50 text-red-700 border border-red-100 px-1.5 py-0.5 rounded">
-                            {e.meals?.name}
-                          </span>
-                        ))}
-                      </div>
+                      <PillGroup
+                        pills={(b.exclusions ?? []).map(e => ({
+                          key: e.id,
+                          className: 'bg-red-50 text-red-700 border-red-100',
+                          label: e.meals?.name ?? '—',
+                        }))}
+                      />
                     )}
                   </td>
                   <td className="table-cell text-slate-500 text-sm">{b.notes ?? '—'}</td>
