@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { MEAL_TYPE_LABELS, DAY_LABELS } from '@/lib/types';
+import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+import { MEAL_TYPE_LABELS } from '@/lib/types';
 import type { Meal } from '@/lib/types';
 
 interface MealCount { meal: Meal; gets?: number; qty?: number; quantity?: number; fixedQty?: number }
@@ -11,7 +11,7 @@ interface BeneficiaryDetail {
   fixedItems: { meal: Meal; quantity: number }[];
 }
 interface FullReport {
-  order: { id: string; date: string; meal_type: string };
+  order: { id: string; date: string; meal_type: string; week_of_month?: number | null };
   itemsSummary: MealCount[];
   beneficiaryDetails: BeneficiaryDetail[];
   mainMealsSummary: MealCount[];
@@ -24,15 +24,28 @@ interface FullReport {
 function arabicDate(dateStr: string) {
   const d = new Date(dateStr);
   const dayNames = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-  const monthNames = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
-  return `${dayNames[d.getDay()]} ${d.getDate()} ${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+  const [y, m, day] = dateStr.split('-');
+  return `${dayNames[d.getDay()]} ${day}-${m}-${y}`;
 }
 
-function weekNumber(dateStr: string) {
-  const d = new Date(dateStr);
-  const start = new Date(d.getFullYear(), 0, 1);
-  return Math.ceil(((d.getTime() - start.getTime()) / 86400000 + start.getDay() + 1) / 7);
-}
+const WEEK_LABELS: Record<number, string> = {
+  1: 'الأسبوع الأول',
+  2: 'الأسبوع الثاني',
+  3: 'الأسبوع الثالث',
+  4: 'الأسبوع الرابع',
+};
+
+// Layout color palette — matches the reference PDF
+const PALETTE = {
+  title:   { bg: '#eff6ff', border: '#1e3a8a', text: '#1e3a8a' }, // indigo/blue header
+  main:    { bg: '#16a34a', text: '#fff' },  // green
+  alt:     { bg: '#e11d48', text: '#fff' },  // rose
+  snack:   { bg: '#ea580c', text: '#fff' },  // orange
+  snackAlt:{ bg: '#f59e0b', text: '#fff' },  // amber
+  fixed:   { bg: '#7c3aed', text: '#fff' },  // purple
+  stats:   { bg: '#0ea5e9', text: '#fff' },  // sky-blue
+  bens:    { bg: '#6d28d9', text: '#fff' },  // deep purple
+};
 
 export default function OrderPrintView({ orderId }: { orderId: string }) {
   const [report, setReport] = useState<FullReport | null>(null);
@@ -40,6 +53,10 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
   const [showFixedSection, setShowFixedSection] = useState(() =>
     typeof window !== 'undefined' ? localStorage.getItem('orderPrintShowFixed') !== '0' : true
   );
+  // Always start unchecked — user must explicitly toggle it on each time
+  const [fitOnePage, setFitOnePage] = useState(false);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/orders/${orderId}/report`);
@@ -49,6 +66,18 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
 
   useEffect(() => { load(); }, [load]);
 
+  // Auto-scale to fit one A4 page (297mm at 96dpi ≈ 1123px, minus 6mm margins ≈ 1080px)
+  useLayoutEffect(() => {
+    if (!report) return;
+    if (!fitOnePage) { setScale(1); return; }
+    const el = pageRef.current;
+    if (!el) return;
+    const TARGET_HEIGHT = 1080;
+    (el.style as any).zoom = '1';
+    const h = el.scrollHeight;
+    const s = h <= TARGET_HEIGHT ? 1 : Math.max(0.3, TARGET_HEIGHT / h);
+    setScale(s);
+  }, [report, fitOnePage, showFixedSection]);
 
   if (error) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'sans-serif', color: '#c00' }}>
@@ -67,78 +96,281 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
   const { order, mainMealsSummary, snackMealsSummary, altSummary, snackAltSummary, fixedSummary, itemsSummary, beneficiaryDetails } = report;
   const mealLabel = MEAL_TYPE_LABELS[order.meal_type as keyof typeof MEAL_TYPE_LABELS] || order.meal_type;
   const withCustom = beneficiaryDetails.filter(d => d.excludedItems.length > 0 || d.fixedItems.length > 0);
+  const fileBaseName = `order-${order.date}-${order.meal_type}`;
 
-  const s: Record<string, React.CSSProperties> = {
-    page: { fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif", fontSize: 9, color: '#1e293b', background: '#fff', direction: 'rtl', padding: '10mm 12mm', minHeight: '297mm', width: '210mm', margin: '0 auto', boxSizing: 'border-box' },
-    header: { background: 'linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%)', color: '#fff', borderRadius: 8, padding: '10px 16px', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-    headerTitle: { fontSize: 15, fontWeight: 700, letterSpacing: 0.5 },
-    headerMeta: { display: 'flex', gap: 20, fontSize: 9, opacity: 0.85 },
-    headerBadge: { background: 'rgba(255,255,255,0.15)', borderRadius: 4, padding: '2px 8px', fontWeight: 600 },
-    section: { marginBottom: 7 },
-    sectionHeader: { padding: '4px 10px', borderRadius: '6px 6px 0 0', fontWeight: 700, fontSize: 8.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-    table: { width: '100%', borderCollapse: 'collapse', border: '1px solid #e2e8f0', borderTop: 'none', borderRadius: '0 0 6px 6px', overflow: 'hidden' },
-    th: { background: '#f8fafc', padding: '3px 8px', borderBottom: '1px solid #e2e8f0', textAlign: 'right', fontWeight: 700, fontSize: 8, color: '#475569' },
-    td: { padding: '3px 8px', borderBottom: '1px solid #f1f5f9', fontSize: 8.5 },
-    tdNum: { padding: '3px 8px', borderBottom: '1px solid #f1f5f9', fontSize: 10, fontWeight: 700, textAlign: 'center' },
-    grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 },
-    grid3: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 7 },
-    chip: { display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '3px 8px', borderRadius: 4, fontSize: 8.5, fontWeight: 600, border: '1px solid' },
-    summaryGrid: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 },
-    summaryCell: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '3px 7px', borderRadius: 4, border: '1px solid', fontSize: 8 },
-    tfoot: { background: '#f8fafc', fontWeight: 700 },
+  // ── Export helpers ────────────────────────────────────────────────────────
+  const buildHtml = () => {
+    const node = pageRef.current;
+    if (!node) return '';
+    const prevZoom = (node.style as any).zoom;
+    (node.style as any).zoom = '1';
+    const contentHtml = node.outerHTML;
+    (node.style as any).zoom = prevZoom;
+
+    return `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>أمر تشغيل — ${arabicDate(order.date)} — ${mealLabel}</title>
+<style>
+  body { margin: 0; padding: 12px; background: #f1f5f9; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  /* Make the page container fluid in preview — overrides the fixed 210mm width */
+  #order-print-root {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 16px !important;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    background: #fff;
+    border-radius: 8px;
+  }
+  #order-print-root table { width: 100% !important; table-layout: auto !important; }
+  #order-print-root td, #order-print-root th { word-break: break-word; }
+  /* Keep two-column grids responsive: collapse to 1 column on narrow screens */
+  @media (max-width: 720px) {
+    #order-print-root [style*="grid-template-columns: 1fr 1fr"] {
+      grid-template-columns: 1fr !important;
+    }
+  }
+  @media print {
+    @page { size: A4 portrait; margin: 5mm; }
+    body { padding: 0; background: #fff; }
+    .preview-toolbar { display: none !important; }
+    #order-print-root { box-shadow: none !important; border-radius: 0 !important; padding: 0 !important; }
+  }
+</style>
+</head>
+<body>
+<div class="preview-toolbar" style="position:sticky; top:0; z-index:1000; background:#1e293b; color:#fff; padding:10px 16px; display:flex; align-items:center; justify-content:space-between; direction:rtl; font-family:inherit; margin:-12px -12px 12px; box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+  <strong style="font-size:14px;">معاينة أمر التشغيل — ${arabicDate(order.date)} — ${mealLabel}</strong>
+  <div style="display:flex; gap:8px;">
+    <button onclick="(function(){var css='body{margin:0;padding:12px;background:#fff;font-family:Segoe UI,Tahoma,Arial,sans-serif}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}#order-print-root{width:100%!important;max-width:100%!important;padding:0!important}#order-print-root table{width:100%!important;table-layout:auto!important}#order-print-root td,#order-print-root th{word-break:break-word}@media (max-width:720px){#order-print-root [style*=\\'grid-template-columns: 1fr 1fr\\']{grid-template-columns:1fr!important}}@media print{@page{size:A4 portrait;margin:5mm}body{padding:0}}';var a=document.createElement('a');var h='<!DOCTYPE html><html lang=\\'ar\\' dir=\\'rtl\\'><head><meta charset=\\'UTF-8\\'><meta name=\\'viewport\\' content=\\'width=device-width,initial-scale=1\\'><title>أمر تشغيل</title><style>'+css+'</style></head><body>'+document.querySelector('#order-print-root').outerHTML+'</body></html>';var b=new Blob([h],{type:'text/html;charset=utf-8'});a.href=URL.createObjectURL(b);a.download='${fileBaseName}.html';document.body.appendChild(a);a.click();document.body.removeChild(a);})();" style="background:#10b981;color:#fff;border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-weight:600;font-size:13px;font-family:inherit;">⬇ حفظ كملف HTML</button>
+    <button onclick="window.print()" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-weight:600;font-size:13px;font-family:inherit;">🖨 طباعة</button>
+    <button onclick="window.close()" style="background:transparent;color:#94a3b8;border:1px solid #475569;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px;font-family:inherit;">إغلاق</button>
+  </div>
+</div>
+${contentHtml}
+</body>
+</html>`;
   };
 
-  const SectionTable = ({ title, bgColor, textColor, borderColor, items, numKey, numLabel }: {
-    title: string; bgColor: string; textColor: string; borderColor: string;
-    items: MealCount[]; numKey: 'gets' | 'qty' | 'quantity'; numLabel: string;
+  const previewHtml = () => {
+    const html = buildHtml();
+    if (!html) return;
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+
+  const exportAsWord = () => {
+    const node = pageRef.current;
+    if (!node) return;
+    const prevZoom = (node.style as any).zoom;
+    (node.style as any).zoom = '1';
+    const contentHtml = node.outerHTML;
+    (node.style as any).zoom = prevZoom;
+
+    // Word HTML envelope — opens natively in Microsoft Word with styles/colors preserved
+    const wordHtml = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40" lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>أمر تشغيل</title>
+<!--[if gte mso 9]>
+<xml>
+  <w:WordDocument>
+    <w:View>Print</w:View>
+    <w:Zoom>100</w:Zoom>
+    <w:DoNotOptimizeForBrowser/>
+  </w:WordDocument>
+</xml>
+<![endif]-->
+<style>
+  @page { size: A4 portrait; margin: 8mm; mso-page-orientation: portrait; }
+  body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; direction: rtl; }
+  table { border-collapse: collapse; }
+</style>
+</head>
+<body>
+${contentHtml}
+</body>
+</html>`;
+
+    const blob = new Blob(['﻿', wordHtml], { type: 'application/msword' });
+    triggerDownload(blob, `${fileBaseName}.doc`);
+  };
+
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  // Base styles
+  const s: Record<string, React.CSSProperties> = {
+    page: {
+      fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif",
+      fontSize: 11, color: '#1e293b', background: '#fff',
+      direction: 'rtl', padding: '6mm 8mm',
+      width: '210mm', maxWidth: '100%', margin: '0 auto', boxSizing: 'border-box',
+    },
+    titleBar: {
+      fontSize: 22, fontWeight: 800, color: PALETTE.title.text,
+      textAlign: 'center', padding: '8px 0', marginBottom: 6,
+    },
+    infoBar: {
+      background: PALETTE.title.bg,
+      border: `1.5px solid ${PALETTE.title.border}`,
+      borderRadius: 8,
+      padding: '8px 14px',
+      textAlign: 'center',
+      lineHeight: 1.7,
+      marginBottom: 10,
+    },
+    infoMain: { fontSize: 15, fontWeight: 700, color: '#0f172a' },
+    infoLine: { fontSize: 12, color: '#1e293b' },
+    sectionHeader: {
+      padding: '6px 14px', fontWeight: 700, fontSize: 14.5,
+      textAlign: 'right' as const,
+    },
+    table: { width: '100%', borderCollapse: 'collapse' as const, border: '1px solid #94a3b8' },
+    th: {
+      background: '#f1f5f9', padding: '5px 12px',
+      borderBottom: '1px solid #94a3b8', borderLeft: '1px solid #cbd5e1',
+      textAlign: 'right' as const, fontWeight: 700, fontSize: 13, color: '#334155',
+    },
+    td: {
+      padding: '5px 12px', borderBottom: '1px solid #e2e8f0',
+      borderLeft: '1px solid #e2e8f0', fontSize: 13.5,
+    },
+    tdNum: {
+      padding: '5px 12px', borderBottom: '1px solid #e2e8f0',
+      borderLeft: '1px solid #e2e8f0', fontSize: 14.5, fontWeight: 700,
+      textAlign: 'center' as const, width: 60,
+    },
+    grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 },
+
+    // Tighter styles for the beneficiary table (more rows → smaller cells)
+    bensHeader: {
+      padding: '5px 12px', fontWeight: 700, fontSize: 12.5,
+      textAlign: 'right' as const,
+    },
+    bensTh: {
+      background: '#f1f5f9', padding: '2.5px 6px',
+      borderBottom: '1px solid #94a3b8', borderLeft: '1px solid #cbd5e1',
+      textAlign: 'right' as const, fontWeight: 700, fontSize: 10, color: '#334155',
+      lineHeight: 1.2,
+    },
+    bensTd: {
+      padding: '2px 6px', borderBottom: '1px solid #e2e8f0',
+      borderLeft: '1px solid #e2e8f0', fontSize: 10, lineHeight: 1.25,
+    },
+  };
+
+  // Simple table for main/alt/snack sections
+  const SectionTable = ({ title, color, items, numLabel, numKey }: {
+    title: string;
+    color: { bg: string; text: string };
+    items: MealCount[];
+    numLabel: string;
+    numKey: 'gets' | 'qty' | 'quantity';
   }) => (
-    <div style={s.section}>
-      <div style={{ ...s.sectionHeader, background: bgColor, color: textColor }}>
-        <span>{title}</span>
-        <span style={{ opacity: 0.8, fontSize: 8 }}>
-          المجموع: {items.reduce((sum, x) => sum + ((x[numKey] as number) || 0), 0)}
-        </span>
-      </div>
-      {items.length === 0 ? (
-        <div style={{ border: `1px solid ${borderColor}`, borderTop: 'none', padding: '6px 10px', color: '#94a3b8', fontSize: 8, textAlign: 'center', borderRadius: '0 0 6px 6px' }}>
-          لا يوجد
-        </div>
-      ) : (
-        <table style={{ ...s.table, borderColor }}>
-          <thead>
-            <tr>
-              <th style={s.th}>الصنف</th>
-              <th style={{ ...s.th, textAlign: 'center', width: 50 }}>{numLabel}</th>
+    <div className="print-section" style={{ breakInside: 'avoid' }}>
+      <div style={{ ...s.sectionHeader, background: color.bg, color: color.text }}>{title}</div>
+      <table style={s.table}>
+        <thead>
+          <tr>
+            <th style={s.th}>{title.includes('بديل') || title.includes('بدائل') ? 'الصنف البديل' : title.includes('سناك') ? 'السناك' : 'الصنف'}</th>
+            <th style={{ ...s.th, textAlign: 'center', width: 60 }}>{numLabel}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.length === 0 ? (
+            <tr><td colSpan={2} style={{ ...s.td, textAlign: 'center', color: '#94a3b8' }}>—</td></tr>
+          ) : items.map((x, i) => (
+            <tr key={x.meal.id}>
+              <td style={s.td}>{i + 1}. {x.meal.name}</td>
+              <td style={s.tdNum}>{(x[numKey] as number) || 0}</td>
             </tr>
-          </thead>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  // Compact grid used for "أصناف يومية ثابتة" and "إحصاء الأصناف"
+  // Renders `columns` columns of (qty | name) pairs
+  const CompactGrid = ({ title, color, items, numKey, columns = 4 }: {
+    title: string;
+    color: { bg: string; text: string };
+    items: MealCount[];
+    numKey: 'qty' | 'quantity' | 'gets';
+    columns?: number;
+  }) => {
+    if (items.length === 0) return null;
+    const rows = Math.ceil(items.length / columns);
+    const cellsPerRow = columns;
+    return (
+      <div className="print-section" style={{ breakInside: 'avoid', marginBottom: 8 }}>
+        <div style={{ ...s.sectionHeader, background: color.bg, color: color.text }}>{title}</div>
+        <table style={s.table}>
           <tbody>
-            {items.map(x => (
-              <tr key={x.meal.id}>
-                <td style={s.td}>{x.meal.name}</td>
-                <td style={s.tdNum}>{(x[numKey] as number) || 0}</td>
+            {Array.from({ length: rows }).map((_, rowIdx) => (
+              <tr key={rowIdx}>
+                {Array.from({ length: cellsPerRow }).map((_, colIdx) => {
+                  const item = items[rowIdx * cellsPerRow + colIdx];
+                  if (!item) return (
+                    <React.Fragment key={colIdx}>
+                      <td style={{ ...s.tdNum, width: 36, background: '#fafafa' }}>&nbsp;</td>
+                      <td style={{ ...s.td, background: '#fafafa' }}>&nbsp;</td>
+                    </React.Fragment>
+                  );
+                  const n = (item[numKey] as number) || 0;
+                  return (
+                    <React.Fragment key={colIdx}>
+                      <td style={{ ...s.tdNum, width: 36 }}>{n}</td>
+                      <td style={s.td}>{item.meal.name}</td>
+                    </React.Fragment>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
-          <tfoot>
-            <tr style={s.tfoot}>
-              <td style={{ ...s.td, color: '#64748b', fontSize: 8 }}>المجموع</td>
-              <td style={s.tdNum}>{items.reduce((sum, x) => sum + ((x[numKey] as number) || 0), 0)}</td>
-            </tr>
-          </tfoot>
         </table>
-      )}
-    </div>
-  );
+      </div>
+    );
+  };
 
   return (
     <>
       <style>{`
-        @media print {
-          @page { size: A4 portrait; margin: 0; }
-          body { margin: 0; }
-          .no-print { display: none !important; }
-        }
+        html, body { margin: 0; padding: 0; }
         body { background: #e2e8f0; }
+        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        .print-page { page-break-inside: avoid; break-inside: avoid; }
+        .print-section { page-break-inside: avoid; break-inside: avoid; }
+
+        @media print {
+          @page { size: A4 portrait; margin: 5mm; }
+          html, body { background: #fff !important; width: auto !important; height: auto !important; }
+          .no-print { display: none !important; }
+          .print-page {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-height: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            box-shadow: none !important;
+          }
+        }
       `}</style>
 
       {/* Print action bar */}
@@ -157,11 +389,34 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
             />
             إظهار الأصناف الثابتة
           </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 12, userSelect: 'none' }}>
+            <input
+              type="checkbox"
+              checked={fitOnePage}
+              onChange={e => setFitOnePage(e.target.checked)}
+              style={{ cursor: 'pointer', accentColor: '#10b981' }}
+            />
+            احتواء في صفحة واحدة
+          </label>
           <button
-            onClick={() => window.print()}
-            style={{ background: '#10b981', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 16px', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit', fontSize: 13 }}
+            onClick={() => {
+              requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+            }}
+            style={{ background: '#10b981', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit', fontSize: 13 }}
           >
-            ⬇ تصدير PDF
+            ⬇ PDF
+          </button>
+          <button
+            onClick={exportAsWord}
+            style={{ background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit', fontSize: 13 }}
+          >
+            ⬇ Word
+          </button>
+          <button
+            onClick={previewHtml}
+            style={{ background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit', fontSize: 13 }}
+          >
+            👁 عرض HTML
           </button>
           <button
             onClick={() => window.close()}
@@ -172,157 +427,95 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
         </div>
       </div>
 
-      <div style={s.page}>
-        {/* ── Header ── */}
-        <div style={s.header}>
-          <div>
-            <div style={s.headerTitle}>أمر تشغيل — خطوة أمل</div>
-            <div style={{ fontSize: 10, opacity: 0.75, marginTop: 3 }}>{arabicDate(order.date)}</div>
-          </div>
-          <div style={s.headerMeta}>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ opacity: 0.6, fontSize: 7.5, marginBottom: 2 }}>نوع الوجبة</div>
-              <div style={s.headerBadge}>{mealLabel}</div>
-            </div>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ opacity: 0.6, fontSize: 7.5, marginBottom: 2 }}>الأسبوع</div>
-              <div style={s.headerBadge}>رقم {weekNumber(order.date)}</div>
-            </div>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ opacity: 0.6, fontSize: 7.5, marginBottom: 2 }}>لديهم تخصيصات</div>
-              <div style={s.headerBadge}>{withCustom.length} مستفيد</div>
-            </div>
-          </div>
+      <div
+        id="order-print-root"
+        ref={pageRef}
+        className="print-page"
+        style={{
+          ...s.page,
+          ...(scale !== 1 ? ({ zoom: scale } as React.CSSProperties) : {}),
+        }}
+      >
+        {/* ── Title ── */}
+        <div style={s.titleBar}>أمر تشغيل — خطوة أمل</div>
+
+        {/* ── Info box ── */}
+        <div style={s.infoBar}>
+          <div style={s.infoMain}>{arabicDate(order.date)}</div>
+          <div style={s.infoLine}>نوع الوجبة: <strong>{mealLabel}</strong></div>
+          {order.week_of_month && WEEK_LABELS[order.week_of_month] && (
+            <div style={s.infoLine}>الأسبوع: <strong>{WEEK_LABELS[order.week_of_month]}</strong></div>
+          )}
         </div>
 
-        {/* ── الأصناف الرئيسية + البدائل ── */}
+        {/* ── Main + Alt side-by-side ── */}
         {(mainMealsSummary.length > 0 || altSummary.length > 0) && (
           <div style={s.grid2}>
-            <SectionTable title="الأصناف الرئيسية" bgColor="#065f46" textColor="#fff" borderColor="#a7f3d0" items={mainMealsSummary} numKey="gets" numLabel="الكمية" />
-            <SectionTable title="الأصناف البديلة" bgColor="#92400e" textColor="#fff" borderColor="#fde68a" items={altSummary} numKey="qty" numLabel="العدد" />
+            <SectionTable title="الأصناف الرئيسية" color={PALETTE.main} items={mainMealsSummary} numLabel="الكمية" numKey="gets" />
+            <SectionTable title="الأصناف البديلة" color={PALETTE.alt} items={altSummary} numLabel="العدد" numKey="qty" />
           </div>
         )}
 
-        {/* ── السناكات + بدائلها ── */}
+        {/* ── Snacks + Snack alts ── */}
         {(snackMealsSummary.length > 0 || snackAltSummary.length > 0) && (
           <div style={s.grid2}>
-            <SectionTable title="السناكات المختارة" bgColor="#78350f" textColor="#fff" borderColor="#fcd34d" items={snackMealsSummary} numKey="gets" numLabel="الكمية" />
-            <SectionTable title="بدائل السناكات" bgColor="#451a03" textColor="#fef3c7" borderColor="#fcd34d" items={snackAltSummary} numKey="qty" numLabel="العدد" />
+            <SectionTable title="السناكات المختارة" color={PALETTE.snack} items={snackMealsSummary} numLabel="الكمية" numKey="gets" />
+            {snackAltSummary.length > 0 ? (
+              <SectionTable title="بدائل السناكات" color={PALETTE.snackAlt} items={snackAltSummary} numLabel="العدد" numKey="qty" />
+            ) : <div />}
           </div>
         )}
 
-        {/* ── الأصناف الثابتة ── */}
-        {showFixedSection && fixedSummary && fixedSummary.length > 0 && (
-          <div style={s.section}>
-            <div style={{ ...s.sectionHeader, background: '#4c1d95', color: '#fff' }}>
-              <span>الأصناف الثابتة اليومية</span>
-              <span style={{ opacity: 0.75, fontSize: 8 }}>
-                المجموع: {fixedSummary.reduce((s, x) => s + (x.qty || 0), 0)}
-              </span>
-            </div>
-            <div style={{ border: '1px solid #ddd6fe', borderTop: 'none', borderRadius: '0 0 6px 6px', padding: 8 }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                {fixedSummary.map(({ meal, qty }) => (
-                  <div key={meal.id} style={{ ...s.chip, background: '#f5f3ff', borderColor: '#c4b5fd', color: '#5b21b6' }}>
-                    <span>{meal.name}</span>
-                    <span style={{ background: '#7c3aed', color: '#fff', borderRadius: 3, padding: '1px 5px', fontSize: 9 }}>{qty}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+        {/* ── Fixed items — 4-column compact grid ── */}
+        {showFixedSection && fixedSummary.length > 0 && (
+          <CompactGrid title="أصناف يومية ثابتة" color={PALETTE.fixed} items={fixedSummary} numKey="qty" columns={4} />
         )}
 
-        {/* ── إحصاء الأصناف ── */}
+        {/* ── Items summary — 4-column compact grid ── */}
         {itemsSummary.length > 0 && (
-          <div style={s.section}>
-            <div style={{ ...s.sectionHeader, background: '#1e293b', color: '#fff' }}>
-              <span>إحصاء الأصناف الكلي</span>
-              <span style={{ opacity: 0.65, fontSize: 8 }}>
-                المجموع: {itemsSummary.reduce((s, x) => s + (x.quantity || 0), 0)}
-              </span>
-            </div>
-            <div style={{ border: '1px solid #e2e8f0', borderTop: 'none', borderRadius: '0 0 6px 6px', padding: 8 }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                {itemsSummary.map(({ meal, quantity }) => (
-                  <div key={meal.id} style={{
-                    ...s.chip,
-                    background: meal.is_snack ? '#fffbeb' : '#f8fafc',
-                    borderColor: meal.is_snack ? '#fcd34d' : '#cbd5e1',
-                    color: meal.is_snack ? '#92400e' : '#334155',
-                  }}>
-                    <span>{meal.name}</span>
-                    <span style={{ background: meal.is_snack ? '#f59e0b' : '#475569', color: '#fff', borderRadius: 3, padding: '1px 5px', fontSize: 9 }}>{quantity}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+          <CompactGrid title="إحصاء الأصناف" color={PALETTE.stats} items={itemsSummary} numKey="quantity" columns={4} />
         )}
 
-        {/* ── تخصيصات المستفيدين ── */}
+        {/* ── Beneficiary custom details ── */}
         {withCustom.length > 0 && (
-          <div style={s.section}>
-            <div style={{ ...s.sectionHeader, background: '#1d4ed8', color: '#fff' }}>
-              <span>تخصيصات المستفيدين</span>
-              <span style={{ opacity: 0.75, fontSize: 8 }}>{withCustom.length} مستفيد</span>
+          <div className="print-section" style={{ breakInside: 'avoid' }}>
+            <div style={{ ...s.bensHeader, background: PALETTE.bens.bg, color: PALETTE.bens.text }}>
+              تخصيصات المستفيدين
             </div>
-            <table style={{ ...s.table, borderColor: '#bfdbfe' }}>
+            <table style={s.table}>
               <thead>
                 <tr>
-                  <th style={{ ...s.th, width: 24 }}>#</th>
-                  <th style={s.th}>الكود</th>
-                  <th style={s.th}>الاسم</th>
-                  <th style={s.th}>الفيلا</th>
-                  <th style={s.th}>الأصناف المستبعدة</th>
-                  <th style={s.th}>البدائل والأصناف الثابتة</th>
+                  <th style={{ ...s.bensTh, textAlign: 'center', width: 36 }}>الكود</th>
+                  <th style={{ ...s.bensTh, textAlign: 'center', width: 36 }}>الفيلا</th>
+                  <th style={s.bensTh}>الاسم</th>
+                  <th style={s.bensTh}>الأصناف المستبعدة</th>
+                  <th style={s.bensTh}>البدائل والأصناف اليومية الثابتة</th>
                 </tr>
               </thead>
               <tbody>
-                {withCustom.map((detail, i) => (
-                  <tr key={detail.beneficiary.id} style={{ background: i % 2 === 0 ? '#fff' : '#f8fafc' }}>
-                    <td style={{ ...s.td, color: '#94a3b8', textAlign: 'center' }}>{i + 1}</td>
-                    <td style={{ ...s.td, fontFamily: 'monospace', fontWeight: 700, color: '#3730a3' }}>{detail.beneficiary.code}</td>
-                    <td style={{ ...s.td, fontWeight: 600 }}>{detail.beneficiary.name}</td>
-                    <td style={{ ...s.td, textAlign: 'center', color: '#2563eb' }}>{detail.beneficiary.villa || '—'}</td>
-                    <td style={s.td}>
-                      {detail.excludedItems.length === 0
-                        ? <span style={{ color: '#cbd5e1' }}>—</span>
-                        : detail.excludedItems.map(({ meal }) => (
-                          <span key={meal.id} style={{ ...s.chip, background: '#fef2f2', borderColor: '#fca5a5', color: '#b91c1c', marginLeft: 3, marginBottom: 2 }}>
-                            {meal.name}{meal.is_snack && <span style={{ color: '#f59e0b', fontWeight: 700 }}> (snak)</span>}
-                          </span>
-                        ))}
-                    </td>
-                    <td style={s.td}>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                        {detail.excludedItems.map(({ meal, alternative }) =>
-                          alternative ? (
-                            <span key={meal.id} style={{ ...s.chip, background: '#f0fdf4', borderColor: '#86efac', color: '#166534' }}>
-                              {alternative.name}{meal.is_snack && <span style={{ color: '#f59e0b', fontWeight: 700 }}> (snak)</span>}
-                            </span>
-                          ) : null
-                        )}
-                        {detail.fixedItems.map(({ meal, quantity }) => (
-                          <span key={meal.id} style={{ ...s.chip, background: '#f5f3ff', borderColor: '#c4b5fd', color: '#5b21b6' }}>
-                            ثابت: {meal.name}{quantity > 1 ? ` ×${quantity}` : ''}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {withCustom.map(detail => {
+                  const excludedNames = detail.excludedItems.map(x => x.meal.name).join(' | ');
+                  const altParts: string[] = [];
+                  detail.excludedItems.forEach(x => { if (x.alternative) altParts.push(x.alternative.name); });
+                  detail.fixedItems.forEach(f => {
+                    altParts.push(f.quantity > 1 ? `${f.quantity} ${f.meal.name}` : f.meal.name);
+                  });
+                  return (
+                    <tr key={detail.beneficiary.id}>
+                      <td style={{ ...s.bensTd, textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{detail.beneficiary.code}</td>
+                      <td style={{ ...s.bensTd, textAlign: 'center' }}>{detail.beneficiary.villa || '—'}</td>
+                      <td style={{ ...s.bensTd, fontWeight: 600 }}>{detail.beneficiary.name}</td>
+                      <td style={s.bensTd}>{excludedNames || '—'}</td>
+                      <td style={s.bensTd}>{altParts.length ? altParts.join(' | ') : '—'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
-
-        {/* Footer */}
-        <div style={{ marginTop: 10, paddingTop: 6, borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', color: '#94a3b8', fontSize: 7.5 }}>
-          <span>نظام إدارة الوجبات — خطوة أمل</span>
-          <span>{new Date().toLocaleDateString('ar-SA', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-        </div>
       </div>
     </>
   );
 }
+

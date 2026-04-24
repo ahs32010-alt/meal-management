@@ -352,7 +352,9 @@ body {
   body * { visibility: hidden; }
 
   #report-content,
-  #report-content * { visibility: visible; }
+  #report-content *,
+  #order-print-root,
+  #order-print-root * { visibility: visible; }
 
   #report-content {
     position: absolute;

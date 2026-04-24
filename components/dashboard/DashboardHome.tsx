@@ -58,7 +58,7 @@ const TYPE_META: Record<string, { label: string; bar: string; badge: string; tex
 
 const DAY_SHORT = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
-function getDateRange(days: number) {
+function getPresetRange(days: number) {
   const to = new Date().toISOString().slice(0, 10);
   const from = days === 0
     ? '2000-01-01'
@@ -80,7 +80,9 @@ export default function DashboardHome() {
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
-  const [datePreset, setDatePreset] = useState(30);
+  const [datePreset, setDatePreset] = useState<number | 'custom'>(30);
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [mealTypeFilter, setMealTypeFilter] = useState<MealTypeFilter>('all');
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
@@ -123,7 +125,13 @@ export default function DashboardHome() {
   const fetchAnalytics = useCallback(async () => {
     setAnalyticsLoading(true);
     try {
-      const { from, to } = getDateRange(datePreset);
+      let from: string; let to: string;
+      if (datePreset === 'custom') {
+        if (!customFrom || !customTo) { setAnalyticsLoading(false); return; }
+        from = customFrom; to = customTo;
+      } else {
+        ({ from, to } = getPresetRange(datePreset));
+      }
 
       const { data: ordersArr } = await supabase
         .from('daily_orders')
@@ -175,7 +183,7 @@ export default function DashboardHome() {
         mealUsage = Array.from(mealMap.entries())
           .map(([meal_id, v]) => ({ meal_id, name: v.name, type: v.type, is_snack: v.is_snack, count: v.orderIds.size }))
           .sort((a, b) => b.count - a.count)
-          .slice(0, 14);
+          .slice(0, 50);
       }
 
       const { data: exclRaw } = await supabase.from('exclusions').select('meal_id, meals(name, type)');
@@ -196,7 +204,7 @@ export default function DashboardHome() {
     } finally {
       setAnalyticsLoading(false);
     }
-  }, [supabase, datePreset, mealTypeFilter]);
+  }, [supabase, datePreset, customFrom, customTo, mealTypeFilter]);
 
   // Initial load + refetch when filters change
   useEffect(() => { fetchStats(); }, [fetchStats]);
@@ -350,6 +358,21 @@ export default function DashboardHome() {
                     }`}
                   >{p.label}</button>
                 ))}
+                <button
+                  onClick={() => {
+                    if (datePreset !== 'custom') {
+                      // Default custom range: last 30 days
+                      const today = new Date().toISOString().slice(0, 10);
+                      const thirty = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+                      setCustomFrom(thirty);
+                      setCustomTo(today);
+                      setDatePreset('custom');
+                    }
+                  }}
+                  className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
+                    datePreset === 'custom' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >فترة مخصصة</button>
               </div>
               <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
                 {(['all', 'breakfast', 'lunch', 'dinner'] as MealTypeFilter[]).map(t => (
@@ -364,6 +387,31 @@ export default function DashboardHome() {
               </div>
             </div>
           </div>
+
+          {/* Custom date range inputs */}
+          {datePreset === 'custom' && (
+            <div className="mt-3 flex items-center gap-3 flex-wrap" dir="rtl">
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-slate-600">من:</label>
+                <input
+                  type="date"
+                  value={customFrom}
+                  onChange={e => setCustomFrom(e.target.value)}
+                  className="text-xs px-2.5 py-1.5 border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-slate-600">إلى:</label>
+                <input
+                  type="date"
+                  value={customTo}
+                  onChange={e => setCustomTo(e.target.value)}
+                  className="text-xs px-2.5 py-1.5 border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                />
+              </div>
+              <span className="text-xs text-slate-400">التاريخ القادم مسموح به (للخطط المستقبلية)</span>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100" style={{ direction: 'rtl' }}>
@@ -413,16 +461,23 @@ export default function DashboardHome() {
 
         <div className="grid grid-cols-1 md:grid-cols-3">
           <div className="md:col-span-2 p-5 border-l border-slate-100">
-            <p className="text-xs font-semibold text-slate-500 mb-4">
-              الأصناف الأكثر ظهوراً في الأوامر
-              {analyticsLoading && <span className="mr-2 text-slate-400 font-normal">جاري التحميل...</span>}
-            </p>
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-xs font-semibold text-slate-500">
+                الأصناف الأكثر ظهوراً في الأوامر
+                {analyticsLoading && <span className="mr-2 text-slate-400 font-normal">جاري التحميل...</span>}
+              </p>
+              {!analyticsLoading && (analytics?.mealUsage.length ?? 0) > 6 && (
+                <span className="text-[10px] text-slate-400 font-medium">
+                  يعرض {analytics?.mealUsage.length} صنف — مرّر للأسفل
+                </span>
+              )}
+            </div>
 
             {!analyticsLoading && analytics?.mealUsage.length === 0 ? (
               <div className="py-12 text-center text-slate-400 text-sm">لا توجد بيانات في هذه الفترة</div>
             ) : (
-              <div className="space-y-2.5">
-                {(analyticsLoading ? Array(8).fill(null) : analytics?.mealUsage ?? []).map((meal, i) => {
+              <div className="space-y-2.5 overflow-y-auto pl-1" style={{ maxHeight: 260 }}>
+                {(analyticsLoading ? Array(6).fill(null) : analytics?.mealUsage ?? []).map((meal, i) => {
                   if (!meal) return (
                     <div key={i} className="flex items-center gap-3 animate-pulse">
                       <div className="w-24 h-3 bg-slate-200 rounded" />

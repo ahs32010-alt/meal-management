@@ -71,6 +71,7 @@ export interface DailyOrder {
   id: string;
   date: string;
   meal_type: MealType;
+  week_of_month?: number | null;
   created_at: string;
   order_items?: OrderItem[];
 }

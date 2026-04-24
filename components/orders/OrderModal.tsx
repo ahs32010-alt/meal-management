@@ -34,6 +34,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
 
   const [date, setDate] = useState(editingOrder?.date ?? new Date().toISOString().split('T')[0]);
   const [mealType, setMealType] = useState<MealType>(editingOrder?.meal_type ?? 'lunch');
+  const [weekOfMonth, setWeekOfMonth] = useState<number | ''>(editingOrder?.week_of_month ?? '');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<SelectedItem[]>(initSelected);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -85,7 +86,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       // Update date/type
       const { error: updErr } = await supabase
         .from('daily_orders')
-        .update({ date, meal_type: mealType })
+        .update({ date, meal_type: mealType, week_of_month: weekOfMonth === '' ? null : weekOfMonth })
         .eq('id', editingOrder.id);
       if (updErr) { setError(updErr.message); setSaving(false); return; }
 
@@ -107,7 +108,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       if (existing) { setError('يوجد أمر تشغيل لهذا التاريخ ونوع الوجبة مسبقاً'); setSaving(false); return; }
 
       const { data: order, error: orderError } = await supabase
-        .from('daily_orders').insert({ date, meal_type: mealType }).select().single();
+        .from('daily_orders').insert({ date, meal_type: mealType, week_of_month: weekOfMonth === '' ? null : weekOfMonth }).select().single();
       if (orderError) { setError(orderError.message); setSaving(false); return; }
 
       const { error: itemsError } = await supabase.from('order_items').insert(
@@ -159,8 +160,8 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
           <div className="p-6 space-y-5 overflow-y-auto flex-1">
 
-            {/* Date + type */}
-            <div className="grid grid-cols-2 gap-4">
+            {/* Date + type + week */}
+            <div className="grid grid-cols-3 gap-4">
               <div>
                 <label className="label">التاريخ *</label>
                 <input type="date" value={date} onChange={e => setDate(e.target.value)} className="input-field" required />
@@ -169,6 +170,20 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                 <label className="label">نوع الوجبة *</label>
                 <select value={mealType} onChange={e => handleTypeChange(e.target.value as MealType)} className="input-field">
                   {Object.entries(MEAL_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">الأسبوع</label>
+                <select
+                  value={weekOfMonth}
+                  onChange={e => setWeekOfMonth(e.target.value === '' ? '' : Number(e.target.value))}
+                  className="input-field"
+                >
+                  <option value="">— بدون —</option>
+                  <option value={1}>الأسبوع الأول</option>
+                  <option value={2}>الأسبوع الثاني</option>
+                  <option value={3}>الأسبوع الثالث</option>
+                  <option value={4}>الأسبوع الرابع</option>
                 </select>
               </div>
             </div>
