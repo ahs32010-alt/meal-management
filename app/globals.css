@@ -8,8 +8,45 @@
   font-family: 'Cairo', sans-serif;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   background-color: #f8fafc;
+  /* Prevent rubber-band overscroll on iOS to feel more app-like */
+  overscroll-behavior-y: none;
+  /* Smooth font rendering on mobile */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Native-feel touch interactions across the app */
+button, a, [role="button"], input, select, textarea, label {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Smooth scrolling everywhere */
+html { scroll-behavior: smooth; }
+.overflow-y-auto, .overflow-x-auto, .overflow-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent iOS auto-zoom on focus by guaranteeing min font 16px */
+@media (max-width: 768px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Bigger tap targets on phones for non-mobile-mode usage */
+@media (max-width: 768px) {
+  .btn-primary, .btn-secondary, .btn-danger {
+    min-height: 44px;
+  }
+  .input-field {
+    min-height: 44px;
+  }
 }
 
 @layer components {
