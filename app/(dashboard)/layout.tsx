@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic';
 
 import { useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
+import MobileToggle from '@/components/layout/MobileToggle';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -32,7 +33,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          <span className="text-white font-bold text-sm">نظام إدارة الوجبات</span>
+          <span className="text-white font-bold text-sm flex-1">نظام إدارة الوجبات</span>
+          <MobileToggle />
         </div>
 
         {children}
