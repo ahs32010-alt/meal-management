@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 import { createClient } from '@/lib/supabase-client';
 
 const navItems = [
@@ -71,10 +72,17 @@ const navItems = [
   },
 ];
 
-export default function Sidebar() {
+interface SidebarProps {
+  open?: boolean;
+  onClose?: () => void;
+}
+
+export default function Sidebar({ open = true, onClose }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createClient();
+
+  useEffect(() => { onClose?.(); }, [pathname]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -83,10 +91,18 @@ export default function Sidebar() {
   };
 
   return (
-    <aside className="w-64 bg-slate-900 fixed right-0 top-0 h-screen flex flex-col z-40 shadow-xl">
+    <aside className={`w-64 bg-slate-900 fixed right-0 top-0 h-screen flex flex-col z-40 shadow-xl transition-transform duration-300
+      md:translate-x-0 ${open ? 'translate-x-0' : 'translate-x-full'}`}>
       {/* Logo */}
       <div className="px-6 py-5 border-b border-slate-700/50">
         <div className="flex items-center gap-3">
+          {onClose && (
+            <button onClick={onClose} className="md:hidden text-slate-400 hover:text-white ml-auto order-last">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
           <div className="w-9 h-9 bg-emerald-500 rounded-lg flex items-center justify-center flex-shrink-0">
             <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
