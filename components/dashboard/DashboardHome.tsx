@@ -4,11 +4,13 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase-client';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
-import type { DailyOrder } from '@/lib/types';
+import type { MealType } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
+import { useCurrentUser } from '@/lib/use-current-user';
+import { can } from '@/lib/permissions';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
-type MealTypeFilter = 'all' | 'breakfast' | 'lunch' | 'dinner';
+type MealTypeFilter = 'all' | MealType;
 
 interface MealUsage {
   meal_id: string;
@@ -22,11 +24,21 @@ interface TypeDistribution { breakfast: number; lunch: number; dinner: number }
 
 interface TopExcluded { name: string; type: string; count: number }
 
+interface OrderSummary {
+  id: string;
+  date: string;
+  meal_type: MealType;
+  item_count: number;
+}
+
+interface DayBucket { date: string; label: string; count: number }
+
 interface AnalyticsData {
   mealUsage: MealUsage[];
   typeDistribution: TypeDistribution;
   topExcluded: TopExcluded[];
   totalOrdersInPeriod: number;
+  weekBuckets: DayBucket[];
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -37,12 +49,14 @@ const DATE_PRESETS = [
   { label: 'كل الوقت', days: 0  },
 ] as const;
 
-const TYPE_META: Record<string, { label: string; bar: string; badge: string; light: string }> = {
-  breakfast: { label: 'فطور',  bar: 'bg-amber-400',   badge: 'bg-amber-100 text-amber-700',    light: 'bg-amber-50'   },
-  lunch:     { label: 'غداء',  bar: 'bg-emerald-500', badge: 'bg-emerald-100 text-emerald-700', light: 'bg-emerald-50' },
-  dinner:    { label: 'عشاء',  bar: 'bg-violet-500',  badge: 'bg-violet-100 text-violet-700',   light: 'bg-violet-50'  },
-  snack:     { label: 'سناك',  bar: 'bg-orange-400',  badge: 'bg-orange-100 text-orange-700',   light: 'bg-orange-50'  },
+const TYPE_META: Record<string, { label: string; bar: string; badge: string; text: string }> = {
+  breakfast: { label: 'فطور',  bar: 'bg-amber-400',   badge: 'bg-amber-100 text-amber-700',    text: 'text-amber-700'   },
+  lunch:     { label: 'غداء',  bar: 'bg-emerald-500', badge: 'bg-emerald-100 text-emerald-700', text: 'text-emerald-700' },
+  dinner:    { label: 'عشاء',  bar: 'bg-violet-500',  badge: 'bg-violet-100 text-violet-700',   text: 'text-violet-700'  },
+  snack:     { label: 'سناك',  bar: 'bg-orange-400',  badge: 'bg-orange-100 text-orange-700',   text: 'text-orange-700'  },
 };
+
+const DAY_SHORT = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
 function getDateRange(days: number) {
   const to = new Date().toISOString().slice(0, 10);
@@ -52,63 +66,91 @@ function getDateRange(days: number) {
   return { from, to };
 }
 
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function DashboardHome() {
-  const [stats, setStats]               = useState({ beneficiaries: 0, meals: 0, orders: 0, exclusions: 0 });
-  const [recentOrders, setRecentOrders] = useState<DailyOrder[]>([]);
-  const [loading, setLoading]           = useState(true);
+  const { user: currentUser } = useCurrentUser();
+  const canView = (page: Parameters<typeof can>[1]) => can(currentUser, page, 'view');
+  const canAdd  = (page: Parameters<typeof can>[1]) => can(currentUser, page, 'add');
 
-  const [datePreset, setDatePreset]           = useState(30);
-  const [mealTypeFilter, setMealTypeFilter]   = useState<MealTypeFilter>('all');
-  const [topN]                                = useState(14);
-  const [analytics, setAnalytics]             = useState<AnalyticsData | null>(null);
+  const [stats, setStats] = useState({ beneficiaries: 0, meals: 0, orders: 0, exclusions: 0 });
+  const [todaysOrders, setTodaysOrders] = useState<OrderSummary[]>([]);
+  const [recentOrders, setRecentOrders] = useState<OrderSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+
+  const [datePreset, setDatePreset] = useState(30);
+  const [mealTypeFilter, setMealTypeFilter] = useState<MealTypeFilter>('all');
+  const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
   const supabase = useMemo(() => createClient(), []);
 
-  // ── Static stats ─────────────────────────────────────────────────────────
+  // ── Fetch stats + today's orders + recent orders (with item counts) ─────
   const fetchStats = useCallback(async () => {
-    try {
-      const [bens, meals, orders, excls, recent] = await Promise.all([
-        supabase.from('beneficiaries').select('id', { count: 'exact', head: true }),
-        supabase.from('meals').select('id', { count: 'exact', head: true }),
-        supabase.from('daily_orders').select('id', { count: 'exact', head: true }),
-        supabase.from('exclusions').select('id', { count: 'exact', head: true }),
-        supabase.from('daily_orders').select('id, date, meal_type').order('date', { ascending: false }).limit(5),
-      ]);
-      setStats({ beneficiaries: bens.count ?? 0, meals: meals.count ?? 0, orders: orders.count ?? 0, exclusions: excls.count ?? 0 });
-      if (recent.data) setRecentOrders(recent.data as unknown as DailyOrder[]);
-    } finally {
-      setLoading(false);
-    }
+    const today = todayISO();
+    const [bens, meals, orders, excls, todayRes, recentRes] = await Promise.all([
+      supabase.from('beneficiaries').select('id', { count: 'exact', head: true }),
+      supabase.from('meals').select('id', { count: 'exact', head: true }),
+      supabase.from('daily_orders').select('id', { count: 'exact', head: true }),
+      supabase.from('exclusions').select('id', { count: 'exact', head: true }),
+      supabase.from('daily_orders').select('id, date, meal_type, order_items(id)').eq('date', today),
+      supabase.from('daily_orders').select('id, date, meal_type, order_items(id)').order('date', { ascending: false }).limit(6),
+    ]);
+
+    setStats({
+      beneficiaries: bens.count ?? 0,
+      meals: meals.count ?? 0,
+      orders: orders.count ?? 0,
+      exclusions: excls.count ?? 0,
+    });
+
+    const mapRow = (r: any): OrderSummary => ({
+      id: r.id,
+      date: r.date,
+      meal_type: r.meal_type as MealType,
+      item_count: Array.isArray(r.order_items) ? r.order_items.length : 0,
+    });
+
+    setTodaysOrders((todayRes.data ?? []).map(mapRow));
+    setRecentOrders((recentRes.data ?? []).map(mapRow));
+    setLastRefresh(new Date());
+    setLoading(false);
   }, [supabase]);
 
-  // Initial load
-  useEffect(() => { fetchStats(); }, [fetchStats]);
-
-  // ── Analytics (re-fetches on filter change) ──────────────────────────────
+  // ── Analytics: meal usage, type distribution, week buckets ───────────────
   const fetchAnalytics = useCallback(async () => {
     setAnalyticsLoading(true);
     try {
       const { from, to } = getDateRange(datePreset);
 
-      // Orders in date range
       const { data: ordersArr } = await supabase
         .from('daily_orders')
-        .select('id, meal_type')
+        .select('id, date, meal_type')
         .gte('date', from)
         .lte('date', to);
 
       const allOrders = ordersArr ?? [];
-      const orderIds  = allOrders.map(o => o.id);
+      const orderIds = allOrders.map(o => o.id);
 
-      // Type distribution
       const typeDistribution: TypeDistribution = { breakfast: 0, lunch: 0, dinner: 0 };
       for (const o of allOrders) {
         if (o.meal_type in typeDistribution) typeDistribution[o.meal_type as keyof TypeDistribution]++;
       }
 
-      // Meal usage
+      // Week buckets: last 7 days
+      const weekBuckets: DayBucket[] = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(Date.now() - i * 864e5);
+        const iso = d.toISOString().slice(0, 10);
+        weekBuckets.push({
+          date: iso,
+          label: DAY_SHORT[d.getDay()],
+          count: allOrders.filter(o => o.date === iso).length,
+        });
+      }
+
       let mealUsage: MealUsage[] = [];
       if (orderIds.length > 0) {
         const { data: itemsData } = await supabase
@@ -116,7 +158,6 @@ export default function DashboardHome() {
           .select('order_id, meal_id, meals(id, name, type, is_snack)')
           .in('order_id', orderIds);
 
-        // Filter by selected meal type
         const filteredOrderIds = new Set(
           mealTypeFilter === 'all'
             ? orderIds
@@ -134,10 +175,9 @@ export default function DashboardHome() {
         mealUsage = Array.from(mealMap.entries())
           .map(([meal_id, v]) => ({ meal_id, name: v.name, type: v.type, is_snack: v.is_snack, count: v.orderIds.size }))
           .sort((a, b) => b.count - a.count)
-          .slice(0, topN);
+          .slice(0, 14);
       }
 
-      // Top excluded meals (global, not date-scoped)
       const { data: exclRaw } = await supabase.from('exclusions').select('meal_id, meals(name, type)');
       const exclMap = new Map<string, { name: string; type: string; count: number }>();
       for (const e of exclRaw ?? []) {
@@ -146,35 +186,46 @@ export default function DashboardHome() {
         if (!exclMap.has(e.meal_id)) exclMap.set(e.meal_id, { name: m.name, type: m.type, count: 0 });
         exclMap.get(e.meal_id)!.count++;
       }
-      const topExcluded: TopExcluded[] = Array.from(exclMap.values()).sort((a, b) => b.count - a.count).slice(0, 7);
+      const topExcluded = Array.from(exclMap.values()).sort((a, b) => b.count - a.count).slice(0, 7);
 
       const filteredOrderCount = mealTypeFilter === 'all'
         ? allOrders.length
         : allOrders.filter(o => o.meal_type === mealTypeFilter).length;
 
-      setAnalytics({ mealUsage, typeDistribution, topExcluded, totalOrdersInPeriod: filteredOrderCount });
+      setAnalytics({ mealUsage, typeDistribution, topExcluded, totalOrdersInPeriod: filteredOrderCount, weekBuckets });
     } finally {
       setAnalyticsLoading(false);
     }
-  }, [supabase, datePreset, mealTypeFilter, topN]);
+  }, [supabase, datePreset, mealTypeFilter]);
 
+  // Initial load + refetch when filters change
+  useEffect(() => { fetchStats(); }, [fetchStats]);
   useEffect(() => { fetchAnalytics(); }, [fetchAnalytics]);
 
-  // ── Realtime: تحديث فوري عند أي تغيير في الأوامر ──────────────────────
+  const refreshAll = useCallback(() => {
+    fetchStats();
+    fetchAnalytics();
+  }, [fetchStats, fetchAnalytics]);
+
+  // ── Realtime: refresh on any change to relevant tables ───────────────────
   useEffect(() => {
     const channel = supabase
       .channel('dashboard-refresh')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_orders' }, () => {
-        fetchStats();
-        fetchAnalytics();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
-        fetchAnalytics();
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_orders' }, () => refreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => refreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'meals' }, () => refreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'beneficiaries' }, () => fetchStats())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'exclusions' }, () => refreshAll())
       .subscribe();
-
     return () => { supabase.removeChannel(channel); };
-  }, [supabase, fetchStats, fetchAnalytics]);
+  }, [supabase, refreshAll, fetchStats]);
+
+  // ── Refresh on window focus (fallback if realtime isn't enabled) ─────────
+  useEffect(() => {
+    const onFocus = () => refreshAll();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshAll]);
 
   // ── Loading skeleton ──────────────────────────────────────────────────────
   if (loading) {
@@ -194,83 +245,135 @@ export default function DashboardHome() {
     : 0;
   const topMeal = analytics?.mealUsage[0];
   const topExclMax = analytics?.topExcluded[0]?.count ?? 1;
+  const weekMax = Math.max(1, ...(analytics?.weekBuckets ?? []).map(b => b.count));
 
   return (
     <div className="p-6 space-y-6">
-
       {/* ── Header ── */}
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800">لوحة التحكم</h1>
-        <p className="text-slate-500 text-sm mt-1">مرحباً بك في نظام إدارة وجبات المستفيدين لمركز خطوة أمل</p>
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">لوحة التحكم</h1>
+          <p className="text-slate-500 text-sm mt-1">مرحباً بك في نظام إدارة وجبات المستفيدين لمركز خطوة أمل</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-400">
+            آخر تحديث: {lastRefresh.toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </span>
+          <button
+            onClick={refreshAll}
+            disabled={analyticsLoading}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 disabled:opacity-50 transition-colors"
+            title="تحديث"
+          >
+            <svg className={`w-3.5 h-3.5 ${analyticsLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            تحديث
+          </button>
+        </div>
       </div>
 
       {/* ── Stat Cards ── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard href="/beneficiaries" label="المستفيدون"     value={stats.beneficiaries} color="blue"   icon={<UsersIcon />} />
-        <StatCard href="/meals"         label="الأصناف"        value={stats.meals}         color="emerald" icon={<MealsIcon />} />
-        <StatCard href="/orders"        label="أوامر التشغيل"  value={stats.orders}        color="violet"  icon={<OrdersIcon />} />
-        <StatCard href="/beneficiaries" label="إجمالي المحظورات" value={stats.exclusions}  color="rose"    icon={<ExclIcon />} />
+        {canView('beneficiaries') && (
+          <StatCard href="/beneficiaries" label="المستفيدون" value={stats.beneficiaries} color="blue" icon={<UsersIcon />} />
+        )}
+        {canView('meals') && (
+          <StatCard href="/meals" label="الأصناف" value={stats.meals} color="emerald" icon={<MealsIcon />} />
+        )}
+        {canView('orders') && (
+          <StatCard href="/orders" label="أوامر التشغيل" value={stats.orders} color="violet" icon={<OrdersIcon />} />
+        )}
+        {canView('beneficiaries') && (
+          <StatCard href="/beneficiaries" label="إجمالي المحظورات" value={stats.exclusions} color="rose" icon={<ExclIcon />} />
+        )}
       </div>
 
-      {/* ── Analytics Card ── */}
-      <div className="card overflow-hidden">
+      {/* ── Today's Orders ── */}
+      {canView('orders') && (
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-l from-emerald-50 to-transparent">
+            <div>
+              <h3 className="font-bold text-slate-800">أوامر تشغيل اليوم</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {todaysOrders.length === 0 ? 'لم يتم إنشاء أي أمر تشغيل لليوم بعد' : `${todaysOrders.length} أمر تشغيل اليوم`}
+              </p>
+            </div>
+            {canAdd('orders') && (
+              <Link href="/orders" className="btn-primary text-sm">+ إنشاء أمر جديد</Link>
+            )}
+          </div>
 
-        {/* Header + Filters */}
+          {todaysOrders.length === 0 ? (
+            <div className="py-10 text-center text-slate-400">
+              <svg className="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              <p className="text-sm">ابدأ بإنشاء أمر تشغيل لأحد الوجبات</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100" dir="rtl">
+              {todaysOrders.map(o => (
+                <Link
+                  key={o.id}
+                  href={canView('reports') ? `/reports?orderId=${o.id}` : `/orders`}
+                  className="p-5 hover:bg-slate-50 transition-colors flex items-center justify-between gap-3"
+                >
+                  <div>
+                    <MealTypeBadge type={o.meal_type} />
+                    <p className="mt-2 text-xs text-slate-500">{o.item_count} صنف محدد</p>
+                  </div>
+                  <svg className="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Analytics Card ── */}
+      {canView('orders') && (
+      <div className="card overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <h3 className="font-bold text-slate-800 text-base">تحليل الأصناف</h3>
             <div className="flex items-center gap-2 flex-wrap">
-              {/* Date presets */}
               <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
                 {DATE_PRESETS.map(p => (
                   <button
                     key={p.days}
                     onClick={() => setDatePreset(p.days)}
                     className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
-                      datePreset === p.days
-                        ? 'bg-white text-slate-800 shadow-sm'
-                        : 'text-slate-500 hover:text-slate-700'
+                      datePreset === p.days ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
                     }`}
-                  >
-                    {p.label}
-                  </button>
+                  >{p.label}</button>
                 ))}
               </div>
-
-              {/* Meal type filter */}
               <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
                 {(['all', 'breakfast', 'lunch', 'dinner'] as MealTypeFilter[]).map(t => (
                   <button
                     key={t}
                     onClick={() => setMealTypeFilter(t)}
                     className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
-                      mealTypeFilter === t
-                        ? 'bg-white text-slate-800 shadow-sm'
-                        : 'text-slate-500 hover:text-slate-700'
+                      mealTypeFilter === t ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
                     }`}
-                  >
-                    {t === 'all' ? 'الكل' : TYPE_META[t].label}
-                  </button>
+                  >{t === 'all' ? 'الكل' : TYPE_META[t].label}</button>
                 ))}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Mini stats row */}
         <div className="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100" style={{ direction: 'rtl' }}>
-          <MiniStat
-            label="أوامر التشغيل في الفترة"
-            value={analytics?.totalOrdersInPeriod ?? 0}
-            loading={analyticsLoading}
-            color="text-violet-700"
-          />
+          <MiniStat label="أوامر التشغيل في الفترة" value={analytics?.totalOrdersInPeriod ?? 0} loading={analyticsLoading} color="text-violet-700" />
           <MiniStat
             label="أكثر صنف طُلب"
             value={topMeal ? topMeal.name : '—'}
             sub={topMeal ? `${topMeal.count} أمر` : undefined}
             loading={analyticsLoading}
-            color={topMeal ? (TYPE_META[topMeal.is_snack ? 'snack' : topMeal.type]?.badge.split(' ')[1] ?? 'text-slate-700') : 'text-slate-400'}
+            color={topMeal ? TYPE_META[topMeal.is_snack ? 'snack' : topMeal.type]?.text ?? 'text-slate-700' : 'text-slate-400'}
           />
           <MiniStat
             label="أكثر وجبة نشاطاً"
@@ -285,10 +388,30 @@ export default function DashboardHome() {
           />
         </div>
 
-        {/* Chart + Side Panel */}
-        <div className="grid grid-cols-1 md:grid-cols-3">
+        {/* Week bar chart */}
+        <div className="px-5 py-5 border-b border-slate-100" dir="rtl">
+          <p className="text-xs font-semibold text-slate-500 mb-3">نشاط آخر 7 أيام</p>
+          <div className="flex items-end gap-2 h-28">
+            {(analytics?.weekBuckets ?? []).map(b => {
+              const pct = Math.max(4, (b.count / weekMax) * 100);
+              const isToday = b.date === todayISO();
+              return (
+                <div key={b.date} className="flex-1 flex flex-col items-center gap-1.5">
+                  <div className="text-xs font-bold text-slate-600">{b.count || ''}</div>
+                  <div className="w-full bg-slate-100 rounded-t-md relative" style={{ height: '70%' }}>
+                    <div
+                      className={`absolute bottom-0 left-0 right-0 rounded-t-md transition-all duration-500 ${isToday ? 'bg-emerald-500' : 'bg-emerald-300'}`}
+                      style={{ height: `${pct}%` }}
+                    />
+                  </div>
+                  <div className={`text-[10px] ${isToday ? 'font-bold text-emerald-700' : 'text-slate-400'}`}>{b.label}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
-          {/* ── Horizontal Bar Chart ── */}
+        <div className="grid grid-cols-1 md:grid-cols-3">
           <div className="md:col-span-2 p-5 border-l border-slate-100">
             <p className="text-xs font-semibold text-slate-500 mb-4">
               الأصناف الأكثر ظهوراً في الأوامر
@@ -309,8 +432,9 @@ export default function DashboardHome() {
                   );
                   const colorKey = meal.is_snack ? 'snack' : meal.type;
                   const pct = Math.max(4, (meal.count / maxUsage) * 100);
+                  const mealsLink = canView('meals') ? `/meals?highlight=${meal.meal_id}` : '#';
                   return (
-                    <div key={meal.meal_id} className="flex items-center gap-3" dir="rtl">
+                    <Link key={meal.meal_id} href={mealsLink} className="flex items-center gap-3 hover:bg-slate-50 -mx-2 px-2 py-1 rounded-lg transition-colors" dir="rtl">
                       <span className="text-xs text-slate-700 w-28 truncate text-right flex-shrink-0">{meal.name}</span>
                       <div className="flex-1 bg-slate-100 rounded-full h-6 overflow-hidden relative">
                         <div
@@ -321,16 +445,15 @@ export default function DashboardHome() {
                           {meal.count > 0 && meal.count}
                         </span>
                       </div>
-                      <span className={`text-xs font-bold w-8 text-left flex-shrink-0 ${TYPE_META[colorKey]?.badge.split(' ')[1] ?? 'text-slate-600'}`}>
+                      <span className={`text-xs font-bold w-8 text-left flex-shrink-0 ${TYPE_META[colorKey]?.text ?? 'text-slate-600'}`}>
                         {meal.count}
                       </span>
-                    </div>
+                    </Link>
                   );
                 })}
               </div>
             )}
 
-            {/* Legend */}
             <div className="flex items-center gap-4 mt-5 pt-4 border-t border-slate-100 flex-wrap" dir="rtl">
               {Object.entries(TYPE_META).map(([key, m]) => (
                 <span key={key} className="flex items-center gap-1.5 text-xs text-slate-500">
@@ -341,10 +464,7 @@ export default function DashboardHome() {
             </div>
           </div>
 
-          {/* ── Side Panel ── */}
           <div className="p-5 space-y-6 bg-slate-50/50" dir="rtl">
-
-            {/* Type Distribution */}
             <div>
               <p className="text-xs font-semibold text-slate-500 mb-3">توزيع الوجبات</p>
               {totalTypeOrders === 0 ? (
@@ -353,7 +473,7 @@ export default function DashboardHome() {
                 <div className="space-y-2">
                   {(['breakfast', 'lunch', 'dinner'] as const).map(t => {
                     const count = analytics?.typeDistribution[t] ?? 0;
-                    const pct   = totalTypeOrders > 0 ? Math.round((count / totalTypeOrders) * 100) : 0;
+                    const pct = totalTypeOrders > 0 ? Math.round((count / totalTypeOrders) * 100) : 0;
                     return (
                       <div key={t}>
                         <div className="flex items-center justify-between text-xs mb-1">
@@ -361,10 +481,7 @@ export default function DashboardHome() {
                           <span className="text-slate-500">{count} أمر ({pct}%)</span>
                         </div>
                         <div className="w-full bg-slate-200 rounded-full h-2">
-                          <div
-                            className={`h-2 rounded-full transition-all duration-500 ${TYPE_META[t].bar}`}
-                            style={{ width: `${pct}%` }}
-                          />
+                          <div className={`h-2 rounded-full transition-all duration-500 ${TYPE_META[t].bar}`} style={{ width: `${pct}%` }} />
                         </div>
                       </div>
                     );
@@ -373,7 +490,6 @@ export default function DashboardHome() {
               )}
             </div>
 
-            {/* Top Excluded */}
             <div>
               <p className="text-xs font-semibold text-slate-500 mb-3">الأصناف الأكثر استبعاداً</p>
               {(analytics?.topExcluded ?? []).length === 0 ? (
@@ -395,74 +511,96 @@ export default function DashboardHome() {
                 </div>
               )}
             </div>
-
           </div>
         </div>
       </div>
+      )}
 
       {/* ── Recent Orders ── */}
-      <div className="card">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <h3 className="font-bold text-slate-800">آخر أوامر التشغيل</h3>
-          <Link href="/orders" className="text-emerald-600 text-sm font-semibold hover:text-emerald-700">عرض الكل ←</Link>
-        </div>
+      {canView('orders') && (
+        <div className="card">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+            <h3 className="font-bold text-slate-800">آخر أوامر التشغيل</h3>
+            <Link href="/orders" className="text-emerald-600 text-sm font-semibold hover:text-emerald-700">عرض الكل ←</Link>
+          </div>
 
-        {recentOrders.length === 0 ? (
-          <div className="py-12 text-center text-slate-400">
-            <svg className="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            <p>لا توجد أوامر تشغيل بعد</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr>
-                  <th className="table-header">التاريخ</th>
-                  <th className="table-header">نوع الوجبة</th>
-                  <th className="table-header">الإجراءات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentOrders.map(order => (
-                  <tr key={order.id} className="hover:bg-slate-50">
-                    <td className="table-cell font-medium">{formatDate(order.date)}</td>
-                    <td className="table-cell"><MealTypeBadge type={order.meal_type} /></td>
-                    <td className="table-cell">
-                      <Link href={`/reports?orderId=${order.id}`} className="text-emerald-600 hover:text-emerald-700 text-sm font-semibold">
-                        عرض التقرير
-                      </Link>
-                    </td>
+          {recentOrders.length === 0 ? (
+            <div className="py-12 text-center text-slate-400">
+              <svg className="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <p>لا توجد أوامر تشغيل بعد</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <th className="table-header">التاريخ</th>
+                    <th className="table-header">نوع الوجبة</th>
+                    <th className="table-header">عدد الأصناف</th>
+                    <th className="table-header">الإجراءات</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                </thead>
+                <tbody>
+                  {recentOrders.map(order => (
+                    <tr key={order.id} className="hover:bg-slate-50">
+                      <td className="table-cell font-medium">{formatDate(order.date)}</td>
+                      <td className="table-cell"><MealTypeBadge type={order.meal_type} /></td>
+                      <td className="table-cell">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-xs font-bold">
+                          {order.item_count} صنف
+                        </span>
+                      </td>
+                      <td className="table-cell">
+                        <div className="flex items-center gap-3">
+                          {canView('reports') && (
+                            <Link href={`/reports?orderId=${order.id}`} className="text-emerald-600 hover:text-emerald-700 text-sm font-semibold">
+                              عرض التقرير
+                            </Link>
+                          )}
+                          {canView('orders') && (
+                            <Link href={`/orders?orderId=${order.id}`} className="text-slate-500 hover:text-slate-700 text-sm font-semibold">
+                              فتح الأمر
+                            </Link>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Quick Links ── */}
-      <div className="grid grid-cols-2 gap-4">
-        <QuickLink href="/beneficiaries" label="إضافة مستفيد"    sub="إدارة قائمة المستفيدين"  color="blue"   icon={<UsersIcon size={5} />} />
-        <QuickLink href="/orders"        label="إنشاء أمر تشغيل" sub="إدارة الوجبات اليومية"   color="violet" icon={<OrdersIcon size={5} />} />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {canAdd('beneficiaries') && (
+          <QuickLink href="/beneficiaries" label="إضافة مستفيد" sub="إدارة قائمة المستفيدين" color="blue" icon={<UsersIcon size={5} />} />
+        )}
+        {canAdd('meals') && (
+          <QuickLink href="/meals" label="إضافة صنف" sub="إدارة قائمة الأصناف" color="emerald" icon={<MealsIcon size={5} />} />
+        )}
+        {canAdd('orders') && (
+          <QuickLink href="/orders" label="إنشاء أمر تشغيل" sub="إدارة الوجبات اليومية" color="violet" icon={<OrdersIcon size={5} />} />
+        )}
       </div>
-
     </div>
   );
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
-
 function StatCard({ href, label, value, color, icon }: {
   href: string; label: string; value: number;
   color: 'blue' | 'emerald' | 'violet' | 'rose'; icon: React.ReactNode;
 }) {
   const colors = {
-    blue:    { card: 'bg-blue-50 border-blue-100 text-blue-700',     icon: 'bg-blue-100'    },
+    blue:    { card: 'bg-blue-50 border-blue-100 text-blue-700',       icon: 'bg-blue-100'    },
     emerald: { card: 'bg-emerald-50 border-emerald-100 text-emerald-700', icon: 'bg-emerald-100' },
     violet:  { card: 'bg-violet-50 border-violet-100 text-violet-700',  icon: 'bg-violet-100'  },
-    rose:    { card: 'bg-rose-50 border-rose-100 text-rose-700',      icon: 'bg-rose-100'    },
+    rose:    { card: 'bg-rose-50 border-rose-100 text-rose-700',        icon: 'bg-rose-100'    },
   }[color];
   return (
     <Link href={href}>
@@ -500,9 +638,13 @@ function MiniStat({ label, value, sub, loading, color }: {
 }
 
 function QuickLink({ href, label, sub, color, icon }: {
-  href: string; label: string; sub: string; color: 'blue' | 'violet'; icon: React.ReactNode;
+  href: string; label: string; sub: string; color: 'blue' | 'violet' | 'emerald'; icon: React.ReactNode;
 }) {
-  const iconBg = color === 'blue' ? 'bg-blue-100 text-blue-600' : 'bg-violet-100 text-violet-600';
+  const iconBg = {
+    blue: 'bg-blue-100 text-blue-600',
+    violet: 'bg-violet-100 text-violet-600',
+    emerald: 'bg-emerald-100 text-emerald-600',
+  }[color];
   return (
     <Link href={href}>
       <div className="card p-4 hover:shadow-md transition-shadow cursor-pointer flex items-center gap-4">
