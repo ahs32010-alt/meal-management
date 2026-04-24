@@ -37,6 +37,7 @@ function weekNumber(dateStr: string) {
 export default function OrderPrintView({ orderId }: { orderId: string }) {
   const [report, setReport] = useState<FullReport | null>(null);
   const [error, setError] = useState('');
+  const [showFixedSection, setShowFixedSection] = useState(true);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/orders/${orderId}/report`);
@@ -141,7 +142,16 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
       {/* Print action bar */}
       <div className="no-print" style={{ background: '#1e293b', color: '#fff', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, fontFamily: 'sans-serif', direction: 'rtl' }}>
         <span style={{ fontWeight: 600 }}>معاينة أمر التشغيل — {mealLabel} {arabicDate(order.date)}</span>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 12, userSelect: 'none' }}>
+            <input
+              type="checkbox"
+              checked={showFixedSection}
+              onChange={e => setShowFixedSection(e.target.checked)}
+              style={{ cursor: 'pointer', accentColor: '#7c3aed' }}
+            />
+            إظهار الأصناف الثابتة
+          </label>
           <button
             onClick={() => window.print()}
             style={{ background: '#10b981', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 16px', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit', fontSize: 13 }}
@@ -197,7 +207,7 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
         )}
 
         {/* ── الأصناف الثابتة ── */}
-        {fixedSummary && fixedSummary.length > 0 && (
+        {showFixedSection && fixedSummary && fixedSummary.length > 0 && (
           <div style={s.section}>
             <div style={{ ...s.sectionHeader, background: '#4c1d95', color: '#fff' }}>
               <span>الأصناف الثابتة اليومية</span>
@@ -275,7 +285,7 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
                         ? <span style={{ color: '#cbd5e1' }}>—</span>
                         : detail.excludedItems.map(({ meal }) => (
                           <span key={meal.id} style={{ ...s.chip, background: '#fef2f2', borderColor: '#fca5a5', color: '#b91c1c', marginLeft: 3, marginBottom: 2 }}>
-                            {meal.name}
+                            {meal.name}{meal.is_snack && <span style={{ color: '#f59e0b', fontWeight: 700 }}> (snak)</span>}
                           </span>
                         ))}
                     </td>
@@ -284,7 +294,7 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
                         {detail.excludedItems.map(({ meal, alternative }) =>
                           alternative ? (
                             <span key={meal.id} style={{ ...s.chip, background: '#f0fdf4', borderColor: '#86efac', color: '#166534' }}>
-                              {alternative.name}
+                              {alternative.name}{meal.is_snack && <span style={{ color: '#f59e0b', fontWeight: 700 }}> (snak)</span>}
                             </span>
                           ) : null
                         )}

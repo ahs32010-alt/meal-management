@@ -47,12 +47,21 @@ function buildWordCell(
 ): string {
   const ben = detail.beneficiary;
   const items = detail.excludedItems ?? [];
-  const excludedNames = items.map(({ meal }) => meal.name).join('، ');
-  const excludedTranslit = items.map(({ meal }) => transliterate(meal.name, customDict)).filter(Boolean).join(' | ');
+  const excludedNames = items.map(({ meal }) => `${meal.name}${meal.is_snack ? ' (snak)' : ''}`).join('، ');
+  const excludedTranslit = items.map(({ meal }) => {
+    const tr = transliterate(meal.name, customDict);
+    return tr ? (meal.is_snack ? `${tr} (snak)` : tr) : '';
+  }).filter(Boolean).join(' | ');
   const fixedMealsToday = (detail.fixedItems ?? []).map(m => m.meal.name);
   const altItems = items.filter(e => e.alternative);
-  const allBadilNames = [...altItems.map(e => e.alternative!.name), ...fixedMealsToday];
-  const altTranslit = allBadilNames.map(n => transliterate(n, customDict)).filter(Boolean).join(' | ');
+  const allBadilNames = [...altItems.map(e => `${e.alternative!.name}${e.meal.is_snack ? ' (snak)' : ''}`), ...fixedMealsToday];
+  const altTranslit = [
+    ...altItems.map(e => {
+      const tr = transliterate(e.alternative!.name, customDict);
+      return tr ? (e.meal.is_snack ? `${tr} (snak)` : tr) : '';
+    }).filter(Boolean),
+    ...fixedMealsToday.map(n => transliterate(n, customDict)).filter(Boolean),
+  ].join(' | ');
 
   const gc = GROUP_COLORS[groupIndex] ?? GROUP_COLORS[0];
   const headerBg = groupIndex === 0 ? '#1e293b' : (
@@ -133,6 +142,7 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
     detail.excludedItems.map(({ meal, alternative }) => ({
       excludedName: meal.name,
       alternativeName: alternative?.name ?? '',
+      isSnack: meal.is_snack,
     }))
   );
   const updateExclusion = (idx: number, field: 'excludedName' | 'alternativeName', val: string) =>
@@ -149,11 +159,20 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
   const hasAnyBadil = allBadil.some(n => n.trim() !== '');
 
   const excludedTranslitList = exclusions
-    .map(e => e.excludedName).filter(n => n.trim())
-    .map(n => transliterate(n, customDict)).filter(Boolean);
-  const badilTranslitList = allBadil
-    .filter(n => n.trim())
-    .map(n => transliterate(n, customDict)).filter(Boolean);
+    .filter(e => e.excludedName.trim())
+    .map(e => {
+      const tr = transliterate(e.excludedName, customDict);
+      return tr ? (e.isSnack ? `${tr} (snak)` : tr) : '';
+    }).filter(Boolean);
+  const badilTranslitList = [
+    ...exclusions
+      .filter(e => e.alternativeName.trim())
+      .map(e => {
+        const tr = transliterate(e.alternativeName, customDict);
+        return tr ? (e.isSnack ? `${tr} (snak)` : tr) : '';
+      }).filter(Boolean),
+    ...fixedMeals.filter(n => n.trim()).map(n => transliterate(n, customDict)).filter(Boolean),
+  ];
 
   const inp = (val: string, onChange: (v: string) => void, dir: 'rtl' | 'ltr' = 'rtl') => (
     <input dir={dir} value={val} onChange={e => onChange(e.target.value)}
@@ -213,7 +232,7 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
                   ? <input value={e.excludedName} onChange={ev => updateExclusion(i, 'excludedName', ev.target.value)}
                       className="bg-yellow-50 border border-yellow-300 rounded px-1 focus:outline-none"
                       style={{ font: 'inherit', color: 'inherit', width: 80 }} />
-                  : e.excludedName}
+                  : <>{e.excludedName}{e.isSnack && <span style={{ color: '#f59e0b', fontWeight: 700, fontSize: '0.85em' }}> (snak)</span>}</>}
               </span>
             ))}
           </div>
@@ -228,7 +247,7 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
                   ? <input value={e.alternativeName} onChange={ev => updateExclusion(i, 'alternativeName', ev.target.value)}
                       className="bg-yellow-50 border border-yellow-300 rounded px-1 focus:outline-none"
                       style={{ font: 'inherit', color: 'inherit', width: 80 }} />
-                  : e.alternativeName}
+                  : <>{e.alternativeName}{e.isSnack && <span style={{ color: '#f59e0b', fontWeight: 700, fontSize: '0.85em' }}> (snak)</span>}</>}
               </span>
             ))}
             {fixedMeals.map((name, i) => name.trim() !== '' && (
