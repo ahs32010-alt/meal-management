@@ -184,45 +184,55 @@ body {
   transform: translateX(0) !important;
 }
 
-/* Sticker styles */
+/* ── Sticker styles ────────────────────────────────────────────── */
+
+/* Outer wrapper — provides the top and right borders of the grid */
+.sticker-wrap {
+  border-top: 1.5px solid #1e293b;
+  border-right: 1.5px solid #1e293b;
+  background: white;
+  overflow: hidden;
+}
+
+/* Grid — 3 columns, no gap (shared-border technique) */
 .sticker-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(3, 1fr);
 }
-@media (max-width: 1100px) {
+@media (max-width: 860px) {
   .sticker-grid { grid-template-columns: repeat(2, 1fr); }
 }
-@media (max-width: 640px) {
+@media (max-width: 520px) {
   .sticker-grid { grid-template-columns: 1fr; }
 }
 
+/* Each card contributes left + bottom borders → shared inner borders */
 .sticker-card {
-  border: 2px solid #cbd5e1;
-  border-radius: 14px;
+  border-left: 1.5px solid #1e293b;
+  border-bottom: 1.5px solid #1e293b;
   overflow: hidden;
   background: white;
-  font-family: 'Cairo', sans-serif;
+  font-family: 'Cairo', Arial, sans-serif;
   direction: rtl;
-  min-height: 200px;
   display: flex;
   flex-direction: column;
 }
 
-/* Edit button bar */
+/* Edit button */
 .sticker-edit-bar {
-  padding: 8px 12px;
+  padding: 5px 10px;
   border-bottom: 1px solid #e2e8f0;
   display: flex;
   justify-content: center;
+  background: #fafafa;
 }
 .sticker-edit-btn {
   background: #ede9fe;
   color: #6d28d9;
   border: none;
-  border-radius: 8px;
-  padding: 5px 18px;
-  font-size: 13px;
+  border-radius: 6px;
+  padding: 3px 14px;
+  font-size: 11px;
   font-weight: 700;
   cursor: pointer;
   width: 100%;
@@ -231,107 +241,113 @@ body {
 }
 .sticker-edit-btn:hover { background: #ddd6fe; }
 
-/* Group badge (for split stickers) */
+/* Group badge (split stickers) */
 .sticker-group-badge {
   text-align: center;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  padding: 3px 8px;
+  padding: 4px 10px;
   letter-spacing: 0.5px;
+  border-bottom: 1.5px solid #1e293b;
 }
 
-/* Code / Villa rows */
+/* Code / Villa — red, large, centered */
 .sticker-info-row {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 3px 12px;
-  font-size: 16px;
+  gap: 20px;
+  padding: 6px 12px 5px;
+  font-size: 15px;
   font-weight: 800;
   color: #dc2626;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: center;
 }
 .sticker-info-label { font-weight: 800; }
 .sticker-info-value { font-weight: 800; }
 
-/* Names block */
+/* Names — centered */
 .sticker-names-block {
-  padding: 6px 12px 4px;
+  padding: 7px 12px 6px;
   text-align: center;
   border-bottom: 1px solid #e2e8f0;
 }
 .sticker-name-ar-center {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 800;
   color: #0f172a;
-  line-height: 1.3;
+  line-height: 1.35;
 }
 .sticker-name-en-center {
-  font-size: 13px;
+  font-size: 11px;
   color: #374151;
   direction: ltr;
   font-weight: 600;
   margin-top: 2px;
+  line-height: 1.3;
 }
 
-/* Excluded / Alternative rows */
+/* Excluded / Alternative — centered */
 .sticker-excl-block {
-  padding: 6px 12px 4px;
+  padding: 6px 14px 5px;
   border-bottom: 1px solid #e2e8f0;
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 12.5px;
+  line-height: 1.75;
+  text-align: center;
 }
 .sticker-excl-row { color: #0f172a; }
 .sticker-excl-label { font-weight: 800; color: #0f172a; }
 .sticker-alt-row { color: #0f172a; }
 .sticker-alt-label { font-weight: 800; color: #0f172a; }
 
-/* NO / YES pills */
+/* NO / YES */
 .sticker-pills {
-  padding: 6px 10px 8px;
+  padding: 5px 0 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 0;
+  margin-top: auto;
 }
 .sticker-pill-no {
   background: #fff1f2;
   color: #dc2626;
-  border-radius: 8px;
-  padding: 4px 10px;
-  font-size: 13px;
+  padding: 5px 12px;
+  font-size: 12px;
   font-weight: 700;
   direction: ltr;
   text-align: left;
+  border-top: 1px solid #fecaca;
 }
 .sticker-pill-yes {
   background: #eff6ff;
-  color: #2563eb;
-  border-radius: 8px;
-  padding: 4px 10px;
-  font-size: 13px;
+  color: #1d4ed8;
+  padding: 5px 12px;
+  font-size: 12px;
   font-weight: 700;
   direction: ltr;
   text-align: left;
+  border-top: 1px solid #bfdbfe;
 }
 .sticker-pill-label { font-weight: 800; }
 
 .sticker-fixed {
-  padding: 4px 12px 7px;
-  font-size: 10.5px;
+  padding: 4px 12px 6px;
+  font-size: 10px;
   color: #475569;
-  border-top: 1px dashed #e2e8f0;
-  margin-top: auto;
+  border-top: 1px dashed #cbd5e1;
+  text-align: center;
 }
 .sticker-fixed-label { font-weight: 700; color: #0f172a; }
 
-/* Hide edit affordance in print */
-@media print {
-  .no-print-outline:hover { outline: none !important; background: transparent !important; cursor: default !important; }
+/* Print-only header (date + meal type) above sticker grid */
+.sticker-print-header {
+  display: none;
 }
 
+/* ── Print ─────────────────────────────────────────────────────── */
 @media print {
-  /* ── Report print ─────────────────────────── */
-  @page { size: A4 landscape; margin: 7mm; }
+  @page { size: A4 portrait; margin: 8mm; }
 
   body * { visibility: hidden; }
 
@@ -339,7 +355,7 @@ body {
   #report-content * { visibility: visible; }
 
   #report-content {
-    position: fixed;
+    position: absolute;
     top: 0; right: 0; left: 0;
     width: 100%;
     background: white;
@@ -364,10 +380,8 @@ body {
   th, td { border: 1px solid #ccc; padding: 1.5px 5px; font-size: 7.5pt; }
   thead tr { background: #f1f5f9 !important; }
 
-  /* Tighter badge */
   .badge { padding: 0 4px; font-size: 7pt; }
 
-  /* Summary grid: 8 columns in landscape */
   #items-summary-grid {
     grid-template-columns: repeat(8, 1fr) !important;
     gap: 3px !important;
@@ -377,31 +391,42 @@ body {
   #items-summary-grid .text-xs { font-size: 6.5pt !important; }
   #items-summary-grid .text-sm { font-size: 7.5pt !important; }
 
-  /* Remove rounded shadows */
   .rounded-xl, .rounded-2xl { border-radius: 4px !important; }
 
-  /* ── Stickers print (overrides report rules when #stickers-content exists) ── */
+  /* ── Stickers print ── */
   #stickers-content,
   #stickers-content * { visibility: visible; }
 
   #stickers-content {
-    position: fixed;
+    position: absolute;
     top: 0; right: 0; left: 0;
     width: 100%;
     background: white;
-    padding: 6mm;
-    /* reset report font scaling */
     font-size: 10pt;
-    zoom: 1;
+  }
+
+  .sticker-print-header {
+    display: block;
+    text-align: center;
+    padding: 5mm 0 4mm;
+    border-bottom: 2px solid #1e293b;
+    margin-bottom: 4mm;
+    font-family: 'Cairo', Arial, sans-serif;
   }
 
   .sticker-grid {
-    grid-template-columns: repeat(4, 1fr) !important;
-    gap: 5mm !important;
+    grid-template-columns: repeat(3, 1fr) !important;
   }
+
+  .sticker-wrap {
+    border-top: 1.5px solid #1e293b !important;
+    border-right: 1.5px solid #1e293b !important;
+  }
+
   .sticker-card {
     break-inside: avoid;
     page-break-inside: avoid;
-    min-height: unset !important;
   }
+
+  .sticker-edit-bar { display: none !important; }
 }

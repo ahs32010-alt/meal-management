@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import type { DailyOrder, ReportData } from '@/lib/types';
 import { MEAL_TYPE_LABELS, MEAL_TYPE_EN } from '@/lib/types';
-import { formatDate } from '@/lib/date-utils';
+import { formatDate, formatDateFull } from '@/lib/date-utils';
 import { transliterate } from '@/lib/transliterate';
 const t = (s: string, dict: Record<string, string>) => dict[s] ?? transliterate(s);
 
@@ -63,22 +63,22 @@ function buildWordCell(
 
   return `<td style="width:25%;vertical-align:top;border:2pt solid #cbd5e1;border-radius:8pt;padding:0;direction:rtl;text-align:center;">
   ${groupIndex > 0 ? `<div style="background:${headerBg};color:white;padding:3pt 8pt;font-size:9pt;font-weight:700;text-align:center;">${mealTypeAr} ${mealTypeEn}${groupLabel}</div>` : ''}
-  <div style="padding:5pt 8pt 3pt;text-align:center;border-bottom:1pt solid #e2e8f0;">
-    <div style="font-size:14pt;font-weight:800;color:#dc2626;">Code: ${ben.code}</div>
-    ${ben.villa ? `<div style="font-size:14pt;font-weight:800;color:#dc2626;">Villa: ${ben.villa}</div>` : ''}
+  <div style="padding:4pt 8pt;text-align:center;border-bottom:1pt solid #e2e8f0;">
+    <span style="font-size:10pt;font-weight:800;color:#dc2626;">Code: ${ben.code}</span>
+    ${ben.villa ? `&nbsp;&nbsp;<span style="font-size:10pt;font-weight:800;color:#dc2626;">Villa: ${ben.villa}</span>` : ''}
   </div>
   <div style="padding:5pt 8pt;text-align:center;border-bottom:1pt solid #e2e8f0;">
-    <div style="font-size:13pt;font-weight:800;color:#0f172a;">${ben.name}</div>
-    ${ben.english_name ? `<div style="font-size:11pt;font-weight:600;color:#374151;direction:ltr;">${ben.english_name}</div>` : ''}
+    <div style="font-size:12pt;font-weight:800;color:#0f172a;">${ben.name}</div>
+    ${ben.english_name ? `<div style="font-size:9.5pt;font-weight:600;color:#374151;direction:ltr;">${ben.english_name}</div>` : ''}
   </div>
-  <div style="padding:5pt 8pt;text-align:right;border-bottom:1pt solid #e2e8f0;">
-    ${excludedNames ? `<div style="font-size:11pt;"><strong>مستبعد: </strong>${excludedNames}</div>` : ''}
-    ${allBadilNames.length > 0 ? `<div style="font-size:11pt;"><strong>بديل: </strong>${allBadilNames.join('، ')}</div>` : ''}
+  <div style="padding:4pt 8pt;text-align:center;border-bottom:1pt solid #e2e8f0;">
+    ${excludedNames ? `<div style="font-size:10pt;"><strong>مستبعد: </strong>${excludedNames}</div>` : ''}
+    ${allBadilNames.length > 0 ? `<div style="font-size:10pt;"><strong>بديل: </strong>${allBadilNames.join('، ')}</div>` : ''}
   </div>
-  <div style="padding:5pt 8pt;">
-    ${excludedTranslit ? `<div style="background:#fff1f2;color:#dc2626;border-radius:5pt;padding:3pt 7pt;font-size:10pt;font-weight:700;direction:ltr;text-align:left;margin-bottom:4pt;"><strong>NO: </strong>${excludedTranslit}</div>` : ''}
-    ${altTranslit ? `<div style="background:#eff6ff;color:#2563eb;border-radius:5pt;padding:3pt 7pt;font-size:10pt;font-weight:700;direction:ltr;text-align:left;"><strong>YES: </strong>${altTranslit}</div>` : ''}
-    ${ben.fixed_items ? `<div style="font-size:8.5pt;color:#475569;margin-top:4pt;padding-top:3pt;border-top:1px dashed #cbd5e1;">إضافات: <strong>${ben.fixed_items}</strong></div>` : ''}
+  <div style="padding:4pt 8pt;">
+    ${excludedTranslit ? `<div style="background:#fff1f2;color:#dc2626;border-radius:4pt;padding:3pt 7pt;font-size:9pt;font-weight:700;direction:ltr;text-align:left;margin-bottom:3pt;"><strong>NO: </strong>${excludedTranslit}</div>` : ''}
+    ${altTranslit ? `<div style="background:#eff6ff;color:#1d4ed8;border-radius:4pt;padding:3pt 7pt;font-size:9pt;font-weight:700;direction:ltr;text-align:left;"><strong>YES: </strong>${altTranslit}</div>` : ''}
+    ${ben.fixed_items ? `<div style="font-size:8pt;color:#475569;margin-top:3pt;padding-top:3pt;border-top:1px dashed #cbd5e1;text-align:center;">إضافات: <strong>${ben.fixed_items}</strong></div>` : ''}
   </div>
 </td>`;
 }
@@ -144,63 +144,52 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
   const updateFixed = (idx: number, val: string) =>
     setFixedMeals(prev => prev.map((n, i) => i === idx ? val : n));
 
-  const altNames  = exclusions.map(e => e.alternativeName);
-  const allBadil  = [...altNames, ...fixedMeals];
+  const altNames = exclusions.map(e => e.alternativeName);
+  const allBadil = [...altNames, ...fixedMeals];
   const hasAnyBadil = allBadil.some(n => n.trim() !== '');
 
   const excludedTranslitList = exclusions
-    .map(e => e.excludedName)
-    .filter(n => n.trim())
-    .map(n => transliterate(n, customDict))
-    .filter(Boolean);
+    .map(e => e.excludedName).filter(n => n.trim())
+    .map(n => transliterate(n, customDict)).filter(Boolean);
   const badilTranslitList = allBadil
     .filter(n => n.trim())
-    .map(n => transliterate(n, customDict))
-    .filter(Boolean);
-
-  const cardBorderStyle = groupIndex > 0
-    ? { borderColor: groupIndex === 1 ? '#7c3aed' : groupIndex === 2 ? '#f43f5e' : groupIndex === 3 ? '#f59e0b' : '#059669' }
-    : undefined;
+    .map(n => transliterate(n, customDict)).filter(Boolean);
 
   const inp = (val: string, onChange: (v: string) => void, dir: 'rtl' | 'ltr' = 'rtl') => (
-    <input
-      dir={dir}
-      value={val}
-      onChange={e => onChange(e.target.value)}
+    <input dir={dir} value={val} onChange={e => onChange(e.target.value)}
       className="bg-yellow-50 border border-yellow-300 rounded px-1 focus:outline-none text-center w-full"
-      style={{ font: 'inherit', color: 'inherit' }}
-    />
+      style={{ font: 'inherit', color: 'inherit' }} />
   );
 
   return (
-    <div className="sticker-card" style={cardBorderStyle}>
+    <div className="sticker-card">
       {/* Edit button */}
       <div className="sticker-edit-bar no-print">
         <button type="button" onClick={() => setEditMode(m => !m)} className="sticker-edit-btn">
-          {editMode ? 'حفظ ✓' : 'تعديل المعلومات 📝'}
+          {editMode ? 'حفظ ✓' : '✏ تعديل'}
         </button>
       </div>
 
-      {/* Group badge */}
+      {/* Split group badge */}
       {groupIndex > 0 && (
-        <div className={`sticker-group-badge ${gc.bg} ${gc.text}`}>★ {gc.label} — {mealTypeAr} {mealTypeEn}</div>
-      )}
-
-      {/* Code */}
-      <div className="sticker-info-row">
-        <span className="sticker-info-label">Code:</span>
-        {editMode ? inp(code, setCode, 'ltr') : <span className="sticker-info-value">{code}</span>}
-      </div>
-
-      {/* Villa */}
-      {(villa || editMode) && (
-        <div className="sticker-info-row">
-          <span className="sticker-info-label">Villa:</span>
-          {editMode ? inp(villa, setVilla, 'ltr') : <span className="sticker-info-value">{villa}</span>}
+        <div className={`sticker-group-badge ${gc.bg} ${gc.text}`}>
+          ★ {gc.label} — {mealTypeAr} {mealTypeEn}
         </div>
       )}
 
-      {/* Names */}
+      {/* Code + Villa — one row, centered, red */}
+      <div className="sticker-info-row">
+        <span><span className="sticker-info-label">Code: </span>
+          {editMode ? inp(code, setCode, 'ltr') : <span className="sticker-info-value">{code}</span>}
+        </span>
+        {(villa || editMode) && (
+          <span><span className="sticker-info-label">Villa: </span>
+            {editMode ? inp(villa, setVilla, 'ltr') : <span className="sticker-info-value">{villa}</span>}
+          </span>
+        )}
+      </div>
+
+      {/* Names — centered */}
       <div className="sticker-names-block">
         <div className="sticker-name-ar-center">
           {editMode ? inp(nameAr, setNameAr) : nameAr}
@@ -212,7 +201,7 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
         )}
       </div>
 
-      {/* Excluded + Alternative */}
+      {/* Excluded + Alternative — centered */}
       <div className="sticker-excl-block">
         {exclusions.length > 0 && (
           <div className="sticker-excl-row">
@@ -229,7 +218,6 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
             ))}
           </div>
         )}
-
         {hasAnyBadil && (
           <div className="sticker-alt-row">
             <span className="sticker-alt-label">بديل: </span>
@@ -257,7 +245,7 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
         )}
       </div>
 
-      {/* NO / YES pills */}
+      {/* NO / YES */}
       <div className="sticker-pills">
         {excludedTranslitList.length > 0 && (
           <div className="sticker-pill-no">
@@ -736,23 +724,36 @@ export default function StickersView() {
       {report && !loading && stickerDetails.length > 0 && (
         <>
           <div id="stickers-content">
+            {/* Print-only header */}
+            <div className="sticker-print-header">
+              <div style={{ fontSize: 18, fontWeight: 800, color: '#0f172a', marginBottom: 3 }}>
+                ستيكرات — خطوة أمل
+              </div>
+              <div style={{ fontSize: 13, color: '#374151', fontWeight: 600 }}>
+                {report && formatDateFull(report.order.date)} &nbsp;|&nbsp; {mealTypeAr} {mealTypeEn}
+              </div>
+            </div>
+
             <div className="no-print text-sm text-slate-500 px-1 mb-3">
-              {displayDetails.length} ستيكر — {Math.ceil(displayDetails.length / 4)} صف
+              {displayDetails.length} ستيكر
               {displayDetails.length !== stickerDetails.length && (
-                <span className="text-violet-600 mr-2">({displayDetails.length - stickerDetails.length} ستيكر مفصول)</span>
+                <span className="text-violet-600 mr-2">({displayDetails.length - stickerDetails.length} مفصول)</span>
               )}
             </div>
-            <div className="sticker-grid">
-              {displayDetails.map((detail) => (
-                <StickerCard
-                  key={`${detail.beneficiary.id}_g${detail.groupIndex}_${detail.excludedItems.map(i => i.meal.id).join(',')}_${(detail.fixedItems ?? []).map(m => m.id).join(',')}`}
-                  detail={detail}
-                  mealTypeAr={mealTypeAr}
-                  mealTypeEn={mealTypeEn}
-                  customDict={customDict}
-                  groupIndex={detail.groupIndex}
-                />
-              ))}
+
+            <div className="sticker-wrap">
+              <div className="sticker-grid">
+                {displayDetails.map((detail) => (
+                  <StickerCard
+                    key={`${detail.beneficiary.id}_g${detail.groupIndex}_${detail.excludedItems.map(i => i.meal.id).join(',')}_${(detail.fixedItems ?? []).map(m => m.id).join(',')}`}
+                    detail={detail}
+                    mealTypeAr={mealTypeAr}
+                    mealTypeEn={mealTypeEn}
+                    customDict={customDict}
+                    groupIndex={detail.groupIndex}
+                  />
+                ))}
+              </div>
             </div>
           </div>
 

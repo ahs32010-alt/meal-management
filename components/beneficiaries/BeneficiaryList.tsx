@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import type { Beneficiary, Meal } from '@/lib/types';
+import { DAY_LABELS, DAYS_ORDER } from '@/lib/types';
 import BeneficiaryModal from './BeneficiaryModal';
 import ImportModal from '@/components/shared/ImportModal';
 import { exportXLSX } from '@/lib/xlsx-utils';
@@ -253,12 +254,27 @@ export default function BeneficiaryList() {
                     {(b.fixed_meals ?? []).length === 0 ? (
                       <span className="text-slate-300 text-xs">لا يوجد</span>
                     ) : (
-                      <div className="flex flex-wrap gap-1">
-                        {(b.fixed_meals ?? []).map(fm => (
-                          <span key={fm.id} className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.5 rounded">
-                            {(fm as any).meals?.name}
-                          </span>
-                        ))}
+                      <div className="flex flex-wrap gap-1.5">
+                        {(() => {
+                          // Group by meal_id, collect days sorted by DAYS_ORDER
+                          const map = new Map<string, { name: string; days: number[] }>();
+                          for (const fm of b.fixed_meals ?? []) {
+                            const name = (fm as any).meals?.name ?? fm.meal_id;
+                            if (!map.has(fm.meal_id)) map.set(fm.meal_id, { name, days: [] });
+                            map.get(fm.meal_id)!.days.push(fm.day_of_week);
+                          }
+                          return Array.from(map.values()).map(({ name, days }) => {
+                            const sortedDays = DAYS_ORDER.filter(d => days.includes(d));
+                            const dayLabels = sortedDays.map(d => DAY_LABELS[d]);
+                            return (
+                              <span key={name} className="inline-flex items-center gap-1 text-xs bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-full">
+                                <span className="font-semibold">{name}</span>
+                                <span className="text-emerald-400">·</span>
+                                <span className="text-emerald-600">{dayLabels.join('، ')}</span>
+                              </span>
+                            );
+                          });
+                        })()}
                       </div>
                     )}
                   </td>

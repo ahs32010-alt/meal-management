@@ -46,11 +46,6 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
 
   useEffect(() => { load(); }, [load]);
 
-  useEffect(() => {
-    if (!report) return;
-    const t = setTimeout(() => window.print(), 600);
-    return () => clearTimeout(t);
-  }, [report]);
 
   if (error) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'sans-serif', color: '#c00' }}>
