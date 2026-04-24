@@ -6,6 +6,16 @@ import type { DailyOrder, ReportData } from '@/lib/types';
 import { MEAL_TYPE_LABELS, MEAL_TYPE_EN } from '@/lib/types';
 import { formatDate, formatDateFull } from '@/lib/date-utils';
 import { transliterate } from '@/lib/transliterate';
+import {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  AlignmentType,
+  VerticalAlign,
+  PageOrientation,
+  convertMillimetersToTwip,
+} from 'docx';
 const t = (s: string, dict: Record<string, string>) => dict[s] ?? transliterate(s);
 
 // splits[ben_id][meal_id] = groupIndex  (0 = main sticker, 1 = sticker 2, …)
@@ -91,6 +101,174 @@ function buildWordCell(
   </div>
 </td>`;
 }
+
+// ── Per-page sticker export (real .docx with each sticker as its own section) ─────────
+async function exportStickersPerPageDocx(
+  displayDetails: Array<ReportData['beneficiaryDetails'][0] & { groupIndex: number }>,
+  mealTypeAr: string,
+  mealTypeEn: string,
+  filename: string,
+  widthCm: number,
+  heightCm: number,
+  customDict: Record<string, string> = {},
+) {
+  const minDim = Math.min(widthCm, heightCm);
+  const scale = Math.max(0.6, Math.min(1.6, minDim / 10));
+  // Font sizes in docx are in half-points (24 = 12pt)
+  const fs = (pt: number) => Math.round(pt * scale * 2);
+
+  const buildStickerParagraphs = (
+    detail: ReportData['beneficiaryDetails'][0],
+    groupIndex: number,
+  ): Paragraph[] => {
+    const ben = detail.beneficiary;
+    const items = detail.excludedItems ?? [];
+    const excludedNames = items.map(({ meal }) => `${meal.name}${meal.is_snack ? ' (snak)' : ''}`).join('، ');
+    const excludedTranslit = items.map(({ meal }) => {
+      const tr = transliterate(meal.name, customDict);
+      return tr ? (meal.is_snack ? `${tr} (snak)` : tr) : '';
+    }).filter(Boolean).join(' | ');
+    const fixedMealsToday = (detail.fixedItems ?? []).map(m => m.meal.name);
+    const altItems = items.filter(e => e.alternative);
+    const allBadilNames = [
+      ...altItems.map(e => `${e.alternative!.name}${e.meal.is_snack ? ' (snak)' : ''}`),
+      ...fixedMealsToday,
+    ];
+    const altTranslit = [
+      ...altItems.map(e => {
+        const tr = transliterate(e.alternative!.name, customDict);
+        return tr ? (e.meal.is_snack ? `${tr} (snak)` : tr) : '';
+      }).filter(Boolean),
+      ...fixedMealsToday.map(n => transliterate(n, customDict)).filter(Boolean),
+    ].join(' | ');
+
+    const gc = GROUP_COLORS[groupIndex] ?? GROUP_COLORS[0];
+    const groupLabel = groupIndex > 0 ? ` ★ ${gc.label}` : '';
+
+    const paragraphs: Paragraph[] = [];
+    const center = (children: TextRun[], spaceAfter = 60) => new Paragraph({
+      alignment: AlignmentType.CENTER,
+      bidirectional: true,
+      spacing: { after: spaceAfter, before: 0 },
+      children,
+    });
+
+    // Meal type header
+    paragraphs.push(center([
+      new TextRun({ text: `${mealTypeAr} ${mealTypeEn}${groupLabel}`, bold: true, size: fs(11), color: '1e293b' }),
+    ]));
+
+    // Code + Villa
+    paragraphs.push(center([
+      new TextRun({ text: `Code: ${ben.code}`, bold: true, size: fs(13), color: 'dc2626' }),
+      ...(ben.villa ? [new TextRun({ text: `    Villa: ${ben.villa}`, bold: true, size: fs(13), color: 'dc2626' })] : []),
+    ]));
+
+    // Arabic name (big)
+    paragraphs.push(center([
+      new TextRun({ text: ben.name, bold: true, size: fs(16), color: '0f172a' }),
+    ]));
+
+    // English name
+    if (ben.english_name) {
+      paragraphs.push(center([
+        new TextRun({ text: ben.english_name, bold: true, size: fs(12), color: '374151' }),
+      ]));
+    }
+
+    // Excluded / Alternative in Arabic
+    if (excludedNames) {
+      paragraphs.push(center([
+        new TextRun({ text: 'مستبعد: ', bold: true, size: fs(12) }),
+        new TextRun({ text: excludedNames, size: fs(12) }),
+      ]));
+    }
+    if (allBadilNames.length > 0) {
+      paragraphs.push(center([
+        new TextRun({ text: 'بديل: ', bold: true, size: fs(12) }),
+        new TextRun({ text: allBadilNames.join('، '), size: fs(12) }),
+      ]));
+    }
+
+    // NO / YES transliteration (LTR)
+    if (excludedTranslit) {
+      paragraphs.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 40, before: 40 },
+        children: [
+          new TextRun({ text: 'NO: ', bold: true, size: fs(11), color: 'dc2626' }),
+          new TextRun({ text: excludedTranslit, bold: true, size: fs(11), color: 'dc2626' }),
+        ],
+      }));
+    }
+    if (altTranslit) {
+      paragraphs.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 40, before: 0 },
+        children: [
+          new TextRun({ text: 'YES: ', bold: true, size: fs(11), color: '1d4ed8' }),
+          new TextRun({ text: altTranslit, bold: true, size: fs(11), color: '1d4ed8' }),
+        ],
+      }));
+    }
+
+    if (ben.fixed_items) {
+      paragraphs.push(center([
+        new TextRun({ text: 'إضافات: ', bold: true, size: fs(10), color: '475569' }),
+        new TextRun({ text: String(ben.fixed_items), size: fs(10), color: '475569' }),
+      ], 0));
+    }
+
+    return paragraphs;
+  };
+
+  // Every sticker becomes its own section with the exact custom page size.
+  // This is the only way Word guarantees each sticker is on its own page at the chosen size.
+  const pageWidth  = convertMillimetersToTwip(widthCm * 10);
+  const pageHeight = convertMillimetersToTwip(heightCm * 10);
+
+  const sections = displayDetails.map(d => ({
+    properties: {
+      page: {
+        size: {
+          width: pageWidth,
+          height: pageHeight,
+          orientation: PageOrientation.PORTRAIT,
+        },
+        margin: {
+          // Slightly larger top margin gives breathing room above the centered block
+          top:    convertMillimetersToTwip(6),
+          bottom: convertMillimetersToTwip(3),
+          left:   convertMillimetersToTwip(3),
+          right:  convertMillimetersToTwip(3),
+          header: convertMillimetersToTwip(0),
+          footer: convertMillimetersToTwip(0),
+          gutter: 0,
+        },
+      },
+      // Section-level vertical centering (this is where Word actually reads it from)
+      verticalAlign: VerticalAlign.CENTER,
+    },
+    children: buildStickerParagraphs(d, d.groupIndex),
+  }));
+
+  const doc = new Document({
+    creator: 'Khutwat Amal',
+    title: filename,
+    sections,
+  });
+
+  const blob = await Packer.toBlob(doc);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${filename}.docx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 
 function exportStickersWord(
   displayDetails: Array<ReportData['beneficiaryDetails'][0] & { groupIndex: number }>,
@@ -588,6 +766,8 @@ export default function StickersView() {
   const [customDict, setCustomDict] = useState<Record<string, string>>({});
   const [splits, setSplits] = useState<SplitsMap>({});
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [sizeWidth, setSizeWidth]   = useState<string>('10');
+  const [sizeHeight, setSizeHeight] = useState<string>('10');
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFirstSplitsLoad = useRef(true);
   const supabase = useMemo(() => createClient(), []);
@@ -689,6 +869,23 @@ export default function StickersView() {
     exportStickersWord(displayDetails, mealTypeAr, mealTypeEn, fn, customDict);
   };
 
+  const handleExportPerPage = async () => {
+    if (!report || displayDetails.length === 0) return;
+    const w = parseFloat(sizeWidth);
+    const h = parseFloat(sizeHeight);
+    if (!w || !h || w < 2 || h < 2 || w > 30 || h > 30) {
+      alert('أدخل أبعاداً صالحة (2 إلى 30 سم لكل بُعد)');
+      return;
+    }
+    const fn = `ستيكرات_${new Date(report.order.date).toISOString().slice(0, 10)}_${mealTypeAr}_${w}x${h}سم`;
+    try {
+      await exportStickersPerPageDocx(displayDetails, mealTypeAr, mealTypeEn, fn, w, h, customDict);
+    } catch (e) {
+      alert('حدث خطأ أثناء إنشاء الملف');
+      console.error(e);
+    }
+  };
+
   return (
     <div className="p-6 space-y-5">
       {/* Header */}
@@ -783,6 +980,86 @@ export default function StickersView() {
             onSplitsChange={setSplits}
             saveStatus={saveStatus}
           />
+
+          {/* ── Size-based Word export ─────────────────────────────────────── */}
+          <div className="card p-5 no-print">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
+                <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 4v4M16 4v4M4 10h16" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h3 className="font-bold text-slate-800 text-sm">الستيكرات حسب المقاس</h3>
+                <p className="text-xs text-slate-500">ملف Word فيه كل ستيكر في صفحة منفصلة بالمقاس اللي تحدده — للطباعة على طابعة الملصقات مباشرة</p>
+              </div>
+            </div>
+
+            <div className="flex items-end gap-3 flex-wrap">
+              <div>
+                <label className="label text-xs">العرض (سم)</label>
+                <input
+                  type="number"
+                  min={2}
+                  max={30}
+                  step="0.1"
+                  value={sizeWidth}
+                  onChange={e => setSizeWidth(e.target.value)}
+                  className="input-field w-28"
+                  placeholder="10"
+                />
+              </div>
+              <div>
+                <label className="label text-xs">الطول (سم)</label>
+                <input
+                  type="number"
+                  min={2}
+                  max={30}
+                  step="0.1"
+                  value={sizeHeight}
+                  onChange={e => setSizeHeight(e.target.value)}
+                  className="input-field w-28"
+                  placeholder="10"
+                />
+              </div>
+
+              {/* Preset shortcuts */}
+              <div className="flex items-center gap-1 flex-wrap">
+                {[
+                  { w: '10', h: '10' },
+                  { w: '10', h: '15' },
+                  { w: '8',  h: '5'  },
+                  { w: '6',  h: '4'  },
+                ].map(p => (
+                  <button
+                    key={`${p.w}x${p.h}`}
+                    type="button"
+                    onClick={() => { setSizeWidth(p.w); setSizeHeight(p.h); }}
+                    className="px-2.5 py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+                  >
+                    {p.w}×{p.h}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={handleExportPerPage}
+                disabled={displayDetails.length === 0}
+                className="btn-primary text-sm disabled:opacity-50"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                تصدير Word ({displayDetails.length} صفحة)
+              </button>
+            </div>
+
+            <p className="text-[11px] text-slate-400 mt-3">
+              💡 افتح الملف في Word ثم اطبعه — كل ستيكر في صفحة منفصلة بمقاس {sizeWidth || '—'}×{sizeHeight || '—'} سم.
+              الخط يتكيّف تلقائياً مع المقاس المختار.
+            </p>
+          </div>
         </>
       )}
     </div>
