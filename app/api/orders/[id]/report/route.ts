@@ -46,7 +46,7 @@ export async function GET(
     .select(`
       *,
       exclusions(id, meal_id, alternative_meal_id, meals:meals!exclusions_meal_id_fkey(id, name, english_name, type, is_snack)),
-      fixed_meals:beneficiary_fixed_meals(id, day_of_week, meal_type, meal_id, meals(id, name, english_name, type, is_snack))
+      fixed_meals:beneficiary_fixed_meals(id, day_of_week, meal_type, meal_id, quantity, meals(id, name, english_name, type, is_snack))
     `)
     .order('name');
 
@@ -84,7 +84,7 @@ export async function GET(
     category: string; villa?: string; diet_type?: string;
     fixed_items?: string; notes?: string; created_at: string;
     exclusions: { id: string; meal_id: string; alternative_meal_id: string | null }[];
-    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; meals: Meal }[];
+    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal }[];
   }) => {
     const excludedIds = new Set((ben.exclusions || []).map(e => e.meal_id));
 
@@ -101,9 +101,9 @@ export async function GET(
       });
 
     // Fixed meals for today's day + this meal type
-    const todayFixed: Meal[] = (ben.fixed_meals || [])
+    const todayFixed: { meal: Meal; quantity: number }[] = (ben.fixed_meals || [])
       .filter(fm => fm.day_of_week === orderDayOfWeek && fm.meal_type === order.meal_type && fm.meals)
-      .map(fm => fm.meals);
+      .map(fm => ({ meal: fm.meals, quantity: fm.quantity ?? 1 }));
 
     // Count main meals
     orderItems.forEach(item => {
@@ -119,10 +119,10 @@ export async function GET(
         allMealDetails[alternative.id] = alternative;
       }
     });
-    // Count fixed
-    todayFixed.forEach(m => {
-      fixedQty[m.id] = (fixedQty[m.id] || 0) + 1;
-      allMealDetails[m.id] = m;
+    // Count fixed (multiplied by quantity per beneficiary)
+    todayFixed.forEach(({ meal, quantity }) => {
+      fixedQty[meal.id] = (fixedQty[meal.id] || 0) + quantity;
+      allMealDetails[meal.id] = meal;
     });
 
     return {

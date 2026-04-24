@@ -19,14 +19,13 @@ interface ExclusionEntry {
   alternative_meal_id: string;
 }
 
-// fixed meals stored as: { mealId_mealType: Set<dayOfWeek> }
-type FixedEntry = { meal_id: string; meal_type: MealType; days: Set<number> };
+type FixedEntry = { meal_id: string; meal_type: MealType; days: Set<number>; quantity: number };
 
 function buildFixedEntries(fixedMeals: Beneficiary['fixed_meals']): FixedEntry[] {
   const map: Record<string, FixedEntry> = {};
   for (const fm of fixedMeals ?? []) {
     const key = `${fm.meal_id}_${fm.meal_type}`;
-    if (!map[key]) map[key] = { meal_id: fm.meal_id, meal_type: fm.meal_type as MealType, days: new Set() };
+    if (!map[key]) map[key] = { meal_id: fm.meal_id, meal_type: fm.meal_type as MealType, days: new Set(), quantity: fm.quantity ?? 1 };
     map[key].days.add(fm.day_of_week);
   }
   return Object.values(map);
@@ -296,11 +295,15 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
     const key = `${meal.id}_${newFixedMealType}`;
     const exists = fixedEntries.find(fe => fe.meal_id === meal.id && fe.meal_type === newFixedMealType);
     if (!exists)
-      setFixedEntries(prev => [...prev, { meal_id: meal.id, meal_type: newFixedMealType, days: new Set() }]);
+      setFixedEntries(prev => [...prev, { meal_id: meal.id, meal_type: newFixedMealType, days: new Set(), quantity: 1 }]);
     setAddingFixed(false);
   };
   const removeFixedEntry = (meal_id: string, meal_type: MealType) =>
     setFixedEntries(prev => prev.filter(fe => !(fe.meal_id === meal_id && fe.meal_type === meal_type)));
+  const setFixedEntryQty = (meal_id: string, meal_type: MealType, quantity: number) =>
+    setFixedEntries(prev => prev.map(fe =>
+      fe.meal_id === meal_id && fe.meal_type === meal_type ? { ...fe, quantity } : fe
+    ));
   const toggleDay = (meal_id: string, meal_type: MealType, day: number) =>
     setFixedEntries(prev => prev.map(fe => {
       if (fe.meal_id !== meal_id || fe.meal_type !== meal_type) return fe;
@@ -330,34 +333,45 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
       notes: notes.trim() || null,
     };
 
-    let beneficiaryId = beneficiary?.id;
-    if (beneficiary) {
-      const { error } = await supabase.from('beneficiaries').update(payload).eq('id', beneficiary.id);
-      if (error) { setError(error.message); setSaving(false); return; }
-    } else {
-      const { data, error } = await supabase.from('beneficiaries').insert(payload).select().single();
-      if (error) { setError(error.message.includes('unique') ? 'الكود مستخدم مسبقاً' : error.message); setSaving(false); return; }
-      beneficiaryId = data.id;
-    }
+    try {
+      let beneficiaryId = beneficiary?.id;
+      if (beneficiary) {
+        const { error } = await supabase.from('beneficiaries').update(payload).eq('id', beneficiary.id);
+        if (error) { setError(error.message); setSaving(false); return; }
+      } else {
+        const { data, error } = await supabase.from('beneficiaries').insert(payload).select().single();
+        if (error) { setError(error.message.includes('unique') ? 'الكود مستخدم مسبقاً' : error.message); setSaving(false); return; }
+        beneficiaryId = data.id;
+      }
 
-    await supabase.from('exclusions').delete().eq('beneficiary_id', beneficiaryId);
-    if (exclusions.length > 0)
-      await supabase.from('exclusions').insert(
-        exclusions.map(ex => ({ beneficiary_id: beneficiaryId, meal_id: ex.meal_id, alternative_meal_id: ex.alternative_meal_id || null }))
+      await supabase.from('exclusions').delete().eq('beneficiary_id', beneficiaryId);
+      if (exclusions.length > 0)
+        await supabase.from('exclusions').insert(
+          exclusions.map(ex => ({ beneficiary_id: beneficiaryId, meal_id: ex.meal_id, alternative_meal_id: ex.alternative_meal_id || null }))
+        );
+
+      await supabase.from('beneficiary_fixed_meals').delete().eq('beneficiary_id', beneficiaryId);
+      const fixedRows = fixedEntries.flatMap(fe =>
+        Array.from(fe.days).map(day => ({
+          beneficiary_id: beneficiaryId,
+          day_of_week: day,
+          meal_type: fe.meal_type,
+          meal_id: fe.meal_id,
+          quantity: fe.quantity,
+        }))
       );
+      if (fixedRows.length > 0) await supabase.from('beneficiary_fixed_meals').insert(fixedRows);
 
-    await supabase.from('beneficiary_fixed_meals').delete().eq('beneficiary_id', beneficiaryId);
-    const fixedRows = fixedEntries.flatMap(fe =>
-      Array.from(fe.days).map(day => ({
-        beneficiary_id: beneficiaryId,
-        day_of_week: day,
-        meal_type: fe.meal_type,
-        meal_id: fe.meal_id,
-      }))
-    );
-    if (fixedRows.length > 0) await supabase.from('beneficiary_fixed_meals').insert(fixedRows);
-
-    onSaved();
+      onSaved();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Failed to fetch') || msg.includes('fetch')) {
+        setError('تعذّر الاتصال بالخادم — تأكد من اتصالك بالإنترنت أو أعد المحاولة لاحقاً');
+      } else {
+        setError(msg);
+      }
+      setSaving(false);
+    }
   };
 
   const totalFixed = fixedEntries.reduce((s, fe) => s + fe.days.size, 0);
@@ -591,6 +605,16 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-slate-400">{fe.days.size} يوم</span>
+                            {/* Quantity control */}
+                            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-1.5 py-0.5">
+                              <button type="button"
+                                onClick={() => setFixedEntryQty(fe.meal_id, fe.meal_type, Math.max(1, fe.quantity - 1))}
+                                className="w-4 h-4 flex items-center justify-center rounded text-slate-500 hover:bg-slate-100 text-sm font-bold leading-none">−</button>
+                              <span className="text-xs font-bold text-slate-700 min-w-[1.25rem] text-center">{fe.quantity}</span>
+                              <button type="button"
+                                onClick={() => setFixedEntryQty(fe.meal_id, fe.meal_type, Math.min(99, fe.quantity + 1))}
+                                className="w-4 h-4 flex items-center justify-center rounded text-slate-500 hover:bg-slate-100 text-sm font-bold leading-none">+</button>
+                            </div>
                             <button type="button" onClick={() => toggleAllDays(fe.meal_id, fe.meal_type)}
                               className="text-xs text-emerald-600 hover:text-emerald-800 font-semibold px-2 py-0.5 rounded hover:bg-emerald-50 transition-colors">
                               {fe.days.size === 7 ? 'إلغاء الكل' : 'كل الأيام'}

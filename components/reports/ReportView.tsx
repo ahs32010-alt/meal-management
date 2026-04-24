@@ -16,7 +16,7 @@ interface ExcludedItem { meal: Meal; alternative: Meal | null }
 interface BeneficiaryDetail {
   beneficiary: { id: string; name: string; code: string; villa?: string; category: string };
   excludedItems: ExcludedItem[];
-  fixedItems: Meal[];
+  fixedItems: { meal: Meal; quantity: number }[];
 }
 interface MealCount { meal: Meal; gets?: number; qty?: number; quantity?: number; mainQty?: number; altQty?: number; fixedQty?: number }
 interface FullReport {
@@ -334,8 +334,10 @@ export default function ReportView({ initialOrderId }: Props) {
                             {detail.fixedItems.length === 0
                               ? <span className="text-slate-300 text-xs">—</span>
                               : <div className="flex flex-wrap gap-1">
-                                {detail.fixedItems.map(m => (
-                                  <span key={m.id} className="badge bg-violet-100 text-violet-700 text-xs">{m.name}</span>
+                                {detail.fixedItems.map(({ meal, quantity }) => (
+                                  <span key={meal.id} className="badge bg-violet-100 text-violet-700 text-xs">
+                                    {meal.name}{quantity > 1 ? <span className="font-bold mr-0.5">×{quantity}</span> : ''}
+                                  </span>
                                 ))}
                               </div>}
                           </td>

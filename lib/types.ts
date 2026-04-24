@@ -63,6 +63,7 @@ export interface BeneficiaryFixedMeal {
   day_of_week: number;
   meal_type: MealType;
   meal_id: string;
+  quantity: number;
   meals?: Meal;
 }
 
@@ -86,7 +87,7 @@ export interface OrderItem {
 export interface BeneficiaryReportDetail {
   beneficiary: Beneficiary;
   excludedItems: { meal: Meal; alternative: Meal | null }[];
-  fixedItems: Meal[];
+  fixedItems: { meal: Meal; quantity: number }[];
 }
 
 export interface ReportData {

@@ -49,7 +49,7 @@ function buildWordCell(
   const items = detail.excludedItems ?? [];
   const excludedNames = items.map(({ meal }) => meal.name).join('، ');
   const excludedTranslit = items.map(({ meal }) => transliterate(meal.name, customDict)).filter(Boolean).join(' | ');
-  const fixedMealsToday = (detail.fixedItems ?? []).map(m => m.name);
+  const fixedMealsToday = (detail.fixedItems ?? []).map(m => m.meal.name);
   const altItems = items.filter(e => e.alternative);
   const allBadilNames = [...altItems.map(e => e.alternative!.name), ...fixedMealsToday];
   const altTranslit = allBadilNames.map(n => transliterate(n, customDict)).filter(Boolean).join(' | ');
@@ -139,7 +139,7 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
     setExclusions(prev => prev.map((e, i) => i === idx ? { ...e, [field]: val } : e));
 
   const [fixedMeals, setFixedMeals] = useState(
-    (detail.fixedItems ?? []).map(m => m.name)
+    (detail.fixedItems ?? []).map(m => m.meal.name)
   );
   const updateFixed = (idx: number, val: string) =>
     setFixedMeals(prev => prev.map((n, i) => i === idx ? val : n));
@@ -438,7 +438,7 @@ function StickerSplitter({
               id: meal.id, label: meal.name, sub: alternative?.name ?? null, type: 'excl' as const,
             }));
             const fixedChips = (selectedDetail.fixedItems ?? []).map(m => ({
-              id: m.id, label: m.name, sub: null, type: 'fixed' as const,
+              id: m.meal.id, label: m.meal.name + (m.quantity > 1 ? ` ×${m.quantity}` : ''), sub: null, type: 'fixed' as const,
             }));
             const allItems = [...exclItems, ...fixedChips];
 
@@ -656,7 +656,7 @@ export default function StickersView() {
     const result: Array<typeof detail & { groupIndex: number }> = [];
     for (let g = 0; g <= nGroups; g++) {
       const groupExcluded = detail.excludedItems.filter(item => (gm[item.meal.id] ?? 0) === g);
-      const groupFixed    = (detail.fixedItems ?? []).filter(m => (gm[m.id] ?? 0) === g);
+      const groupFixed    = (detail.fixedItems ?? []).filter(m => (gm[m.meal.id] ?? 0) === g);
       if (groupExcluded.length > 0 || groupFixed.length > 0) {
         result.push({ ...detail, excludedItems: groupExcluded, fixedItems: groupFixed, groupIndex: g });
       }
@@ -745,7 +745,7 @@ export default function StickersView() {
               <div className="sticker-grid">
                 {displayDetails.map((detail) => (
                   <StickerCard
-                    key={`${detail.beneficiary.id}_g${detail.groupIndex}_${detail.excludedItems.map(i => i.meal.id).join(',')}_${(detail.fixedItems ?? []).map(m => m.id).join(',')}`}
+                    key={`${detail.beneficiary.id}_g${detail.groupIndex}_${detail.excludedItems.map(i => i.meal.id).join(',')}_${(detail.fixedItems ?? []).map(m => m.meal.id).join(',')}`}
                     detail={detail}
                     mealTypeAr={mealTypeAr}
                     mealTypeEn={mealTypeEn}

@@ -8,7 +8,7 @@ interface MealCount { meal: Meal; gets?: number; qty?: number; quantity?: number
 interface BeneficiaryDetail {
   beneficiary: { id: string; name: string; code: string; villa?: string; category: string };
   excludedItems: { meal: Meal; alternative: Meal | null }[];
-  fixedItems: Meal[];
+  fixedItems: { meal: Meal; quantity: number }[];
 }
 interface FullReport {
   order: { id: string; date: string; meal_type: string };
@@ -288,9 +288,9 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
                             </span>
                           ) : null
                         )}
-                        {detail.fixedItems.map(m => (
-                          <span key={m.id} style={{ ...s.chip, background: '#f5f3ff', borderColor: '#c4b5fd', color: '#5b21b6' }}>
-                            ثابت: {m.name}
+                        {detail.fixedItems.map(({ meal, quantity }) => (
+                          <span key={meal.id} style={{ ...s.chip, background: '#f5f3ff', borderColor: '#c4b5fd', color: '#5b21b6' }}>
+                            ثابت: {meal.name}{quantity > 1 ? ` ×${quantity}` : ''}
                           </span>
                         ))}
                       </div>

@@ -69,6 +69,8 @@ export default function BeneficiaryList() {
   const [importOpen, setImportOpen] = useState(false);
   const [editingBeneficiary, setEditingBeneficiary] = useState<Beneficiary | null>(null);
   const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState<'name' | 'code' | 'villa'>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
 
@@ -90,7 +92,7 @@ export default function BeneficiaryList() {
               alternative_meal:meals!exclusions_alternative_meal_id_fkey(id, name)
             ),
             fixed_meals:beneficiary_fixed_meals(
-              id, beneficiary_id, day_of_week, meal_type, meal_id,
+              id, beneficiary_id, day_of_week, meal_type, meal_id, quantity,
               meals(id, name, type, is_snack)
             )
           `)
@@ -167,10 +169,9 @@ export default function BeneficiaryList() {
       0: 'احد', 1: 'اثنين', 2: 'ثلاثاء', 3: 'اربعاء', 4: 'خميس', 5: 'جمعة', 6: 'سبت',
     };
 
-    const rows = beneficiaries.map(b => {
-      // الأصناف المحظورة وبدائلها: فول؛كبدة - شكشوكة؛تونة
-      const excl = b.exclusions ?? [];
-      const exclusionStr = excl
+    const buildExclStr = (excl: Beneficiary['exclusions'], type: string, isSnack: boolean) =>
+      (excl ?? [])
+        .filter(e => e.meals?.type === type && e.meals?.is_snack === isSnack)
         .map(e => {
           const mealName = e.meals?.name ?? '';
           const altName = (e as any).alternative_meal?.name ?? '';
@@ -179,31 +180,45 @@ export default function BeneficiaryList() {
         .filter(Boolean)
         .join(' - ');
 
-      // الأصناف الثابتة: فول؛سبت احد اربعاء - صنف2؛يوم1
-      const fixedMeals = b.fixed_meals ?? [];
-      const mealDaysMap = new Map<string, number[]>();
-      for (const fm of fixedMeals) {
-        const mealName = (fm as any).meals?.name ?? '';
+    const buildFixedStr = (fixedMeals: Beneficiary['fixed_meals'], type: string, isSnack: boolean) => {
+      const map = new Map<string, { name: string; days: number[]; quantity: number }>();
+      for (const fm of fixedMeals ?? []) {
+        const mealInfo = (fm as any).meals;
+        if (mealInfo?.type !== type || mealInfo?.is_snack !== isSnack) continue;
+        const mealName = mealInfo?.name ?? '';
         if (!mealName) continue;
-        if (!mealDaysMap.has(mealName)) mealDaysMap.set(mealName, []);
-        mealDaysMap.get(mealName)!.push(fm.day_of_week);
+        if (!map.has(fm.meal_id)) map.set(fm.meal_id, { name: mealName, days: [], quantity: (fm as any).quantity ?? 1 });
+        map.get(fm.meal_id)!.days.push(fm.day_of_week);
       }
-      const fixedStr = Array.from(mealDaysMap.entries())
-        .map(([meal, days]) => `${meal}؛${days.map(d => DAY_SHORT[d]).join(' ')}`)
+      return Array.from(map.values())
+        .map(({ name, days, quantity }) => {
+          const nameStr = quantity > 1 ? `${name}×${quantity}` : name;
+          return `${nameStr}؛${days.map(d => DAY_SHORT[d]).join(' ')}`;
+        })
         .join(' - ');
+    };
 
-      return {
-        'الاسم': b.name,
-        'الاسم الإنجليزي': b.english_name ?? '',
-        'الكود': b.code,
-        'الفئة': b.category ?? '',
-        'الفيلا': b.villa ?? '',
-        'النظام الغذائي': b.diet_type ?? '',
-        'الأصناف الثابتة': fixedStr,
-        'ملاحظات': b.notes ?? '',
-        'الأصناف المحظورة وبدائلها': exclusionStr,
-      };
-    });
+    const rows = beneficiaries.map(b => ({
+      'الاسم': b.name,
+      'الاسم الإنجليزي': b.english_name ?? '',
+      'الكود': b.code,
+      'الفئة': b.category ?? '',
+      'الفيلا': b.villa ?? '',
+      'النظام الغذائي': b.diet_type ?? '',
+      'محظورات الفطور':         buildExclStr(b.exclusions, 'breakfast', false),
+      'محظورات سناكات الفطور':  buildExclStr(b.exclusions, 'breakfast', true),
+      'محظورات الغداء':         buildExclStr(b.exclusions, 'lunch',     false),
+      'محظورات سناكات الغداء':  buildExclStr(b.exclusions, 'lunch',     true),
+      'محظورات العشاء':         buildExclStr(b.exclusions, 'dinner',    false),
+      'محظورات سناكات العشاء':  buildExclStr(b.exclusions, 'dinner',    true),
+      'ثابتة الفطور':           buildFixedStr(b.fixed_meals, 'breakfast', false),
+      'ثابتة سناكات الفطور':    buildFixedStr(b.fixed_meals, 'breakfast', true),
+      'ثابتة الغداء':           buildFixedStr(b.fixed_meals, 'lunch',     false),
+      'ثابتة سناكات الغداء':    buildFixedStr(b.fixed_meals, 'lunch',     true),
+      'ثابتة العشاء':           buildFixedStr(b.fixed_meals, 'dinner',    false),
+      'ثابتة سناكات العشاء':    buildFixedStr(b.fixed_meals, 'dinner',    true),
+      'ملاحظات': b.notes ?? '',
+    }));
     exportXLSX(rows, `مستفيدون_${new Date().toISOString().slice(0, 10)}.xlsx`, 'المستفيدون');
   };
 
@@ -230,6 +245,27 @@ export default function BeneficiaryList() {
       fixedMealNames.includes(q)
     );
   });
+
+  const toggleSort = (key: typeof sortKey) => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+
+  const sorted = [...filtered].sort((a, b) => {
+    let av = '', bv = '';
+    if (sortKey === 'name')  { av = a.name ?? '';  bv = b.name ?? ''; }
+    if (sortKey === 'code')  { av = a.code ?? '';  bv = b.code ?? ''; }
+    if (sortKey === 'villa') { av = a.villa ?? ''; bv = b.villa ?? ''; }
+    const cmp = av.localeCompare(bv, 'ar', { numeric: true });
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+
+  const SortIcon = ({ col }: { col: typeof sortKey }) => (
+    <span className="inline-flex flex-col leading-none mr-1 opacity-50">
+      <span className={sortKey === col && sortDir === 'asc'  ? 'opacity-100 text-emerald-600' : ''}>▲</span>
+      <span className={sortKey === col && sortDir === 'desc' ? 'opacity-100 text-emerald-600' : ''}>▼</span>
+    </span>
+  );
 
   return (
     <div className="p-6 space-y-4">
@@ -278,10 +314,22 @@ export default function BeneficiaryList() {
             <thead>
               <tr className="bg-slate-50 text-right">
                 <th className="table-header">#</th>
-                <th className="table-header">الاسم</th>
-                <th className="table-header">الكود</th>
+                <th className="table-header">
+                  <button onClick={() => toggleSort('name')} className="flex items-center gap-1 hover:text-emerald-700 transition-colors">
+                    الاسم <SortIcon col="name" />
+                  </button>
+                </th>
+                <th className="table-header">
+                  <button onClick={() => toggleSort('code')} className="flex items-center gap-1 hover:text-emerald-700 transition-colors">
+                    الكود <SortIcon col="code" />
+                  </button>
+                </th>
                 <th className="table-header">الفئة</th>
-                <th className="table-header">الفيلا</th>
+                <th className="table-header">
+                  <button onClick={() => toggleSort('villa')} className="flex items-center gap-1 hover:text-emerald-700 transition-colors">
+                    الفيلا <SortIcon col="villa" />
+                  </button>
+                </th>
                 <th className="table-header">النظام الغذائي</th>
                 <th className="table-header">الأصناف الثابتة</th>
                 <th className="table-header">الأصناف المحظورة</th>
@@ -290,7 +338,7 @@ export default function BeneficiaryList() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((b, idx) => (
+              {sorted.map((b, idx) => (
                 <tr key={b.id} className="hover:bg-slate-50 transition-colors border-t border-slate-100">
                   <td className="table-cell text-slate-400 text-xs">{idx + 1}</td>
                   <td className="table-cell">
@@ -386,127 +434,177 @@ export default function BeneficiaryList() {
       {importOpen && (
         <ImportModal
           title="المستفيدون"
-          templateHeaders={['الاسم', 'الاسم الإنجليزي', 'الكود', 'الفئة', 'الفيلا', 'النظام الغذائي', 'الأصناف الثابتة', 'ملاحظات', 'الأصناف المحظورة وبدائلها']}
-          templateRow={['محمد أحمد', 'Mohammad Ahmad', 'B001', 'عائلة', '5', '', 'فول؛سبت احد اربعاء', '', 'فول؛كبدة - شكشوكة؛تونة']}
+          templateHeaders={[
+            'الاسم', 'الاسم الإنجليزي', 'الكود', 'الفئة', 'الفيلا', 'النظام الغذائي',
+            'محظورات الفطور', 'محظورات سناكات الفطور',
+            'محظورات الغداء', 'محظورات سناكات الغداء',
+            'محظورات العشاء', 'محظورات سناكات العشاء',
+            'ثابتة الفطور', 'ثابتة سناكات الفطور',
+            'ثابتة الغداء', 'ثابتة سناكات الغداء',
+            'ثابتة العشاء', 'ثابتة سناكات العشاء',
+            'ملاحظات',
+          ]}
+          templateRow={[
+            'محمد أحمد', 'Mohammad Ahmad', 'B001', 'عائلة', '5', '',
+            'فول؛كبدة - شكشوكة؛تونة', '',
+            '', '',
+            '', '',
+            'فول؛سبت احد اربعاء', '',
+            '', '',
+            '', '',
+            '',
+          ]}
           onClose={() => setImportOpen(false)}
           onDone={() => { setImportOpen(false); fetchData(); }}
           onImport={async (rows) => {
-            let imported = 0;
             const errors: string[] = [];
-
-            // Load all meals for name→{id,type} lookup
-            const { data: mealsData } = await supabase.from('meals').select('id, name, type');
-            const mealByName = new Map<string, { id: string; type: string }>(
-              (mealsData ?? []).map(m => [m.name, { id: m.id, type: m.type }])
-            );
 
             const DAY_MAP: Record<string, number> = {
               'سبت': 6, 'السبت': 6,
-              'احد': 0, 'أحد': 0, 'الأحد': 0,
-              'اثنين': 1, 'الاثنين': 1,
+              'احد': 0, 'أحد': 0, 'الأحد': 0, 'الاحد': 0,
+              'اثنين': 1, 'إثنين': 1, 'الاثنين': 1, 'الإثنين': 1,
               'ثلاثاء': 2, 'الثلاثاء': 2,
-              'اربعاء': 3, 'أربعاء': 3, 'الأربعاء': 3,
+              'اربعاء': 3, 'أربعاء': 3, 'الأربعاء': 3, 'الاربعاء': 3,
               'خميس': 4, 'الخميس': 4,
               'جمعة': 5, 'الجمعة': 5,
             };
 
-            // مسح كل المستفيدين الحاليين (استبدال كامل)
-            const { data: allBens } = await supabase.from('beneficiaries').select('id');
-            const allIds = (allBens ?? []).map((b: { id: string }) => b.id);
-            if (allIds.length > 0) {
-              await supabase.from('beneficiaries').delete().in('id', allIds);
-            }
+            const EXCL_COLS = [
+              { col: 'محظورات الفطور',        type: 'breakfast', isSnack: false },
+              { col: 'محظورات سناكات الفطور',  type: 'breakfast', isSnack: true  },
+              { col: 'محظورات الغداء',         type: 'lunch',     isSnack: false },
+              { col: 'محظورات سناكات الغداء',  type: 'lunch',     isSnack: true  },
+              { col: 'محظورات العشاء',         type: 'dinner',    isSnack: false },
+              { col: 'محظورات سناكات العشاء',  type: 'dinner',    isSnack: true  },
+            ] as const;
+
+            const FIXED_COLS = [
+              { col: 'ثابتة الفطور',        type: 'breakfast', isSnack: false },
+              { col: 'ثابتة سناكات الفطور',  type: 'breakfast', isSnack: true  },
+              { col: 'ثابتة الغداء',         type: 'lunch',     isSnack: false },
+              { col: 'ثابتة سناكات الغداء',  type: 'lunch',     isSnack: true  },
+              { col: 'ثابتة العشاء',         type: 'dinner',    isSnack: false },
+              { col: 'ثابتة سناكات العشاء',  type: 'dinner',    isSnack: true  },
+            ] as const;
+
+            // ① حذف المستفيدين الحاليين + جلب الأصناف — بالتوازي
+            const [, mealsResult] = await Promise.all([
+              supabase.from('beneficiaries').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+              supabase.from('meals').select('id, name, type, is_snack'),
+            ]);
+            const mealsData = mealsResult.data ?? [];
+
+            // مفتاح مركّب: اسم|نوع|سناك — يمنع تلخبط الأصناف بنفس الاسم في وجبات مختلفة
+            const mealByKey = new Map(
+              mealsData.map(m => [`${m.name.trim()}|${m.type}|${String(m.is_snack)}`, m] as const)
+            );
+            const lookupMeal = (name: string, type: string, isSnack: boolean) =>
+              mealByKey.get(`${name}|${type}|${String(isSnack)}`);
+
+            // ② تحليل الصفوف
+            type ParsedRow = {
+              rowIdx: number;
+              payload: Record<string, unknown>;
+              exclCols: { type: string; isSnack: boolean; raw: string }[];
+              fixedCols: { type: string; isSnack: boolean; raw: string }[];
+            };
+            const parsed: ParsedRow[] = [];
 
             for (let i = 0; i < rows.length; i++) {
               const row = rows[i];
-              const name = row['الاسم']?.trim();
-              const code = row['الكود']?.trim();
-              if (!name || !code) {
-                errors.push(`صف ${i + 2}: الاسم والكود مطلوبان`);
-                continue;
-              }
-
-              const { data: benData, error: benError } = await supabase
-                .from('beneficiaries')
-                .insert({
+              const name = row['الاسم']?.toString().trim();
+              const code = row['الكود']?.toString().trim();
+              if (!name && !code) continue;
+              if (!name || !code) { errors.push(`صف ${i + 2}: الاسم والكود مطلوبان`); continue; }
+              parsed.push({
+                rowIdx: i,
+                payload: {
                   name,
-                  english_name: row['الاسم الإنجليزي']?.trim() || null,
+                  english_name: row['الاسم الإنجليزي']?.toString().trim() || null,
                   code,
-                  category: row['الفئة']?.trim() || null,
-                  villa: row['الفيلا']?.trim() || null,
-                  diet_type: row['النظام الغذائي']?.trim() || null,
-                  fixed_items: null,
-                  notes: row['ملاحظات']?.trim() || null,
-                })
-                .select('id')
-                .single();
+                  category: row['الفئة']?.toString().trim() || '',
+                  villa: row['الفيلا']?.toString().trim() || null,
+                  diet_type: row['النظام الغذائي']?.toString().trim() || null,
+                  notes: row['ملاحظات']?.toString().trim() || null,
+                },
+                exclCols:  EXCL_COLS.map(c => ({ type: c.type, isSnack: c.isSnack, raw: row[c.col]?.toString().trim() || '' })),
+                fixedCols: FIXED_COLS.map(c => ({ type: c.type, isSnack: c.isSnack, raw: row[c.col]?.toString().trim() || '' })),
+              });
+            }
 
-              if (benError || !benData) {
-                errors.push(`صف ${i + 2} (${name}): ${benError?.message ?? 'خطأ غير معروف'}`);
-                continue;
-              }
+            if (parsed.length === 0) return { imported: 0, errors };
 
-              const benId = benData.id;
+            // ③ bulk insert المستفيدين
+            const CHUNK = 50;
+            const codeToId = new Map<string, string>();
 
-              // الأصناف المحظورة وبدائلها: فول؛كبدة - شكشوكة؛تونة
-              const exclusionRaw = (row['الأصناف المحظورة وبدائلها'] ?? '').trim();
-              if (exclusionRaw) {
-                const pairs = exclusionRaw.split('-').map(s => s.trim()).filter(Boolean);
-                for (const pair of pairs) {
-                  const parts = pair.split('؛').map(s => s.trim());
-                  const mealName = parts[0];
-                  const altName = parts[1] ?? '';
-                  const meal = mealByName.get(mealName);
-                  if (!meal) {
-                    errors.push(`صف ${i + 2}: الصنف "${mealName}" غير موجود في قاعدة البيانات`);
-                    continue;
-                  }
-                  const altMeal = altName ? (mealByName.get(altName) ?? null) : null;
-                  if (altName && !altMeal) {
-                    errors.push(`صف ${i + 2}: البديل "${altName}" غير موجود في قاعدة البيانات`);
-                  }
-                  await supabase.from('exclusions').insert({
-                    beneficiary_id: benId,
-                    meal_id: meal.id,
-                    alternative_meal_id: altMeal?.id ?? null,
-                  });
+            for (let c = 0; c < parsed.length; c += CHUNK) {
+              const chunk = parsed.slice(c, c + CHUNK);
+              const { data, error } = await supabase
+                .from('beneficiaries')
+                .insert(chunk.map(r => r.payload))
+                .select('id, code');
+              if (error) { errors.push(`خطأ في إدراج المجموعة ${Math.floor(c / CHUNK) + 1}: ${error.message}`); continue; }
+              for (const b of data ?? []) codeToId.set(b.code, b.id);
+            }
+
+            // ④ بناء صفوف المحظورات والأصناف الثابتة
+            const exclusionRows: Record<string, unknown>[] = [];
+            const fixedRows:     Record<string, unknown>[] = [];
+
+            for (const { rowIdx: i, payload, exclCols, fixedCols } of parsed) {
+              const benId = codeToId.get(payload.code as string);
+              if (!benId) continue;
+
+              for (const { type, isSnack, raw } of exclCols) {
+                if (!raw) continue;
+                for (const pair of raw.split(/ - | -|- /).map(s => s.trim()).filter(Boolean)) {
+                  const [mealName, altName] = pair.split('؛').map(s => s.trim());
+                  if (!mealName) continue;
+                  const meal = lookupMeal(mealName, type, isSnack);
+                  if (!meal) { errors.push(`صف ${i + 2}: الصنف "${mealName}" غير موجود في هذه الوجبة`); continue; }
+                  const altMeal = altName ? (lookupMeal(altName, type, isSnack) ?? null) : null;
+                  if (altName && !altMeal) errors.push(`صف ${i + 2}: البديل "${altName}" غير موجود في هذه الوجبة`);
+                  exclusionRows.push({ beneficiary_id: benId, meal_id: meal.id, alternative_meal_id: altMeal?.id ?? null });
                 }
               }
 
-              // الأصناف الثابتة: فول؛سبت احد اربعاء - صنف2؛يوم1
-              const fixedRaw = (row['الأصناف الثابتة'] ?? '').trim();
-              if (fixedRaw) {
-                const parts = fixedRaw.split('-').map(s => s.trim()).filter(Boolean);
-                for (const part of parts) {
-                  const [mealName, daysStr] = part.split('؛').map(s => s.trim());
-                  if (!mealName || !daysStr) continue;
-                  const meal = mealByName.get(mealName);
-                  if (!meal) {
-                    errors.push(`صف ${i + 2}: الصنف الثابت "${mealName}" غير موجود في قاعدة البيانات`);
-                    continue;
-                  }
-                  const days = daysStr.split(/\s+/).filter(Boolean);
-                  for (const dayStr of days) {
+              for (const { type, isSnack, raw } of fixedCols) {
+                if (!raw) continue;
+                for (const part of raw.split(/ - | -|- /).map(s => s.trim()).filter(Boolean)) {
+                  const [mealPart, daysStr] = part.split('؛').map(s => s.trim());
+                  if (!mealPart || !daysStr) continue;
+                  // اسم الصنف قد يحتوي على كمية: فول×2
+                  const qtyMatch = mealPart.match(/^(.+?)×(\d+)$/);
+                  const mealName = qtyMatch ? qtyMatch[1].trim() : mealPart;
+                  const quantity = qtyMatch ? parseInt(qtyMatch[2], 10) : 1;
+                  const meal = lookupMeal(mealName, type, isSnack);
+                  if (!meal) { errors.push(`صف ${i + 2}: الصنف الثابت "${mealName}" غير موجود في هذه الوجبة`); continue; }
+                  for (const dayStr of daysStr.split(/[\s،,]+/).filter(Boolean)) {
                     const dayNum = DAY_MAP[dayStr];
-                    if (dayNum === undefined) {
-                      errors.push(`صف ${i + 2}: اليوم "${dayStr}" غير معروف`);
-                      continue;
-                    }
-                    await supabase.from('beneficiary_fixed_meals').insert({
-                      beneficiary_id: benId,
-                      day_of_week: dayNum,
-                      meal_type: meal.type,
-                      meal_id: meal.id,
-                    });
+                    if (dayNum === undefined) { errors.push(`صف ${i + 2}: اليوم "${dayStr}" غير معروف`); continue; }
+                    fixedRows.push({ beneficiary_id: benId, day_of_week: dayNum, meal_type: meal.type, meal_id: meal.id, quantity });
                   }
                 }
               }
+            }
 
-              imported++;
+            // ⑤ bulk insert
+            if (exclusionRows.length > 0) {
+              for (let c = 0; c < exclusionRows.length; c += CHUNK) {
+                const { error } = await supabase.from('exclusions').insert(exclusionRows.slice(c, c + CHUNK));
+                if (error) errors.push(`خطأ في المحظورات: ${error.message}`);
+              }
+            }
+            if (fixedRows.length > 0) {
+              for (let c = 0; c < fixedRows.length; c += CHUNK) {
+                const { error } = await supabase.from('beneficiary_fixed_meals').insert(fixedRows.slice(c, c + CHUNK));
+                if (error) errors.push(`خطأ في الأصناف الثابتة: ${error.message}`);
+              }
             }
 
             await fetchData();
-            return { imported, errors };
+            return { imported: codeToId.size, errors };
           }}
         />
       )}
