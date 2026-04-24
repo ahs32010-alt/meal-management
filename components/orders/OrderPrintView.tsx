@@ -37,7 +37,9 @@ function weekNumber(dateStr: string) {
 export default function OrderPrintView({ orderId }: { orderId: string }) {
   const [report, setReport] = useState<FullReport | null>(null);
   const [error, setError] = useState('');
-  const [showFixedSection, setShowFixedSection] = useState(true);
+  const [showFixedSection, setShowFixedSection] = useState(() =>
+    typeof window !== 'undefined' ? localStorage.getItem('orderPrintShowFixed') !== '0' : true
+  );
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/orders/${orderId}/report`);
@@ -147,7 +149,10 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
             <input
               type="checkbox"
               checked={showFixedSection}
-              onChange={e => setShowFixedSection(e.target.checked)}
+              onChange={e => {
+                setShowFixedSection(e.target.checked);
+                localStorage.setItem('orderPrintShowFixed', e.target.checked ? '1' : '0');
+              }}
               style={{ cursor: 'pointer', accentColor: '#7c3aed' }}
             />
             إظهار الأصناف الثابتة

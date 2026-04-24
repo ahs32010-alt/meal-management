@@ -39,6 +39,9 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [showFixed, setShowFixed] = useState(() =>
+    typeof window !== 'undefined' ? localStorage.getItem('orderPrintShowFixed') !== '0' : true
+  );
   const supabase = createClient();
 
   const mainMeals = useMemo(() => meals.filter(m => m.type === mealType && !m.is_snack), [meals, mealType]);
@@ -293,6 +296,20 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                 </div>
               </div>
             )}
+
+            {/* Fixed items toggle */}
+            <label className="flex items-center gap-2.5 cursor-pointer select-none py-2 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors">
+              <input
+                type="checkbox"
+                checked={showFixed}
+                onChange={e => {
+                  setShowFixed(e.target.checked);
+                  localStorage.setItem('orderPrintShowFixed', e.target.checked ? '1' : '0');
+                }}
+                className="w-4 h-4 accent-violet-600 cursor-pointer"
+              />
+              <span className="text-sm text-slate-700 font-medium">إظهار الأصناف الثابتة في أمر التشغيل</span>
+            </label>
 
             {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>}
           </div>

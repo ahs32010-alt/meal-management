@@ -5,6 +5,10 @@ import { createClient } from '@/lib/supabase-client';
 import type { MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import { toCSV, parseCSV, downloadCSV } from '@/lib/csv-utils';
+import UsersManager from './UsersManager';
+import { useCurrentUser } from '@/lib/use-current-user';
+
+type Tab = 'translit' | 'users';
 
 interface Row {
   mealId: string;
@@ -44,6 +48,9 @@ export default function SettingsView() {
   const [importMsg, setImportMsg] = useState('');
   const importRef = useRef<HTMLInputElement>(null);
   const supabase = useMemo(() => createClient(), []);
+  const [tab, setTab] = useState<Tab>('translit');
+  const { user: currentUser } = useCurrentUser();
+  const isAdmin = currentUser?.is_admin === true;
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -146,9 +153,35 @@ export default function SettingsView() {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-800">الإعدادات</h1>
-        <p className="text-slate-500 text-sm mt-0.5">الترجمة الحرفية لكل الأصناف — عدّل الترجمة أو نوع الصنف مباشرة</p>
+        <p className="text-slate-500 text-sm mt-0.5">إدارة إعدادات النظام والمستخدمين والصلاحيات</p>
       </div>
 
+      <div className="flex items-center gap-1 border-b border-slate-200">
+        <button
+          onClick={() => setTab('translit')}
+          className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${
+            tab === 'translit'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          الترجمة الحرفية
+        </button>
+        {isAdmin && (
+          <button
+            onClick={() => setTab('users')}
+            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${
+              tab === 'users'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            المستخدمون والصلاحيات
+          </button>
+        )}
+      </div>
+
+      {tab === 'users' && isAdmin ? <UsersManager /> : (
       <div className="card overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 bg-slate-50 flex items-center gap-3">
           <div className="flex-1">
@@ -307,6 +340,7 @@ export default function SettingsView() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
