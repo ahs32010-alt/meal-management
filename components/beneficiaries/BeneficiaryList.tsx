@@ -153,12 +153,171 @@ export default function BeneficiaryList() {
   return (
     <div className="p-6 space-y-4">
 
-      <h1 className="text-2xl font-bold">المستفيدون</h1>
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h1 className="text-2xl font-bold text-slate-800">المستفيدون</h1>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => setImportOpen(true)} className="btn-secondary text-sm">استيراد Excel</button>
+          <button onClick={handleExport} disabled={beneficiaries.length === 0} className="btn-secondary text-sm">تصدير Excel</button>
+          <button
+            onClick={handleDeleteAll}
+            disabled={deletingAll || beneficiaries.length === 0}
+            className="btn-secondary text-sm text-red-600 hover:bg-red-50 border-red-200"
+          >
+            {deletingAll ? 'جاري الحذف...' : 'حذف الكل'}
+          </button>
+          <button onClick={handleAdd} className="btn-primary text-sm">+ إضافة مستفيد</button>
+        </div>
+      </div>
 
+      {/* Search + count */}
+      <div className="flex items-center gap-3">
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="ابحث بالاسم أو الكود أو الفيلا..."
+          className="input-field max-w-sm"
+        />
+        <span className="text-sm text-slate-500">{filtered.length} مستفيد</span>
+      </div>
+
+      {/* Table */}
       {loading ? (
-        <p>جاري التحميل...</p>
+        <div className="flex justify-center py-12">
+          <div className="animate-spin w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full" />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="py-16 text-center text-slate-400">
+          <p className="font-medium">{search ? 'لا توجد نتائج' : 'لا يوجد مستفيدون بعد'}</p>
+        </div>
       ) : (
-        <p>{filtered.length} مستفيد</p>
+        <div className="card overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="bg-slate-50 text-right">
+                <th className="table-header">#</th>
+                <th className="table-header">الاسم</th>
+                <th className="table-header">الكود</th>
+                <th className="table-header">الفئة</th>
+                <th className="table-header">الفيلا</th>
+                <th className="table-header">النظام الغذائي</th>
+                <th className="table-header">الأصناف الثابتة</th>
+                <th className="table-header">الأصناف المحظورة</th>
+                <th className="table-header">ملاحظات</th>
+                <th className="table-header text-center">الإجراءات</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((b, idx) => (
+                <tr key={b.id} className="hover:bg-slate-50 transition-colors border-t border-slate-100">
+                  <td className="table-cell text-slate-400 text-xs">{idx + 1}</td>
+                  <td className="table-cell">
+                    <div className="font-semibold text-slate-800">{b.name}</div>
+                    {b.english_name && <div className="text-xs text-slate-400">{b.english_name}</div>}
+                  </td>
+                  <td className="table-cell">
+                    <span className="font-mono text-sm bg-slate-100 px-2 py-0.5 rounded">{b.code}</span>
+                  </td>
+                  <td className="table-cell text-slate-600">{b.category ?? '—'}</td>
+                  <td className="table-cell text-slate-600">{b.villa ?? '—'}</td>
+                  <td className="table-cell text-slate-600">{b.diet_type ?? '—'}</td>
+                  <td className="table-cell">
+                    {(b.fixed_meals ?? []).length === 0 ? (
+                      <span className="text-slate-300 text-xs">لا يوجد</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {(b.fixed_meals ?? []).map(fm => (
+                          <span key={fm.id} className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.5 rounded">
+                            {(fm as any).meals?.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  <td className="table-cell">
+                    {(b.exclusions ?? []).length === 0 ? (
+                      <span className="text-slate-300 text-xs">لا يوجد</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {(b.exclusions ?? []).map(e => (
+                          <span key={e.id} className="text-xs bg-red-50 text-red-700 border border-red-100 px-1.5 py-0.5 rounded">
+                            {e.meals?.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  <td className="table-cell text-slate-500 text-sm">{b.notes ?? '—'}</td>
+                  <td className="table-cell">
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => handleEdit(b)}
+                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        title="تعديل"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => handleDelete(b.id)}
+                        disabled={deleting === b.id}
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
+                        title="حذف"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {isModalOpen && (
+        <BeneficiaryModal
+          beneficiary={editingBeneficiary}
+          meals={meals}
+          onClose={() => setIsModalOpen(false)}
+          onSaved={handleSaved}
+        />
+      )}
+
+      {importOpen && (
+        <ImportModal
+          title="المستفيدون"
+          templateHeaders={['الاسم', 'الاسم الإنجليزي', 'الكود', 'الفئة', 'الفيلا', 'النظام الغذائي', 'ملاحظات']}
+          templateRow={['محمد أحمد', 'Mohammad Ahmad', 'B001', 'عائلة', '5', '', '']}
+          onClose={() => setImportOpen(false)}
+          onDone={() => { setImportOpen(false); fetchData(); }}
+          onImport={async (rows) => {
+            let imported = 0;
+            const errors: string[] = [];
+            for (const row of rows) {
+              const name = row['الاسم']?.trim();
+              const code = row['الكود']?.trim();
+              if (!name || !code) { errors.push(`سطر بدون اسم أو كود: ${JSON.stringify(row)}`); continue; }
+              const { error } = await supabase.from('beneficiaries').insert({
+                name,
+                english_name: row['الاسم الإنجليزي']?.trim() || null,
+                code,
+                category: row['الفئة']?.trim() || null,
+                villa: row['الفيلا']?.trim() || null,
+                diet_type: row['النظام الغذائي']?.trim() || null,
+                notes: row['ملاحظات']?.trim() || null,
+              });
+              if (error) errors.push(`${name}: ${error.message}`);
+              else imported++;
+            }
+            await fetchData();
+            return { imported, errors };
+          }}
+        />
       )}
 
     </div>
