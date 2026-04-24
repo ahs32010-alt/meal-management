@@ -88,9 +88,14 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
   useEffect(() => { onClose?.(); }, [pathname]);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    try {
+      // أغلق كل قنوات Realtime أولاً قبل تسجيل الخروج
+      await supabase.removeAllChannels();
+    } catch {}
+    try {
+      await supabase.auth.signOut();
+    } catch {}
     router.push('/login');
-    router.refresh();
   };
 
   const desktopClass = desktopOpen ? 'md:translate-x-0' : 'md:translate-x-full';

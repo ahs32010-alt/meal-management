@@ -6,6 +6,7 @@ import type { Beneficiary, Meal } from '@/lib/types';
 import { DAY_LABELS, DAYS_ORDER } from '@/lib/types';
 import BeneficiaryModal from './BeneficiaryModal';
 import ImportModal from '@/components/shared/ImportModal';
+import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import { exportXLSX } from '@/lib/xlsx-utils';
 
 // ─── Collapsible pills with popover ────────────────────────────────────────
@@ -72,6 +73,7 @@ export default function BeneficiaryList() {
   const [sortKey, setSortKey] = useState<'name' | 'code' | 'villa'>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
 
   const supabase = useMemo(() => createClient(), []);
@@ -126,27 +128,35 @@ export default function BeneficiaryList() {
     fetchData();
   }, [fetchData]);
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('هل أنت متأكد من حذف هذا المستفيد؟')) return;
-
-    setDeleting(id);
-    await supabase.from('beneficiaries').delete().eq('id', id);
-    await fetchData();
-    setDeleting(null);
+  const handleDelete = (id: string) => {
+    const ben = beneficiaries.find(b => b.id === id);
+    setDialog({
+      title: 'حذف مستفيد',
+      message: `هل أنت متأكد من حذف "${ben?.name ?? 'هذا المستفيد'}"؟ لا يمكن التراجع عن هذه العملية.`,
+      onConfirm: async () => {
+        setDialog(null);
+        setDeleting(id);
+        await supabase.from('beneficiaries').delete().eq('id', id);
+        await fetchData();
+        setDeleting(null);
+      },
+    });
   };
 
-  const handleDeleteAll = async () => {
+  const handleDeleteAll = () => {
     if (beneficiaries.length === 0) return;
-
-    if (!confirm(`هل أنت متأكد من حذف جميع المستفيدين (${beneficiaries.length})؟`)) return;
-
-    setDeletingAll(true);
-
-    const ids = beneficiaries.map(b => b.id);
-    await supabase.from('beneficiaries').delete().in('id', ids);
-
-    await fetchData();
-    setDeletingAll(false);
+    setDialog({
+      title: 'حذف جميع المستفيدين',
+      message: `هل أنت متأكد من حذف جميع المستفيدين (${beneficiaries.length})؟ لا يمكن التراجع عن هذه العملية.`,
+      onConfirm: async () => {
+        setDialog(null);
+        setDeletingAll(true);
+        const ids = beneficiaries.map(b => b.id);
+        await supabase.from('beneficiaries').delete().in('id', ids);
+        await fetchData();
+        setDeletingAll(false);
+      },
+    });
   };
 
   const handleEdit = (b: Beneficiary) => {
@@ -608,6 +618,14 @@ export default function BeneficiaryList() {
           }}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={!!dialog}
+        title={dialog?.title ?? ''}
+        message={dialog?.message ?? ''}
+        onConfirm={() => dialog?.onConfirm()}
+        onCancel={() => setDialog(null)}
+      />
 
     </div>
   );

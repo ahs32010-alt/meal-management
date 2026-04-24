@@ -7,6 +7,7 @@ import type { DailyOrder, Meal } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
 import OrderModal from './OrderModal';
+import ConfirmDialog from '@/components/shared/ConfirmDialog';
 
 const MEAL_TYPE_STYLES: Record<string, string> = {
   breakfast: 'bg-yellow-100 text-yellow-700',
@@ -23,6 +24,7 @@ export default function OrderList() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<DailyOrder | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const supabase = useMemo(() => createClient(), []);
 
   const fetchData = useCallback(async () => {
@@ -58,12 +60,19 @@ export default function OrderList() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('هل أنت متأكد من حذف أمر التشغيل هذا؟')) return;
-    setDeleting(id);
-    await supabase.from('daily_orders').delete().eq('id', id);
-    await fetchData();
-    setDeleting(null);
+  const handleDelete = (id: string) => {
+    const order = orders.find(o => o.id === id);
+    setDialog({
+      title: 'حذف أمر التشغيل',
+      message: `هل أنت متأكد من حذف أمر التشغيل${order ? ` بتاريخ ${order.date}` : ''}؟ لا يمكن التراجع عن هذه العملية.`,
+      onConfirm: async () => {
+        setDialog(null);
+        setDeleting(id);
+        await supabase.from('daily_orders').delete().eq('id', id);
+        await fetchData();
+        setDeleting(null);
+      },
+    });
   };
 
   const itemLabel = (item: { display_name?: string | null; meals?: { name?: string } | null }) =>
@@ -208,6 +217,14 @@ export default function OrderList() {
           onSaved={() => { setIsModalOpen(false); setEditingOrder(null); fetchData(); }}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={!!dialog}
+        title={dialog?.title ?? ''}
+        message={dialog?.message ?? ''}
+        onConfirm={() => dialog?.onConfirm()}
+        onCancel={() => setDialog(null)}
+      />
     </div>
   );
 }

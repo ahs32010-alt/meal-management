@@ -6,6 +6,7 @@ import type { Meal, MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import MealModal from './MealModal';
 import ImportModal from '@/components/shared/ImportModal';
+import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import { exportXLSX } from '@/lib/xlsx-utils';
 
 const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner'];
@@ -202,6 +203,7 @@ export default function MealList() {
   const [modalDefaults, setModalDefaults] = useState<{ type: MealType; isSnack: boolean }>({ type: 'lunch', isSnack: false });
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
+  const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const supabase = useMemo(() => createClient(), []);
 
   const fetchMeals = useCallback(async () => {
@@ -219,28 +221,40 @@ export default function MealList() {
 
   useEffect(() => { fetchMeals(); }, [fetchMeals]);
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('هل أنت متأكد من الحذف؟')) return;
-    setDeleting(id);
+  const handleDelete = (id: string) => {
     const meal = meals.find(m => m.id === id);
-    await supabase.from('meals').delete().eq('id', id);
-    if (meal) await supabase.from('custom_transliterations').delete().eq('word', meal.name);
-    await fetchMeals();
-    setDeleting(null);
+    setDialog({
+      title: 'حذف صنف',
+      message: `هل أنت متأكد من حذف "${meal?.name ?? 'هذا الصنف'}"؟ لا يمكن التراجع عن هذه العملية.`,
+      onConfirm: async () => {
+        setDialog(null);
+        setDeleting(id);
+        await supabase.from('meals').delete().eq('id', id);
+        if (meal) await supabase.from('custom_transliterations').delete().eq('word', meal.name);
+        await fetchMeals();
+        setDeleting(null);
+      },
+    });
   };
 
-  const handleDeleteAll = async (type: MealType, isSnack: boolean) => {
+  const handleDeleteAll = (type: MealType, isSnack: boolean) => {
     const section = meals.filter(m => m.type === type && m.is_snack === isSnack);
     if (section.length === 0) return;
     const label = isSnack ? 'سناكات' : 'أصناف';
-    if (!confirm(`هل أنت متأكد من حذف جميع ${label} هذه القائمة (${section.length} صنف)؟`)) return;
-    setDeletingAll(true);
-    const ids = section.map(m => m.id);
-    const names = section.map(m => m.name);
-    await supabase.from('meals').delete().in('id', ids);
-    await supabase.from('custom_transliterations').delete().in('word', names);
-    await fetchMeals();
-    setDeletingAll(false);
+    setDialog({
+      title: `حذف جميع ${label} القائمة`,
+      message: `هل أنت متأكد من حذف ${section.length} ${label} من هذه القائمة؟ لا يمكن التراجع عن هذه العملية.`,
+      onConfirm: async () => {
+        setDialog(null);
+        setDeletingAll(true);
+        const ids = section.map(m => m.id);
+        const names = section.map(m => m.name);
+        await supabase.from('meals').delete().in('id', ids);
+        await supabase.from('custom_transliterations').delete().in('word', names);
+        await fetchMeals();
+        setDeletingAll(false);
+      },
+    });
   };
 
   const handleAdd = (type: MealType, isSnack: boolean) => {
@@ -409,6 +423,14 @@ export default function MealList() {
           onSaved={() => { setModalOpen(false); fetchMeals(); }}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={!!dialog}
+        title={dialog?.title ?? ''}
+        message={dialog?.message ?? ''}
+        onConfirm={() => dialog?.onConfirm()}
+        onCancel={() => setDialog(null)}
+      />
 
       {bulkAddTarget && (
         <BulkAddModal
