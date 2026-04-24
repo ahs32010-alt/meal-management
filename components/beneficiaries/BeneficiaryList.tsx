@@ -109,8 +109,35 @@ export default function BeneficiaryList() {
   };
 
   const handleExport = () => {
+    const DAY_SHORT: Record<number, string> = {
+      0: 'احد', 1: 'اثنين', 2: 'ثلاثاء', 3: 'اربعاء', 4: 'خميس', 5: 'جمعة', 6: 'سبت',
+    };
+
     const rows = beneficiaries.map(b => {
+      // الأصناف المحظورة وبدائلها: فول؛كبدة - شكشوكة؛تونة
       const excl = b.exclusions ?? [];
+      const exclusionStr = excl
+        .map(e => {
+          const mealName = e.meals?.name ?? '';
+          const altName = (e as any).alternative_meal?.name ?? '';
+          return altName ? `${mealName}؛${altName}` : mealName;
+        })
+        .filter(Boolean)
+        .join(' - ');
+
+      // الأصناف الثابتة: فول؛سبت احد اربعاء - صنف2؛يوم1
+      const fixedMeals = b.fixed_meals ?? [];
+      const mealDaysMap = new Map<string, number[]>();
+      for (const fm of fixedMeals) {
+        const mealName = (fm as any).meals?.name ?? '';
+        if (!mealName) continue;
+        if (!mealDaysMap.has(mealName)) mealDaysMap.set(mealName, []);
+        mealDaysMap.get(mealName)!.push(fm.day_of_week);
+      }
+      const fixedStr = Array.from(mealDaysMap.entries())
+        .map(([meal, days]) => `${meal}؛${days.map(d => DAY_SHORT[d]).join(' ')}`)
+        .join(' - ');
+
       return {
         'الاسم': b.name,
         'الاسم الإنجليزي': b.english_name ?? '',
@@ -118,10 +145,9 @@ export default function BeneficiaryList() {
         'الفئة': b.category ?? '',
         'الفيلا': b.villa ?? '',
         'النظام الغذائي': b.diet_type ?? '',
-        'الأصناف الثابتة': b.fixed_items ?? '',
+        'الأصناف الثابتة': fixedStr,
         'ملاحظات': b.notes ?? '',
-        'الأصناف المحظورة': excl.map(e => e.meals?.name ?? '').filter(Boolean).join(';'),
-        'البدائل': excl.map(e => (e as any).alternative_meal?.name ?? '').join(';'),
+        'الأصناف المحظورة وبدائلها': exclusionStr,
       };
     });
     exportXLSX(rows, `مستفيدون_${new Date().toISOString().slice(0, 10)}.xlsx`, 'المستفيدون');
@@ -292,19 +318,36 @@ export default function BeneficiaryList() {
       {importOpen && (
         <ImportModal
           title="المستفيدون"
-          templateHeaders={['الاسم', 'الاسم الإنجليزي', 'الكود', 'الفئة', 'الفيلا', 'النظام الغذائي', 'الأصناف الثابتة', 'ملاحظات', 'الأصناف المحظورة', 'البدائل']}
-          templateRow={['محمد أحمد', 'Mohammad Ahmad', 'B001', 'عائلة', '5', '', '', '', 'فول طحينة;بيض مسلوق', 'بيض أومليت;']}
+          templateHeaders={['الاسم', 'الاسم الإنجليزي', 'الكود', 'الفئة', 'الفيلا', 'النظام الغذائي', 'الأصناف الثابتة', 'ملاحظات', 'الأصناف المحظورة وبدائلها']}
+          templateRow={['محمد أحمد', 'Mohammad Ahmad', 'B001', 'عائلة', '5', '', 'فول؛سبت احد اربعاء', '', 'فول؛كبدة - شكشوكة؛تونة']}
           onClose={() => setImportOpen(false)}
           onDone={() => { setImportOpen(false); fetchData(); }}
           onImport={async (rows) => {
             let imported = 0;
             const errors: string[] = [];
 
-            // Load all meals once for name→id lookup
-            const { data: mealsData } = await supabase.from('meals').select('id, name');
-            const mealByName = new Map<string, string>(
-              (mealsData ?? []).map(m => [m.name, m.id])
+            // Load all meals for name→{id,type} lookup
+            const { data: mealsData } = await supabase.from('meals').select('id, name, type');
+            const mealByName = new Map<string, { id: string; type: string }>(
+              (mealsData ?? []).map(m => [m.name, { id: m.id, type: m.type }])
             );
+
+            const DAY_MAP: Record<string, number> = {
+              'سبت': 6, 'السبت': 6,
+              'احد': 0, 'أحد': 0, 'الأحد': 0,
+              'اثنين': 1, 'الاثنين': 1,
+              'ثلاثاء': 2, 'الثلاثاء': 2,
+              'اربعاء': 3, 'أربعاء': 3, 'الأربعاء': 3,
+              'خميس': 4, 'الخميس': 4,
+              'جمعة': 5, 'الجمعة': 5,
+            };
+
+            // مسح كل المستفيدين الحاليين (استبدال كامل)
+            const { data: allBens } = await supabase.from('beneficiaries').select('id');
+            const allIds = (allBens ?? []).map((b: { id: string }) => b.id);
+            if (allIds.length > 0) {
+              await supabase.from('beneficiaries').delete().in('id', allIds);
+            }
 
             for (let i = 0; i < rows.length; i++) {
               const row = rows[i];
@@ -315,19 +358,18 @@ export default function BeneficiaryList() {
                 continue;
               }
 
-              // Upsert beneficiary by code (update if exists, insert if new)
               const { data: benData, error: benError } = await supabase
                 .from('beneficiaries')
-                .upsert({
+                .insert({
                   name,
                   english_name: row['الاسم الإنجليزي']?.trim() || null,
                   code,
                   category: row['الفئة']?.trim() || null,
                   villa: row['الفيلا']?.trim() || null,
                   diet_type: row['النظام الغذائي']?.trim() || null,
-                  fixed_items: row['الأصناف الثابتة']?.trim() || null,
+                  fixed_items: null,
                   notes: row['ملاحظات']?.trim() || null,
-                }, { onConflict: 'code' })
+                })
                 .select('id')
                 .single();
 
@@ -338,32 +380,57 @@ export default function BeneficiaryList() {
 
               const benId = benData.id;
 
-              // Handle exclusions
-              const excludedNames = (row['الأصناف المحظورة'] ?? '')
-                .split(';').map(s => s.trim()).filter(Boolean);
-              const altNames = (row['البدائل'] ?? '')
-                .split(';').map(s => s.trim());
-
-              if (excludedNames.length > 0) {
-                // Replace existing exclusions for this beneficiary
-                await supabase.from('exclusions').delete().eq('beneficiary_id', benId);
-
-                for (let j = 0; j < excludedNames.length; j++) {
-                  const mealId = mealByName.get(excludedNames[j]);
-                  if (!mealId) {
-                    errors.push(`صف ${i + 2}: الصنف "${excludedNames[j]}" غير موجود في قاعدة البيانات`);
+              // الأصناف المحظورة وبدائلها: فول؛كبدة - شكشوكة؛تونة
+              const exclusionRaw = (row['الأصناف المحظورة وبدائلها'] ?? '').trim();
+              if (exclusionRaw) {
+                const pairs = exclusionRaw.split('-').map(s => s.trim()).filter(Boolean);
+                for (const pair of pairs) {
+                  const parts = pair.split('؛').map(s => s.trim());
+                  const mealName = parts[0];
+                  const altName = parts[1] ?? '';
+                  const meal = mealByName.get(mealName);
+                  if (!meal) {
+                    errors.push(`صف ${i + 2}: الصنف "${mealName}" غير موجود في قاعدة البيانات`);
                     continue;
                   }
-                  const altName = altNames[j] ?? '';
-                  const altMealId = altName ? (mealByName.get(altName) ?? null) : null;
-                  if (altName && !altMealId) {
+                  const altMeal = altName ? (mealByName.get(altName) ?? null) : null;
+                  if (altName && !altMeal) {
                     errors.push(`صف ${i + 2}: البديل "${altName}" غير موجود في قاعدة البيانات`);
                   }
                   await supabase.from('exclusions').insert({
                     beneficiary_id: benId,
-                    meal_id: mealId,
-                    alternative_meal_id: altMealId,
+                    meal_id: meal.id,
+                    alternative_meal_id: altMeal?.id ?? null,
                   });
+                }
+              }
+
+              // الأصناف الثابتة: فول؛سبت احد اربعاء - صنف2؛يوم1
+              const fixedRaw = (row['الأصناف الثابتة'] ?? '').trim();
+              if (fixedRaw) {
+                const parts = fixedRaw.split('-').map(s => s.trim()).filter(Boolean);
+                for (const part of parts) {
+                  const [mealName, daysStr] = part.split('؛').map(s => s.trim());
+                  if (!mealName || !daysStr) continue;
+                  const meal = mealByName.get(mealName);
+                  if (!meal) {
+                    errors.push(`صف ${i + 2}: الصنف الثابت "${mealName}" غير موجود في قاعدة البيانات`);
+                    continue;
+                  }
+                  const days = daysStr.split(/\s+/).filter(Boolean);
+                  for (const dayStr of days) {
+                    const dayNum = DAY_MAP[dayStr];
+                    if (dayNum === undefined) {
+                      errors.push(`صف ${i + 2}: اليوم "${dayStr}" غير معروف`);
+                      continue;
+                    }
+                    await supabase.from('beneficiary_fixed_meals').insert({
+                      beneficiary_id: benId,
+                      day_of_week: dayNum,
+                      meal_type: meal.type,
+                      meal_id: meal.id,
+                    });
+                  }
                 }
               }
 
