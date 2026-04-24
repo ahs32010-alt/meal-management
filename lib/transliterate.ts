@@ -34,8 +34,9 @@ export function transliterate(arabic: string, customDict?: Record<string, string
 
   if (customDict) {
     // Word-by-word: apply custom dict per token, fallback to char map
+    // Use || (not ??) so empty-string custom entries still fall through to auto-transliteration
     return clean.split(' ').map(word =>
-      customDict[word] ?? transliterateChars(word)
+      customDict[word] || transliterateChars(word)
     ).join(' ');
   }
 

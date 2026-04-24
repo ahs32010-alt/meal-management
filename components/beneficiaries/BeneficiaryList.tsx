@@ -32,7 +32,8 @@ export default function BeneficiaryList() {
             fixed_items, notes, created_at,
             exclusions(
               id, beneficiary_id, meal_id, alternative_meal_id,
-              meals:meals!exclusions_meal_id_fkey(id, name, type, is_snack)
+              meals:meals!exclusions_meal_id_fkey(id, name, type, is_snack),
+              alternative_meal:meals!exclusions_alternative_meal_id_fkey(id, name)
             ),
             fixed_meals:beneficiary_fixed_meals(
               id, beneficiary_id, day_of_week, meal_type, meal_id,
@@ -108,21 +109,21 @@ export default function BeneficiaryList() {
   };
 
   const handleExport = () => {
-    const rows = beneficiaries.map(b => ({
-      'الاسم': b.name,
-      'الاسم الإنجليزي': b.english_name ?? '',
-      'الكود': b.code,
-      'الفئة': b.category ?? '',
-      'الفيلا': b.villa ?? '',
-      'النظام الغذائي': b.diet_type ?? '',
-      'الأصناف الثابتة': b.fixed_items ?? '',
-      'ملاحظات': b.notes ?? '',
-      'الأصناف المحظورة': (b.exclusions ?? [])
-        .map(e => e.meals?.name ?? '')
-        .filter(Boolean)
-        .join(';'),
-    }));
-
+    const rows = beneficiaries.map(b => {
+      const excl = b.exclusions ?? [];
+      return {
+        'الاسم': b.name,
+        'الاسم الإنجليزي': b.english_name ?? '',
+        'الكود': b.code,
+        'الفئة': b.category ?? '',
+        'الفيلا': b.villa ?? '',
+        'النظام الغذائي': b.diet_type ?? '',
+        'الأصناف الثابتة': b.fixed_items ?? '',
+        'ملاحظات': b.notes ?? '',
+        'الأصناف المحظورة': excl.map(e => e.meals?.name ?? '').filter(Boolean).join(';'),
+        'البدائل': excl.map(e => (e as any).alternative_meal?.name ?? '').join(';'),
+      };
+    });
     exportXLSX(rows, `مستفيدون_${new Date().toISOString().slice(0, 10)}.xlsx`, 'المستفيدون');
   };
 
@@ -291,29 +292,84 @@ export default function BeneficiaryList() {
       {importOpen && (
         <ImportModal
           title="المستفيدون"
-          templateHeaders={['الاسم', 'الاسم الإنجليزي', 'الكود', 'الفئة', 'الفيلا', 'النظام الغذائي', 'ملاحظات']}
-          templateRow={['محمد أحمد', 'Mohammad Ahmad', 'B001', 'عائلة', '5', '', '']}
+          templateHeaders={['الاسم', 'الاسم الإنجليزي', 'الكود', 'الفئة', 'الفيلا', 'النظام الغذائي', 'الأصناف الثابتة', 'ملاحظات', 'الأصناف المحظورة', 'البدائل']}
+          templateRow={['محمد أحمد', 'Mohammad Ahmad', 'B001', 'عائلة', '5', '', '', '', 'فول طحينة;بيض مسلوق', 'بيض أومليت;']}
           onClose={() => setImportOpen(false)}
           onDone={() => { setImportOpen(false); fetchData(); }}
           onImport={async (rows) => {
             let imported = 0;
             const errors: string[] = [];
-            for (const row of rows) {
+
+            // Load all meals once for name→id lookup
+            const { data: mealsData } = await supabase.from('meals').select('id, name');
+            const mealByName = new Map<string, string>(
+              (mealsData ?? []).map(m => [m.name, m.id])
+            );
+
+            for (let i = 0; i < rows.length; i++) {
+              const row = rows[i];
               const name = row['الاسم']?.trim();
               const code = row['الكود']?.trim();
-              if (!name || !code) { errors.push(`سطر بدون اسم أو كود: ${JSON.stringify(row)}`); continue; }
-              const { error } = await supabase.from('beneficiaries').insert({
-                name,
-                english_name: row['الاسم الإنجليزي']?.trim() || null,
-                code,
-                category: row['الفئة']?.trim() || null,
-                villa: row['الفيلا']?.trim() || null,
-                diet_type: row['النظام الغذائي']?.trim() || null,
-                notes: row['ملاحظات']?.trim() || null,
-              });
-              if (error) errors.push(`${name}: ${error.message}`);
-              else imported++;
+              if (!name || !code) {
+                errors.push(`صف ${i + 2}: الاسم والكود مطلوبان`);
+                continue;
+              }
+
+              // Upsert beneficiary by code (update if exists, insert if new)
+              const { data: benData, error: benError } = await supabase
+                .from('beneficiaries')
+                .upsert({
+                  name,
+                  english_name: row['الاسم الإنجليزي']?.trim() || null,
+                  code,
+                  category: row['الفئة']?.trim() || null,
+                  villa: row['الفيلا']?.trim() || null,
+                  diet_type: row['النظام الغذائي']?.trim() || null,
+                  fixed_items: row['الأصناف الثابتة']?.trim() || null,
+                  notes: row['ملاحظات']?.trim() || null,
+                }, { onConflict: 'code' })
+                .select('id')
+                .single();
+
+              if (benError || !benData) {
+                errors.push(`صف ${i + 2} (${name}): ${benError?.message ?? 'خطأ غير معروف'}`);
+                continue;
+              }
+
+              const benId = benData.id;
+
+              // Handle exclusions
+              const excludedNames = (row['الأصناف المحظورة'] ?? '')
+                .split(';').map(s => s.trim()).filter(Boolean);
+              const altNames = (row['البدائل'] ?? '')
+                .split(';').map(s => s.trim());
+
+              if (excludedNames.length > 0) {
+                // Replace existing exclusions for this beneficiary
+                await supabase.from('exclusions').delete().eq('beneficiary_id', benId);
+
+                for (let j = 0; j < excludedNames.length; j++) {
+                  const mealId = mealByName.get(excludedNames[j]);
+                  if (!mealId) {
+                    errors.push(`صف ${i + 2}: الصنف "${excludedNames[j]}" غير موجود في قاعدة البيانات`);
+                    continue;
+                  }
+                  const altName = altNames[j] ?? '';
+                  const altMealId = altName ? (mealByName.get(altName) ?? null) : null;
+                  if (altName && !altMealId) {
+                    errors.push(`صف ${i + 2}: البديل "${altName}" غير موجود في قاعدة البيانات`);
+                  }
+                  await supabase.from('exclusions').insert({
+                    beneficiary_id: benId,
+                    meal_id: mealId,
+                    alternative_meal_id: altMealId,
+                  });
+                }
+              }
+
+              imported++;
             }
+
             await fetchData();
             return { imported, errors };
           }}

@@ -75,10 +75,12 @@ const navItems = [
 
 interface SidebarProps {
   open?: boolean;
+  desktopOpen?: boolean;
   onClose?: () => void;
+  onToggleDesktop?: () => void;
 }
 
-export default function Sidebar({ open = true, onClose }: SidebarProps) {
+export default function Sidebar({ open = true, desktopOpen = true, onClose, onToggleDesktop }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createClient();
@@ -91,9 +93,11 @@ export default function Sidebar({ open = true, onClose }: SidebarProps) {
     router.refresh();
   };
 
+  const desktopClass = desktopOpen ? 'md:translate-x-0' : 'md:translate-x-full';
+
   return (
     <aside className={`w-64 bg-slate-900 fixed right-0 top-0 h-screen flex flex-col z-40 shadow-xl transition-transform duration-300
-      md:translate-x-0 ${open ? 'translate-x-0' : 'translate-x-full'}`}>
+      ${desktopClass} ${open ? 'translate-x-0' : 'translate-x-full'}`}>
       {/* Logo */}
       <div className="px-6 py-5 border-b border-slate-700/50">
         <div className="flex items-center gap-3">
@@ -109,10 +113,20 @@ export default function Sidebar({ open = true, onClose }: SidebarProps) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
           </div>
-          <div>
+          <div className="flex-1">
             <h1 className="text-white font-bold text-sm leading-tight">نظام إدارة</h1>
             <p className="text-slate-400 text-xs">الوجبات</p>
           </div>
+          {/* Desktop hide button */}
+          <button
+            onClick={onToggleDesktop}
+            className="hidden md:flex text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-slate-700"
+            title="إخفاء القائمة"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+            </svg>
+          </button>
         </div>
       </div>
 

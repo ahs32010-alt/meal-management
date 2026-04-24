@@ -6,6 +6,7 @@ import type { DailyOrder, ReportData } from '@/lib/types';
 import { MEAL_TYPE_LABELS, MEAL_TYPE_EN } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
 import { transliterate } from '@/lib/transliterate';
+const t = (s: string, dict: Record<string, string>) => dict[s] ?? transliterate(s);
 
 // splits[ben_id][meal_id] = groupIndex  (0 = main sticker, 1 = sticker 2, …)
 // meal_ids not present default to group 0
@@ -47,43 +48,36 @@ function buildWordCell(
   const ben = detail.beneficiary;
   const items = detail.excludedItems ?? [];
   const excludedNames = items.map(({ meal }) => meal.name).join('، ');
-  const excludedTranslit = items.map(({ meal }) => transliterate(meal.name, customDict)).join(' | ');
+  const excludedTranslit = items.map(({ meal }) => transliterate(meal.name, customDict)).filter(Boolean).join(' | ');
   const fixedMealsToday = (detail.fixedItems ?? []).map(m => m.name);
   const altItems = items.filter(e => e.alternative);
   const allBadilNames = [...altItems.map(e => e.alternative!.name), ...fixedMealsToday];
-  const altTranslit = allBadilNames.map(n => transliterate(n, customDict)).join(' | ');
+  const altTranslit = allBadilNames.map(n => transliterate(n, customDict)).filter(Boolean).join(' | ');
 
   const gc = GROUP_COLORS[groupIndex] ?? GROUP_COLORS[0];
   const headerBg = groupIndex === 0 ? '#1e293b' : (
     groupIndex === 1 ? '#7c3aed' : groupIndex === 2 ? '#f43f5e' : groupIndex === 3 ? '#f59e0b' : '#059669'
   );
 
-  const metaLine = [
-    `<strong style="font-size:10.5pt;">${ben.code}</strong>`,
-    ben.villa ? `<span style="font-size:10pt;">فيلا ${ben.villa}</span>` : '',
-  ].filter(Boolean).join(' &nbsp;|&nbsp; ');
-
   const groupLabel = groupIndex > 0 ? ` ★ ${gc.label}` : '';
 
-  return `<td style="width:25%;vertical-align:top;border:2pt solid #1e293b;padding:0;direction:rtl;text-align:right;">
-  <div style="background:${headerBg};color:white;padding:5pt 8pt;display:flex;justify-content:space-between;align-items:center;">
-    <span style="font-size:13pt;font-weight:800;">${mealTypeAr}</span>
-    <span style="font-size:9pt;opacity:0.65;letter-spacing:1px;">${mealTypeEn}${groupLabel}</span>
+  return `<td style="width:25%;vertical-align:top;border:2pt solid #cbd5e1;border-radius:8pt;padding:0;direction:rtl;text-align:center;">
+  ${groupIndex > 0 ? `<div style="background:${headerBg};color:white;padding:3pt 8pt;font-size:9pt;font-weight:700;text-align:center;">${mealTypeAr} ${mealTypeEn}${groupLabel}</div>` : ''}
+  <div style="padding:5pt 8pt 3pt;text-align:center;border-bottom:1pt solid #e2e8f0;">
+    <div style="font-size:14pt;font-weight:800;color:#dc2626;">Code: ${ben.code}</div>
+    ${ben.villa ? `<div style="font-size:14pt;font-weight:800;color:#dc2626;">Villa: ${ben.villa}</div>` : ''}
   </div>
-  <div style="padding:6pt 8pt;">
-    <div style="margin-bottom:4pt;">${metaLine}</div>
-    <div style="font-size:14pt;font-weight:800;color:#0f172a;line-height:1.2;">${ben.name}</div>
-    ${ben.english_name ? `<div style="font-size:9.5pt;color:#475569;direction:ltr;text-align:right;margin-bottom:4pt;">${ben.english_name}</div>` : '<div style="margin-bottom:4pt;"></div>'}
-    <div style="border-top:1.5px solid #cbd5e1;padding-top:4pt;">
-      <div style="font-size:11pt;font-weight:800;color:#cc0000;">مستبعد</div>
-      <div style="font-size:10.5pt;font-weight:700;color:#cc0000;margin-bottom:1pt;">${excludedNames}</div>
-      <div style="font-size:11pt;font-weight:800;color:#cc0000;">no</div>
-      <div style="font-size:8.5pt;color:#9ca3af;font-style:italic;direction:ltr;text-align:left;margin-bottom:5pt;">${excludedTranslit}</div>
-      <div style="font-size:11pt;font-weight:800;color:#059669;">بديل</div>
-      <div style="font-size:10.5pt;font-weight:700;color:#059669;margin-bottom:1pt;">${allBadilNames.join('، ')}</div>
-      <div style="font-size:11pt;font-weight:800;color:#059669;">yes</div>
-      <div style="font-size:8.5pt;color:#9ca3af;font-style:italic;direction:ltr;text-align:left;">${altTranslit}</div>
-    </div>
+  <div style="padding:5pt 8pt;text-align:center;border-bottom:1pt solid #e2e8f0;">
+    <div style="font-size:13pt;font-weight:800;color:#0f172a;">${ben.name}</div>
+    ${ben.english_name ? `<div style="font-size:11pt;font-weight:600;color:#374151;direction:ltr;">${ben.english_name}</div>` : ''}
+  </div>
+  <div style="padding:5pt 8pt;text-align:right;border-bottom:1pt solid #e2e8f0;">
+    ${excludedNames ? `<div style="font-size:11pt;"><strong>مستبعد: </strong>${excludedNames}</div>` : ''}
+    ${allBadilNames.length > 0 ? `<div style="font-size:11pt;"><strong>بديل: </strong>${allBadilNames.join('، ')}</div>` : ''}
+  </div>
+  <div style="padding:5pt 8pt;">
+    ${excludedTranslit ? `<div style="background:#fff1f2;color:#dc2626;border-radius:5pt;padding:3pt 7pt;font-size:10pt;font-weight:700;direction:ltr;text-align:left;margin-bottom:4pt;"><strong>NO: </strong>${excludedTranslit}</div>` : ''}
+    ${altTranslit ? `<div style="background:#eff6ff;color:#2563eb;border-radius:5pt;padding:3pt 7pt;font-size:10pt;font-weight:700;direction:ltr;text-align:left;"><strong>YES: </strong>${altTranslit}</div>` : ''}
     ${ben.fixed_items ? `<div style="font-size:8.5pt;color:#475569;margin-top:4pt;padding-top:3pt;border-top:1px dashed #cbd5e1;">إضافات: <strong>${ben.fixed_items}</strong></div>` : ''}
   </div>
 </td>`;
@@ -119,31 +113,6 @@ function exportStickersWord(
   URL.revokeObjectURL(url);
 }
 
-// ── Editable field ────────────────────────────────────────────────────────────
-function EditableField({ value, onChange, className, dir = 'rtl' }: {
-  value: string; onChange: (v: string) => void; className?: string; dir?: string;
-}) {
-  const [editing, setEditing] = useState(false);
-  if (editing) {
-    return (
-      <input autoFocus dir={dir} value={value}
-        onChange={e => onChange(e.target.value)}
-        onBlur={() => setEditing(false)}
-        onKeyDown={e => e.key === 'Enter' && setEditing(false)}
-        className={`${className ?? ''} bg-yellow-50 border border-yellow-400 rounded px-1 focus:outline-none w-full`}
-        style={{ font: 'inherit', color: 'inherit' }}
-      />
-    );
-  }
-  return (
-    <span
-      className={`${className ?? ''} cursor-pointer hover:bg-yellow-50 hover:outline hover:outline-1 hover:outline-yellow-300 rounded px-0.5 no-print-outline`}
-      title="اضغط للتعديل"
-      onClick={() => setEditing(true)}
-    >{value}</span>
-  );
-}
-
 // ── Sticker Card ──────────────────────────────────────────────────────────────
 function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 0 }: {
   detail: ReportData['beneficiaryDetails'][0];
@@ -154,12 +123,12 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
 }) {
   const gc = GROUP_COLORS[groupIndex] ?? GROUP_COLORS[0];
   const ben = detail.beneficiary;
+  const [editMode, setEditMode] = useState(false);
   const [nameAr, setNameAr] = useState(ben.name);
   const [nameEn, setNameEn] = useState(ben.english_name ?? '');
   const [code, setCode] = useState(ben.code);
   const [villa, setVilla] = useState(ben.villa ?? '');
 
-  // Excluded items — both the excluded name and its alternative are editable
   const [exclusions, setExclusions] = useState(
     detail.excludedItems.map(({ meal, alternative }) => ({
       excludedName: meal.name,
@@ -169,93 +138,137 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
   const updateExclusion = (idx: number, field: 'excludedName' | 'alternativeName', val: string) =>
     setExclusions(prev => prev.map((e, i) => i === idx ? { ...e, [field]: val } : e));
 
-  // Fixed meals shown in بديل — editable independently
   const [fixedMeals, setFixedMeals] = useState(
     (detail.fixedItems ?? []).map(m => m.name)
   );
   const updateFixed = (idx: number, val: string) =>
     setFixedMeals(prev => prev.map((n, i) => i === idx ? val : n));
 
-  // All بديل items in order: alt names (from exclusions) + fixed meals
-  const altNames   = exclusions.map(e => e.alternativeName);
-  const allBadil   = [...altNames, ...fixedMeals];
+  const altNames  = exclusions.map(e => e.alternativeName);
+  const allBadil  = [...altNames, ...fixedMeals];
   const hasAnyBadil = allBadil.some(n => n.trim() !== '');
 
-  const t = (s: string) => transliterate(s, customDict);
+  const excludedTranslitList = exclusions
+    .map(e => e.excludedName)
+    .filter(n => n.trim())
+    .map(n => transliterate(n, customDict))
+    .filter(Boolean);
+  const badilTranslitList = allBadil
+    .filter(n => n.trim())
+    .map(n => transliterate(n, customDict))
+    .filter(Boolean);
 
-  const headerStyle = groupIndex > 0
-    ? { background: groupIndex === 1 ? '#7c3aed' : groupIndex === 2 ? '#f43f5e' : groupIndex === 3 ? '#f59e0b' : '#059669' }
-    : undefined;
   const cardBorderStyle = groupIndex > 0
     ? { borderColor: groupIndex === 1 ? '#7c3aed' : groupIndex === 2 ? '#f43f5e' : groupIndex === 3 ? '#f59e0b' : '#059669' }
     : undefined;
 
+  const inp = (val: string, onChange: (v: string) => void, dir: 'rtl' | 'ltr' = 'rtl') => (
+    <input
+      dir={dir}
+      value={val}
+      onChange={e => onChange(e.target.value)}
+      className="bg-yellow-50 border border-yellow-300 rounded px-1 focus:outline-none text-center w-full"
+      style={{ font: 'inherit', color: 'inherit' }}
+    />
+  );
+
   return (
     <div className="sticker-card" style={cardBorderStyle}>
-      <div className="sticker-header" style={headerStyle}>
-        <span className="sticker-mode-ar">{mealTypeAr}</span>
-        <span className="sticker-mode-en">
-          {mealTypeEn}
-          {groupIndex > 0 && <span className="opacity-70"> ★ {gc.label}</span>}
-        </span>
+      {/* Edit button */}
+      <div className="sticker-edit-bar no-print">
+        <button type="button" onClick={() => setEditMode(m => !m)} className="sticker-edit-btn">
+          {editMode ? 'حفظ ✓' : 'تعديل المعلومات 📝'}
+        </button>
       </div>
 
-      <div className="sticker-meta">
-        <EditableField value={code} onChange={setCode} className="sticker-code" />
-        <EditableField value={villa} onChange={setVilla} className="sticker-villa" />
+      {/* Group badge */}
+      {groupIndex > 0 && (
+        <div className={`sticker-group-badge ${gc.bg} ${gc.text}`}>★ {gc.label} — {mealTypeAr} {mealTypeEn}</div>
+      )}
+
+      {/* Code */}
+      <div className="sticker-info-row">
+        <span className="sticker-info-label">Code:</span>
+        {editMode ? inp(code, setCode, 'ltr') : <span className="sticker-info-value">{code}</span>}
       </div>
 
-      <div className="sticker-names">
-        <div className="sticker-name-ar"><EditableField value={nameAr} onChange={setNameAr} /></div>
-        <div className="sticker-name-en"><EditableField value={nameEn} onChange={setNameEn} dir="ltr" /></div>
+      {/* Villa */}
+      {(villa || editMode) && (
+        <div className="sticker-info-row">
+          <span className="sticker-info-label">Villa:</span>
+          {editMode ? inp(villa, setVilla, 'ltr') : <span className="sticker-info-value">{villa}</span>}
+        </div>
+      )}
+
+      {/* Names */}
+      <div className="sticker-names-block">
+        <div className="sticker-name-ar-center">
+          {editMode ? inp(nameAr, setNameAr) : nameAr}
+        </div>
+        {(nameEn || editMode) && (
+          <div className="sticker-name-en-center">
+            {editMode ? inp(nameEn, setNameEn, 'ltr') : nameEn}
+          </div>
+        )}
       </div>
 
-      <div className="sticker-exclusions">
-        {/* ── مستبعد ── */}
-        <div className="sticker-section-label" style={{ color: '#dc2626' }}>مستبعد</div>
-        <div className="sticker-names-row">
-          {exclusions.length === 0 ? (
-            <span className="sticker-no-alt">—</span>
-          ) : exclusions.map((e, i) => (
-            <span key={i}>
-              {i > 0 && <span style={{ color: '#94a3b8' }}>، </span>}
-              <EditableField value={e.excludedName} onChange={v => updateExclusion(i, 'excludedName', v)} className="sticker-item-excluded" />
-            </span>
-          ))}
-        </div>
-        <div className="sticker-section-label" style={{ color: '#dc2626', marginTop: 2 }}>no</div>
-        <div className="sticker-translit-line" style={{ direction: 'ltr', unicodeBidi: 'embed', display: 'block', textAlign: 'left' }}>
-          {exclusions.length === 0 ? '—' : exclusions.map(e => t(e.excludedName) || e.excludedName).join(' | ')}
-        </div>
+      {/* Excluded + Alternative */}
+      <div className="sticker-excl-block">
+        {exclusions.length > 0 && (
+          <div className="sticker-excl-row">
+            <span className="sticker-excl-label">مستبعد: </span>
+            {exclusions.map((e, i) => (
+              <span key={i}>
+                {i > 0 && <span style={{ color: '#94a3b8' }}>، </span>}
+                {editMode
+                  ? <input value={e.excludedName} onChange={ev => updateExclusion(i, 'excludedName', ev.target.value)}
+                      className="bg-yellow-50 border border-yellow-300 rounded px-1 focus:outline-none"
+                      style={{ font: 'inherit', color: 'inherit', width: 80 }} />
+                  : e.excludedName}
+              </span>
+            ))}
+          </div>
+        )}
 
-        {/* ── بديل ── */}
-        <div className="sticker-section-label" style={{ color: '#059669', marginTop: 6 }}>بديل</div>
-        <div className="sticker-names-row">
-          {!hasAnyBadil ? (
-            <span className="sticker-no-alt">لا يوجد</span>
-          ) : (
-            <>
-              {/* Alt names — one per exclusion, editable */}
-              {exclusions.map((e, i) => e.alternativeName.trim() !== '' && (
-                <span key={`alt-${i}`}>
-                  {(i > 0 || fixedMeals.some(f => f.trim() !== '')) && altNames.slice(0, i).some(n => n.trim() !== '') && <span style={{ color: '#94a3b8' }}>، </span>}
-                  <EditableField value={e.alternativeName} onChange={v => updateExclusion(i, 'alternativeName', v)} className="sticker-item-alt" />
-                </span>
-              ))}
-              {/* Fixed meals — editable */}
-              {fixedMeals.map((name, i) => name.trim() !== '' && (
-                <span key={`fix-${i}`}>
-                  <span style={{ color: '#94a3b8' }}>، </span>
-                  <EditableField value={name} onChange={v => updateFixed(i, v)} className="sticker-item-alt" />
-                </span>
-              ))}
-            </>
-          )}
-        </div>
-        <div className="sticker-section-label" style={{ color: '#059669', marginTop: 2 }}>yes</div>
-        <div className="sticker-translit-line" style={{ direction: 'ltr', unicodeBidi: 'embed', display: 'block', textAlign: 'left' }}>
-          {!hasAnyBadil ? '—' : allBadil.filter(n => n.trim() !== '').map(n => t(n) || n).join(' | ')}
-        </div>
+        {hasAnyBadil && (
+          <div className="sticker-alt-row">
+            <span className="sticker-alt-label">بديل: </span>
+            {exclusions.map((e, i) => e.alternativeName.trim() !== '' && (
+              <span key={`alt-${i}`}>
+                {i > 0 && <span style={{ color: '#94a3b8' }}>، </span>}
+                {editMode
+                  ? <input value={e.alternativeName} onChange={ev => updateExclusion(i, 'alternativeName', ev.target.value)}
+                      className="bg-yellow-50 border border-yellow-300 rounded px-1 focus:outline-none"
+                      style={{ font: 'inherit', color: 'inherit', width: 80 }} />
+                  : e.alternativeName}
+              </span>
+            ))}
+            {fixedMeals.map((name, i) => name.trim() !== '' && (
+              <span key={`fix-${i}`}>
+                {(exclusions.some(e => e.alternativeName.trim()) || i > 0) && <span style={{ color: '#94a3b8' }}>، </span>}
+                {editMode
+                  ? <input value={name} onChange={ev => updateFixed(i, ev.target.value)}
+                      className="bg-yellow-50 border border-yellow-300 rounded px-1 focus:outline-none"
+                      style={{ font: 'inherit', color: 'inherit', width: 80 }} />
+                  : name}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* NO / YES pills */}
+      <div className="sticker-pills">
+        {excludedTranslitList.length > 0 && (
+          <div className="sticker-pill-no">
+            <span className="sticker-pill-label">NO: </span>{excludedTranslitList.join(' | ')}
+          </div>
+        )}
+        {badilTranslitList.length > 0 && (
+          <div className="sticker-pill-yes">
+            <span className="sticker-pill-label">YES: </span>{badilTranslitList.join(' | ')}
+          </div>
+        )}
       </div>
 
       {ben.fixed_items && (

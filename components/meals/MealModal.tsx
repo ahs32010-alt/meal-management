@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
-import { transliterate } from '@/lib/transliterate';
 import type { Meal, MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 
@@ -39,13 +38,16 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
     if (meal) {
       const { error } = await supabase.from('meals').update(payload).eq('id', meal.id);
       if (error) { setError(error.message); setSaving(false); return; }
+      // إذا تغير الاسم → حدّث الكلمة في الترجمة
+      if (meal.name !== payload.name) {
+        await supabase
+          .from('custom_transliterations')
+          .update({ word: payload.name })
+          .eq('word', meal.name);
+      }
     } else {
       const { error } = await supabase.from('meals').insert(payload);
       if (error) { setError(error.message); setSaving(false); return; }
-      await supabase.from('custom_transliterations').insert({
-        word: payload.name,
-        transliteration: transliterate(payload.name),
-      });
     }
 
     onSaved();

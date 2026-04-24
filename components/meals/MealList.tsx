@@ -222,7 +222,9 @@ export default function MealList() {
   const handleDelete = async (id: string) => {
     if (!confirm('هل أنت متأكد من الحذف؟')) return;
     setDeleting(id);
+    const meal = meals.find(m => m.id === id);
     await supabase.from('meals').delete().eq('id', id);
+    if (meal) await supabase.from('custom_transliterations').delete().eq('word', meal.name);
     await fetchMeals();
     setDeleting(null);
   };
@@ -234,7 +236,9 @@ export default function MealList() {
     if (!confirm(`هل أنت متأكد من حذف جميع ${label} هذه القائمة (${section.length} صنف)؟`)) return;
     setDeletingAll(true);
     const ids = section.map(m => m.id);
+    const names = section.map(m => m.name);
     await supabase.from('meals').delete().in('id', ids);
+    await supabase.from('custom_transliterations').delete().in('word', names);
     await fetchMeals();
     setDeletingAll(false);
   };
