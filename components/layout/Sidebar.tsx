@@ -1,11 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { useEffect } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { createClient } from '@/lib/supabase-client';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, type PageKey } from '@/lib/permissions';
 import ThemeToggle from '@/components/layout/ThemeToggle';
+import ConfirmDialog from '@/components/shared/ConfirmDialog';
 
 const navItems: { href: string; label: string; page: PageKey; icon: React.ReactNode }[] = [
   {
@@ -90,13 +92,23 @@ interface SidebarProps {
 
 export default function Sidebar({ open = true, desktopOpen = true, onClose, onToggleDesktop }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  const supabase = createClient();
   const { user: currentUser, loading: userLoading } = useCurrentUser();
+  const [confirmOpen, setConfirmOpen] = useState(false);
   // While loading, show nothing (avoid flashing restricted links). Admins see everything.
   const visibleItems = userLoading
     ? []
     : navItems.filter(item => can(currentUser, item.page, 'view'));
 
   useEffect(() => { onClose?.(); }, [pathname]);
+
+  const handleLogout = async () => {
+    setConfirmOpen(false);
+    try { await supabase.removeAllChannels(); } catch {}
+    try { await supabase.auth.signOut(); } catch {}
+    router.push('/login');
+  };
 
   const desktopClass = desktopOpen ? 'md:translate-x-0' : 'md:translate-x-full';
 
@@ -167,8 +179,38 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
             </Link>
           );
         })}
+
+        {/* Logout — placed below Settings with extra spacing + a subtle divider */}
+        {!userLoading && (
+          <div className="pt-6 mt-4 border-t border-slate-700/50">
+            <button
+              onClick={() => setConfirmOpen(true)}
+              className="flex items-center gap-3 px-4 py-2.5 rounded-xl w-full text-slate-300 hover:bg-rose-500/15 hover:text-rose-300 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              <span className="font-medium text-sm">تسجيل الخروج</span>
+            </button>
+          </div>
+        )}
       </nav>
 
+      <ConfirmDialog
+        isOpen={confirmOpen}
+        title="تأكيد تسجيل الخروج"
+        message="هل أنت متأكد من رغبتك في تسجيل الخروج؟"
+        confirmLabel="خروج"
+        icon={
+          <svg className="w-7 h-7 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+        }
+        onConfirm={handleLogout}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </aside>
   );
 }

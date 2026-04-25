@@ -7,12 +7,13 @@ interface Props {
   title: string;
   message: string;
   confirmLabel?: string;
+  icon?: React.ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
 export default function ConfirmDialog({
-  isOpen, title, message, confirmLabel = 'حذف', onConfirm, onCancel,
+  isOpen, title, message, confirmLabel = 'حذف', icon, onConfirm, onCancel,
 }: Props) {
   const cancelRef = useRef<HTMLButtonElement>(null);
 
@@ -37,10 +38,12 @@ export default function ConfirmDialog({
         {/* Icon + Title */}
         <div className="px-6 pt-6 pb-4 flex flex-col items-center text-center gap-3">
           <div className="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
-            <svg className="w-7 h-7 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
+            {icon ?? (
+              <svg className="w-7 h-7 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            )}
           </div>
           <div>
             <h3 className="text-base font-bold text-slate-800">{title}</h3>

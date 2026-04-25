@@ -7,7 +7,6 @@ import { usePathname } from 'next/navigation';
 import Sidebar from '@/components/layout/Sidebar';
 import BottomNav from '@/components/layout/BottomNav';
 import ThemeToggle from '@/components/layout/ThemeToggle';
-import LogoutButton from '@/components/layout/LogoutButton';
 
 const PAGE_TITLES: Record<string, string> = {
   '/':              'الرئيسية',
@@ -106,9 +105,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Bottom nav bar — mobile only */}
       <BottomNav onMore={() => setMobileOpen(true)} />
-
-      {/* Floating logout — fixed top-left of the page */}
-      <LogoutButton />
     </div>
   );
 }

@@ -335,19 +335,6 @@ html { scroll-behavior: smooth; }
   }
 }
 
-/* Floating logout button — fixed top-left of the page, near (but not touching) the
-   dashboard refresh button. Position is constant; does not shift with sidebar state. */
-.logout-fab {
-  top: calc(env(safe-area-inset-top, 0) + 12px);
-  left: calc(env(safe-area-inset-left, 0) + 12px);
-}
-@media (max-width: 767px) {
-  /* Mobile: clear the sticky top bar (~56px tall) */
-  .logout-fab {
-    top: calc(env(safe-area-inset-top, 0) + 62px);
-  }
-}
-
 /* Force light styles when printing — stickers and reports must always print on white */
 @media print {
   html.dark body,
