@@ -6,6 +6,8 @@ import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import Sidebar from '@/components/layout/Sidebar';
 import BottomNav from '@/components/layout/BottomNav';
+import ThemeToggle from '@/components/layout/ThemeToggle';
+import LogoutButton from '@/components/layout/LogoutButton';
 
 const PAGE_TITLES: Record<string, string> = {
   '/':              'الرئيسية',
@@ -76,11 +78,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </svg>
           </div>
           <h1 className="flex-1 font-bold text-slate-800 text-base truncate">{title}</h1>
+          <ThemeToggle variant="compact" />
         </div>
 
         {/* Desktop top bar — ظاهر فقط لما السايدبار مخفي */}
         {!desktopOpen && (
-          <div className="hidden md:flex sticky top-0 z-20 bg-white border-b border-slate-200 px-4 py-2">
+          <div className="hidden md:flex sticky top-0 z-20 bg-white border-b border-slate-200 px-4 py-2 items-center justify-between">
             <button
               onClick={toggleDesktop}
               className="flex items-center gap-2 px-3 py-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors text-sm font-medium"
@@ -91,6 +94,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </svg>
               القائمة
             </button>
+            <ThemeToggle variant="topbar" />
           </div>
         )}
 
@@ -102,6 +106,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Bottom nav bar — mobile only */}
       <BottomNav onMore={() => setMobileOpen(true)} />
+
+      {/* Floating logout — fixed top-left of the page */}
+      <LogoutButton />
     </div>
   );
 }

@@ -1,11 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
-import { createClient } from '@/lib/supabase-client';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, type PageKey } from '@/lib/permissions';
+import ThemeToggle from '@/components/layout/ThemeToggle';
 
 const navItems: { href: string; label: string; page: PageKey; icon: React.ReactNode }[] = [
   {
@@ -90,8 +90,6 @@ interface SidebarProps {
 
 export default function Sidebar({ open = true, desktopOpen = true, onClose, onToggleDesktop }: SidebarProps) {
   const pathname = usePathname();
-  const router = useRouter();
-  const supabase = createClient();
   const { user: currentUser, loading: userLoading } = useCurrentUser();
   // While loading, show nothing (avoid flashing restricted links). Admins see everything.
   const visibleItems = userLoading
@@ -100,27 +98,16 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
 
   useEffect(() => { onClose?.(); }, [pathname]);
 
-  const handleLogout = async () => {
-    try {
-      // أغلق كل قنوات Realtime أولاً قبل تسجيل الخروج
-      await supabase.removeAllChannels();
-    } catch {}
-    try {
-      await supabase.auth.signOut();
-    } catch {}
-    router.push('/login');
-  };
-
   const desktopClass = desktopOpen ? 'md:translate-x-0' : 'md:translate-x-full';
 
   return (
     <aside className={`w-64 bg-slate-900 fixed right-0 top-0 h-screen flex flex-col z-40 shadow-xl transition-transform duration-300
       ${desktopClass} ${open ? 'translate-x-0' : 'translate-x-full'}`}>
       {/* Logo */}
-      <div className="px-6 py-5 border-b border-slate-700/50">
-        <div className="flex items-center gap-3">
+      <div className="px-4 py-4 border-b border-slate-700/50">
+        <div className="flex items-center gap-2">
           {onClose && (
-            <button onClick={onClose} className="md:hidden text-slate-400 hover:text-white ml-auto order-last">
+            <button onClick={onClose} className="md:hidden text-slate-400 hover:text-white ml-auto order-last" title="إغلاق">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -131,10 +118,14 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
           </div>
-          <div className="flex-1">
-            <h1 className="text-white font-bold text-sm leading-tight">نظام إدارة</h1>
-            <p className="text-slate-400 text-xs">الوجبات</p>
+          <div className="flex-1 min-w-0">
+            <h1 className="text-white font-bold text-sm leading-tight truncate">نظام إدارة</h1>
+            <p className="text-slate-400 text-xs truncate">الوجبات</p>
           </div>
+
+          {/* Theme toggle (icon) */}
+          <ThemeToggle variant="sidebarIcon" />
+
           {/* Desktop hide button */}
           <button
             onClick={onToggleDesktop}
@@ -178,18 +169,6 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
         })}
       </nav>
 
-      {/* Logout */}
-      <div className="px-3 py-4 border-t border-slate-700/50">
-        <button
-          onClick={handleLogout}
-          className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-slate-400 hover:bg-red-900/30 hover:text-red-400 transition-all w-full"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-          </svg>
-          <span className="font-medium text-sm">تسجيل الخروج</span>
-        </button>
-      </div>
     </aside>
   );
 }

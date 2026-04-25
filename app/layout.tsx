@@ -21,6 +21,13 @@ export const viewport: Viewport = {
   themeColor: '#059669',
 };
 
+const themeInitScript = `
+(function(){try{
+  var t = localStorage.getItem('theme');
+  if (t === 'dark') document.documentElement.classList.add('dark');
+}catch(e){}})();
+`;
+
 export default function RootLayout({
   children,
 }: {
@@ -28,6 +35,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ar" dir="rtl">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
       <body>{children}</body>
     </html>
   );

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { useRouter } from 'next/navigation';
+import ThemeToggle from '@/components/layout/ThemeToggle';
 
 const SIGN_IN_TIMEOUT_MS = 12000;
 
@@ -52,7 +53,10 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-50 flex items-center justify-center p-4 relative">
+      <div className="absolute top-4 left-4">
+        <ThemeToggle variant="compact" />
+      </div>
       <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
 
         {/* Logo */}

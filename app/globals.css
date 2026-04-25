@@ -14,11 +14,13 @@ html {
 
 body {
   background-color: #f8fafc;
+  color: #0f172a;
   /* Prevent rubber-band overscroll on iOS to feel more app-like */
   overscroll-behavior-y: none;
   /* Smooth font rendering on mobile */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 /* Native-feel touch interactions across the app */
@@ -77,6 +79,288 @@ html { scroll-behavior: smooth; }
   .card {
     @apply bg-white rounded-xl border border-slate-200 shadow-sm;
   }
+}
+
+/* ── Dark Mode ────────────────────────────────────────────────── */
+/* Palette: dark navy + slate gray base, broken with bright soft accents */
+@media screen {
+  html.dark {
+    --d-bg:        #0a1426;   /* main app background — deep navy */
+    --d-bg-2:      #0f1b30;   /* alt background */
+    --d-elev:      #162236;   /* cards, modals, elevated surfaces */
+    --d-elev-2:    #1c2a42;   /* secondary surface */
+    --d-surface:   #1e2c44;   /* inputs, hovers */
+    --d-hover:     #253656;
+    --d-border:    #2a3a55;
+    --d-border-2:  #1f2c43;
+    --d-text:      #e6ecf5;   /* primary text — soft white */
+    --d-text-2:    #a8b3c7;   /* secondary text */
+    --d-text-3:    #6b7588;   /* muted text */
+
+    /* Bright accent pops — light + saturated to break the dark */
+    --d-emerald:   #34d399;
+    --d-emerald-2: #6ee7b7;
+    --d-sky:       #60a5fa;
+    --d-sky-2:     #93c5fd;
+    --d-amber:     #fbbf24;
+    --d-amber-2:   #fcd34d;
+    --d-rose:      #fb7185;
+    --d-rose-2:    #fda4af;
+    --d-violet:    #a78bfa;
+    --d-violet-2:  #c4b5fd;
+    --d-pink:      #f472b6;
+    --d-teal:      #2dd4bf;
+
+    color-scheme: dark;
+  }
+
+  html.dark body { background-color: var(--d-bg); color: var(--d-text); }
+
+  /* Base surfaces */
+  html.dark .bg-white { background-color: var(--d-elev) !important; }
+  html.dark .bg-slate-50 { background-color: var(--d-bg) !important; }
+  html.dark .bg-slate-100 { background-color: var(--d-surface) !important; }
+  html.dark .bg-slate-200 { background-color: var(--d-hover) !important; }
+
+  /* Hover surfaces */
+  html.dark .hover\:bg-slate-50:hover { background-color: var(--d-elev-2) !important; }
+  html.dark .hover\:bg-slate-100:hover { background-color: var(--d-surface) !important; }
+  html.dark .hover\:bg-slate-200:hover { background-color: var(--d-hover) !important; }
+  html.dark .hover\:bg-white:hover { background-color: var(--d-elev) !important; }
+
+  /* Text */
+  html.dark .text-slate-900 { color: var(--d-text) !important; }
+  html.dark .text-slate-800 { color: var(--d-text) !important; }
+  html.dark .text-slate-700 { color: var(--d-text) !important; }
+  html.dark .text-slate-600 { color: var(--d-text-2) !important; }
+  html.dark .text-slate-500 { color: var(--d-text-2) !important; }
+  html.dark .text-slate-400 { color: var(--d-text-3) !important; }
+  html.dark .text-slate-300 { color: var(--d-text-2) !important; }
+
+  html.dark .hover\:text-slate-900:hover { color: var(--d-text) !important; }
+  html.dark .hover\:text-slate-800:hover { color: var(--d-text) !important; }
+  html.dark .hover\:text-slate-700:hover { color: var(--d-text) !important; }
+  html.dark .hover\:text-slate-600:hover { color: var(--d-text-2) !important; }
+
+  /* Placeholder text */
+  html.dark .placeholder-slate-400::placeholder { color: var(--d-text-3) !important; }
+  html.dark .placeholder-slate-500::placeholder { color: var(--d-text-3) !important; }
+
+  /* Borders */
+  html.dark .border-slate-50 { border-color: var(--d-border-2) !important; }
+  html.dark .border-slate-100 { border-color: var(--d-border-2) !important; }
+  html.dark .border-slate-200 { border-color: var(--d-border) !important; }
+  html.dark .border-slate-300 { border-color: var(--d-border) !important; }
+  html.dark .border-slate-400 { border-color: var(--d-border) !important; }
+  html.dark .divide-slate-100 > * + * { border-color: var(--d-border-2) !important; }
+  html.dark .divide-slate-200 > * + * { border-color: var(--d-border) !important; }
+
+  /* Disabled background utilities */
+  html.dark .disabled\:bg-slate-50:disabled { background-color: var(--d-bg-2) !important; }
+  html.dark .disabled\:bg-slate-100:disabled { background-color: var(--d-surface) !important; }
+
+  /* ── Tinted badge / pill backgrounds — translucent so card surface shows through ── */
+
+  /* Blue → soft sky */
+  html.dark .bg-blue-50  { background-color: rgba(96, 165, 250, 0.12) !important; }
+  html.dark .bg-blue-100 { background-color: rgba(96, 165, 250, 0.18) !important; }
+  html.dark .text-blue-600 { color: var(--d-sky) !important; }
+  html.dark .text-blue-700 { color: var(--d-sky-2) !important; }
+  html.dark .border-blue-100 { border-color: rgba(96, 165, 250, 0.28) !important; }
+  html.dark .border-blue-200 { border-color: rgba(96, 165, 250, 0.32) !important; }
+
+  /* Emerald (already primary) */
+  html.dark .bg-emerald-50  { background-color: rgba(52, 211, 153, 0.12) !important; }
+  html.dark .bg-emerald-100 { background-color: rgba(52, 211, 153, 0.18) !important; }
+  html.dark .text-emerald-600 { color: var(--d-emerald) !important; }
+  html.dark .text-emerald-700 { color: var(--d-emerald-2) !important; }
+  html.dark .border-emerald-100 { border-color: rgba(52, 211, 153, 0.28) !important; }
+  html.dark .border-emerald-200 { border-color: rgba(52, 211, 153, 0.32) !important; }
+
+  /* Green (alias) */
+  html.dark .bg-green-50  { background-color: rgba(52, 211, 153, 0.12) !important; }
+  html.dark .bg-green-100 { background-color: rgba(52, 211, 153, 0.18) !important; }
+  html.dark .text-green-600 { color: var(--d-emerald) !important; }
+  html.dark .text-green-700 { color: var(--d-emerald-2) !important; }
+
+  /* Yellow / Amber → warm peach */
+  html.dark .bg-yellow-50  { background-color: rgba(251, 191, 36, 0.12) !important; }
+  html.dark .bg-yellow-100 { background-color: rgba(251, 191, 36, 0.18) !important; }
+  html.dark .text-yellow-600 { color: var(--d-amber) !important; }
+  html.dark .text-yellow-700 { color: var(--d-amber-2) !important; }
+  html.dark .bg-amber-50   { background-color: rgba(251, 191, 36, 0.12) !important; }
+  html.dark .bg-amber-100  { background-color: rgba(251, 191, 36, 0.18) !important; }
+  html.dark .text-amber-600 { color: var(--d-amber) !important; }
+  html.dark .text-amber-700 { color: var(--d-amber-2) !important; }
+  html.dark .border-amber-100 { border-color: rgba(251, 191, 36, 0.28) !important; }
+
+  /* Purple / Violet → lavender */
+  html.dark .bg-purple-50  { background-color: rgba(167, 139, 250, 0.12) !important; }
+  html.dark .bg-purple-100 { background-color: rgba(167, 139, 250, 0.18) !important; }
+  html.dark .text-purple-600 { color: var(--d-violet) !important; }
+  html.dark .text-purple-700 { color: var(--d-violet-2) !important; }
+  html.dark .bg-violet-50  { background-color: rgba(167, 139, 250, 0.12) !important; }
+  html.dark .bg-violet-100 { background-color: rgba(167, 139, 250, 0.18) !important; }
+  html.dark .text-violet-600 { color: var(--d-violet) !important; }
+  html.dark .text-violet-700 { color: var(--d-violet-2) !important; }
+  html.dark .border-violet-100 { border-color: rgba(167, 139, 250, 0.28) !important; }
+  html.dark .bg-indigo-50  { background-color: rgba(129, 140, 248, 0.12) !important; }
+  html.dark .bg-indigo-100 { background-color: rgba(129, 140, 248, 0.18) !important; }
+  html.dark .text-indigo-600 { color: #a5b4fc !important; }
+  html.dark .text-indigo-700 { color: #c7d2fe !important; }
+
+  /* Red / Rose → soft rose */
+  html.dark .bg-red-50   { background-color: rgba(251, 113, 133, 0.12) !important; }
+  html.dark .bg-red-100  { background-color: rgba(251, 113, 133, 0.18) !important; }
+  html.dark .text-red-600 { color: var(--d-rose) !important; }
+  html.dark .text-red-700 { color: var(--d-rose-2) !important; }
+  html.dark .text-red-400 { color: var(--d-rose) !important; }
+  html.dark .border-red-100 { border-color: rgba(251, 113, 133, 0.28) !important; }
+  html.dark .border-red-200 { border-color: rgba(251, 113, 133, 0.32) !important; }
+  html.dark .hover\:bg-red-100:hover { background-color: rgba(251, 113, 133, 0.22) !important; }
+  html.dark .bg-rose-50  { background-color: rgba(251, 113, 133, 0.12) !important; }
+  html.dark .bg-rose-100 { background-color: rgba(251, 113, 133, 0.18) !important; }
+  html.dark .text-rose-600 { color: var(--d-rose) !important; }
+  html.dark .text-rose-700 { color: var(--d-rose-2) !important; }
+
+  /* Orange */
+  html.dark .bg-orange-50  { background-color: rgba(251, 146, 60, 0.12) !important; }
+  html.dark .bg-orange-100 { background-color: rgba(251, 146, 60, 0.18) !important; }
+  html.dark .text-orange-600 { color: #fb923c !important; }
+  html.dark .text-orange-700 { color: #fdba74 !important; }
+
+  /* Teal / Cyan / Sky */
+  html.dark .bg-teal-50  { background-color: rgba(45, 212, 191, 0.12) !important; }
+  html.dark .bg-teal-100 { background-color: rgba(45, 212, 191, 0.18) !important; }
+  html.dark .text-teal-600 { color: var(--d-teal) !important; }
+  html.dark .text-teal-700 { color: #5eead4 !important; }
+  html.dark .bg-cyan-50  { background-color: rgba(34, 211, 238, 0.12) !important; }
+  html.dark .bg-cyan-100 { background-color: rgba(34, 211, 238, 0.18) !important; }
+  html.dark .bg-sky-50   { background-color: rgba(96, 165, 250, 0.12) !important; }
+  html.dark .bg-sky-100  { background-color: rgba(96, 165, 250, 0.18) !important; }
+
+  /* Pink / Fuchsia */
+  html.dark .bg-pink-50  { background-color: rgba(244, 114, 182, 0.12) !important; }
+  html.dark .bg-pink-100 { background-color: rgba(244, 114, 182, 0.18) !important; }
+  html.dark .text-pink-600 { color: var(--d-pink) !important; }
+  html.dark .text-pink-700 { color: #f9a8d4 !important; }
+
+  /* ── Component-class overrides (.card, .btn-*, .input-field, etc.) ── */
+  html.dark .card {
+    background-color: var(--d-elev) !important;
+    border-color: var(--d-border) !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.4), 0 1px 3px rgba(0,0,0,0.25) !important;
+  }
+  html.dark .input-field {
+    background-color: var(--d-surface) !important;
+    border-color: var(--d-border) !important;
+    color: var(--d-text) !important;
+  }
+  html.dark .input-field::placeholder { color: var(--d-text-3) !important; }
+  html.dark .input-field:focus {
+    border-color: var(--d-emerald) !important;
+    background-color: var(--d-elev-2) !important;
+  }
+  html.dark .btn-secondary {
+    background-color: var(--d-elev) !important;
+    color: var(--d-text) !important;
+    border-color: var(--d-border) !important;
+  }
+  html.dark .btn-secondary:hover { background-color: var(--d-surface) !important; }
+  html.dark .btn-danger {
+    background-color: rgba(251, 113, 133, 0.14) !important;
+    color: var(--d-rose) !important;
+  }
+  html.dark .btn-danger:hover { background-color: rgba(251, 113, 133, 0.22) !important; }
+  html.dark .table-header {
+    background-color: var(--d-elev-2) !important;
+    color: var(--d-text-2) !important;
+    border-color: var(--d-border) !important;
+  }
+  html.dark .table-cell {
+    color: var(--d-text) !important;
+    border-color: var(--d-border-2) !important;
+  }
+  html.dark .label { color: var(--d-text-2) !important; }
+
+  /* Native form controls — select/textarea/input baseline */
+  html.dark select,
+  html.dark textarea,
+  html.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]) {
+    color-scheme: dark;
+  }
+  html.dark select option { background-color: var(--d-elev); color: var(--d-text); }
+
+  /* Shadows — soften so cards lift cleanly on dark */
+  html.dark .shadow-sm  { box-shadow: 0 1px 2px rgba(0,0,0,0.35) !important; }
+  html.dark .shadow     { box-shadow: 0 2px 4px rgba(0,0,0,0.4) !important; }
+  html.dark .shadow-md  { box-shadow: 0 4px 8px rgba(0,0,0,0.4) !important; }
+  html.dark .shadow-lg  { box-shadow: 0 8px 16px rgba(0,0,0,0.45) !important; }
+  html.dark .shadow-xl  { box-shadow: 0 12px 24px rgba(0,0,0,0.5) !important; }
+  html.dark .shadow-2xl { box-shadow: 0 20px 40px rgba(0,0,0,0.55) !important; }
+
+  /* Mobile-mode card backgrounds (set inline-style equivalents via class targeting) */
+  html.dark [data-mobile="true"] table tbody { background: var(--d-bg) !important; }
+  html.dark [data-mobile="true"] table tbody tr {
+    background: var(--d-elev) !important;
+    border-color: var(--d-border) !important;
+  }
+  html.dark [data-mobile="true"] table tbody tr td:last-child {
+    border-top-color: var(--d-border-2) !important;
+  }
+
+  /* Sidebar already uses bg-slate-900 — looks good in dark too. Tighten its inner surfaces. */
+  html.dark aside.bg-slate-900 { background-color: #0b1426 !important; }
+
+  /* Gradient backgrounds (e.g. login page) — replace with dark navy gradient */
+  html.dark .from-emerald-50,
+  html.dark .from-teal-50,
+  html.dark .from-cyan-50,
+  html.dark .from-blue-50,
+  html.dark .from-slate-50 { --tw-gradient-from: #0a1426 var(--tw-gradient-from-position) !important; --tw-gradient-to: rgb(10 20 38 / 0) var(--tw-gradient-to-position) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+  html.dark .via-emerald-50,
+  html.dark .via-teal-50,
+  html.dark .via-cyan-50,
+  html.dark .via-blue-50,
+  html.dark .via-slate-50 { --tw-gradient-to: rgb(22 34 54 / 0)  var(--tw-gradient-to-position) !important; --tw-gradient-stops: var(--tw-gradient-from), #162236 var(--tw-gradient-via-position), var(--tw-gradient-to) !important; }
+  html.dark .to-emerald-50,
+  html.dark .to-teal-50,
+  html.dark .to-cyan-50,
+  html.dark .to-blue-50,
+  html.dark .to-slate-50 { --tw-gradient-to: #1e2c44 var(--tw-gradient-to-position) !important; }
+
+  /* Sticker editor list separator override */
+  html.dark .sticker-split-container .sticker-split-list {
+    border-color: var(--d-border) !important;
+  }
+}
+
+/* Floating logout button — fixed top-left of the page, near (but not touching) the
+   dashboard refresh button. Position is constant; does not shift with sidebar state. */
+.logout-fab {
+  top: calc(env(safe-area-inset-top, 0) + 12px);
+  left: calc(env(safe-area-inset-left, 0) + 12px);
+}
+@media (max-width: 767px) {
+  /* Mobile: clear the sticky top bar (~56px tall) */
+  .logout-fab {
+    top: calc(env(safe-area-inset-top, 0) + 62px);
+  }
+}
+
+/* Force light styles when printing — stickers and reports must always print on white */
+@media print {
+  html.dark body,
+  html.dark .bg-white,
+  html.dark .bg-slate-50,
+  html.dark .bg-slate-100,
+  html.dark .card,
+  html.dark .input-field { background: white !important; color: black !important; }
+  html.dark .text-slate-800,
+  html.dark .text-slate-700,
+  html.dark .text-slate-600 { color: black !important; }
+  html.dark .border-slate-100,
+  html.dark .border-slate-200 { border-color: #cbd5e1 !important; }
 }
 
 /* ── Mobile Mode ─────────────────────────────────────────────── */
