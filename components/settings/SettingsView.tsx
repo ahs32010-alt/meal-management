@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import type { MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
-import { toCSV, parseCSV, downloadCSV } from '@/lib/csv-utils';
+import { exportXLSX, parseXLSX } from '@/lib/xlsx-utils';
 import UsersManager from './UsersManager';
 import ActivityLogView from './ActivityLogView';
 import { useCurrentUser } from '@/lib/use-current-user';
@@ -37,6 +37,21 @@ function typeKey(type: MealType, isSnack: boolean) {
 function keyToFields(key: string): { type: MealType; isSnack: boolean } {
   if (key.startsWith('snack_')) return { type: key.replace('snack_', '') as MealType, isSnack: true };
   return { type: key as MealType, isSnack: false };
+}
+
+// Excel-friendly label ↔ (type, is_snack) mapping
+const TYPE_LABEL_TO_FIELDS: Record<string, { type: MealType; isSnack: boolean }> = {
+  'فطور':       { type: 'breakfast', isSnack: false },
+  'غداء':       { type: 'lunch',     isSnack: false },
+  'عشاء':       { type: 'dinner',    isSnack: false },
+  'سناك فطور': { type: 'breakfast', isSnack: true  },
+  'سناك غداء': { type: 'lunch',     isSnack: true  },
+  'سناك عشاء': { type: 'dinner',    isSnack: true  },
+};
+
+function fieldsToTypeLabel(type: MealType, isSnack: boolean): string {
+  const base = type === 'breakfast' ? 'فطور' : type === 'lunch' ? 'غداء' : 'عشاء';
+  return isSnack ? `سناك ${base}` : base;
 }
 
 export default function SettingsView() {
@@ -123,11 +138,20 @@ export default function SettingsView() {
     fetchData();
   };
 
-  const handleExport = () => {
-    const withCustom = rows.filter(r => r.customTranslit);
-    if (withCustom.length === 0) return;
-    const csv = toCSV(withCustom.map(r => ({ word: r.name, transliteration: r.customTranslit ?? '' })));
-    downloadCSV(csv, 'transliterations.csv');
+  const handleExport = async () => {
+    if (rows.length === 0) return;
+    // Sort by type then by name so the file is grouped neatly
+    const sorted = [...rows].sort((a, b) => {
+      const ka = typeKey(a.type, a.isSnack);
+      const kb = typeKey(b.type, b.isSnack);
+      return ka.localeCompare(kb) || a.name.localeCompare(b.name, 'ar');
+    });
+    const data = sorted.map(r => ({
+      'الصنف': r.name,
+      'النوع': fieldsToTypeLabel(r.type, r.isSnack),
+      'الترجمة الحرفية': r.customTranslit ?? '',
+    }));
+    await exportXLSX(data, `الترجمة_الحرفية_${new Date().toISOString().slice(0, 10)}.xlsx`, 'الترجمة الحرفية');
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -137,38 +161,138 @@ export default function SettingsView() {
     setImportStatus('importing');
     setImportMsg('');
     try {
-      const raw = await file.text();
-      // Strip UTF-8 BOM if present before parsing
-      const text = raw.replace(/^﻿/, '');
-      const parsed = parseCSV(text)
-        .map(r => ({ word: r['word']?.trim(), transliteration: r['transliteration']?.trim() }))
-        .filter(r => r.word && r.transliteration) as { word: string; transliteration: string }[];
-
+      const parsed = await parseXLSX(file);
       if (parsed.length === 0) {
         setImportStatus('error');
-        setImportMsg('لم يُعثر على بيانات صالحة — تأكد أن الملف يحتوي عمودي word و transliteration');
+        setImportMsg('الملف فارغ أو لا يحتوي بيانات صالحة');
         return;
       }
 
-      const { error } = await supabase
-        .from('custom_transliterations')
-        .upsert(parsed, { onConflict: 'word' });
-      if (error) throw error;
+      // Build a forgiving column getter — trims and normalizes each row's keys
+      // once, then accepts any of several header variants (Arabic + English fallbacks).
+      const NAME_KEYS = ['الصنف', 'الاسم', 'word', 'name'];
+      const TYPE_KEYS = ['النوع', 'نوع الوجبة', 'type'];
+      const TRANSLIT_KEYS = ['الترجمة الحرفية', 'الترجمة', 'transliteration', 'translit'];
+
+      const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
+      const pick = (row: Record<string, string>, keys: string[]): string => {
+        // Build a lowercased/trimmed lookup once per row
+        const map = new Map<string, string>();
+        for (const k of Object.keys(row)) {
+          map.set(normalize(k).toLowerCase(), row[k]);
+        }
+        for (const k of keys) {
+          const v = map.get(normalize(k).toLowerCase());
+          if (v != null && String(v).trim() !== '') return String(v);
+        }
+        return '';
+      };
+
+      const errors: string[] = [];
+      let translitsUpdated = 0;
+      let translitsRemoved = 0;
+      let typesUpdated = 0;
+      let unchanged = 0;
+      let missingMeal = 0;
+
+      const mealsByName = new Map<string, { id: string; type: MealType; is_snack: boolean }[]>();
+      for (const r of rows) {
+        const key = normalize(r.name);
+        const list = mealsByName.get(key) ?? [];
+        list.push({ id: r.mealId, type: r.type, is_snack: r.isSnack });
+        mealsByName.set(key, list);
+      }
+
+      for (let i = 0; i < parsed.length; i++) {
+        const row = parsed[i];
+        const name = normalize(pick(row, NAME_KEYS));
+        if (!name) continue;
+
+        const typeRaw = normalize(pick(row, TYPE_KEYS));
+        const translitRaw = pick(row, TRANSLIT_KEYS).trim();
+
+        const candidates = mealsByName.get(name);
+        if (!candidates || candidates.length === 0) {
+          errors.push(`الصف ${i + 2}: الصنف "${name}" غير موجود`);
+          missingMeal++;
+          continue;
+        }
+
+        let target = candidates[0];
+        if (typeRaw) {
+          const fields = TYPE_LABEL_TO_FIELDS[typeRaw];
+          if (!fields) {
+            errors.push(`الصف ${i + 2} (${name}): نوع غير معروف "${typeRaw}"`);
+            continue;
+          }
+          const exact = candidates.find(c => c.type === fields.type && c.is_snack === fields.isSnack);
+          if (exact) {
+            target = exact;
+          } else if (candidates.length === 1) {
+            target = candidates[0];
+            await supabase.from('meals').update({ type: fields.type, is_snack: fields.isSnack }).eq('id', target.id);
+            target.type = fields.type;
+            target.is_snack = fields.isSnack;
+            typesUpdated++;
+          } else {
+            errors.push(`الصف ${i + 2} (${name}): النوع "${typeRaw}" لا يطابق أي صنف بهذا الاسم`);
+            continue;
+          }
+        }
+
+        // Handle the transliteration
+        const existingRow = rows.find(r => r.mealId === target.id);
+        const existingTranslit = existingRow?.customTranslit ?? '';
+        if (translitRaw) {
+          if (translitRaw === existingTranslit) {
+            unchanged++;
+          } else if (existingRow?.customId) {
+            await supabase.from('custom_transliterations').update({ transliteration: translitRaw }).eq('id', existingRow.customId);
+            translitsUpdated++;
+          } else {
+            await supabase.from('custom_transliterations').insert({ word: name, transliteration: translitRaw });
+            translitsUpdated++;
+          }
+        } else if (existingRow?.customId) {
+          await supabase.from('custom_transliterations').delete().eq('id', existingRow.customId);
+          translitsRemoved++;
+        } else {
+          unchanged++;
+        }
+      }
 
       void logActivity({
-        action: 'create',
+        action: 'update',
         entity_type: 'transliteration',
-        entity_name: `استيراد ترجمات (${parsed.length})`,
-        details: { count: parsed.length, source: 'csv_import' },
+        entity_name: `استيراد Excel (${translitsUpdated} ترجمة، ${typesUpdated} نوع)`,
+        details: {
+          rows_in_file: parsed.length,
+          translits_updated: translitsUpdated,
+          translits_removed: translitsRemoved,
+          types_updated: typesUpdated,
+          unchanged,
+          missing_meal: missingMeal,
+          errors_count: errors.length,
+          source: 'xlsx_import',
+        },
       });
 
-      setImportStatus('done');
-      setImportMsg(`تم استيراد ${parsed.length} ترجمة بنجاح`);
+      const parts: string[] = [`قُرئ ${parsed.length} صف`];
+      if (translitsUpdated) parts.push(`${translitsUpdated} ترجمة محدّثة`);
+      if (translitsRemoved) parts.push(`${translitsRemoved} محذوفة`);
+      if (typesUpdated) parts.push(`${typesUpdated} نوع محدّث`);
+      if (unchanged) parts.push(`${unchanged} بدون تغيير`);
+      if (missingMeal) parts.push(`${missingMeal} صنف غير موجود`);
+      setImportMsg(
+        parts.join(' — ') +
+        (errors.length ? ` — أخطاء: ${errors.slice(0, 5).join(' • ')}${errors.length > 5 ? ` (وعدد ${errors.length - 5} آخر)` : ''}` : '')
+      );
+      setImportStatus(errors.length > 0 ? 'error' : 'done');
       fetchData();
-      setTimeout(() => setImportStatus('idle'), 3000);
-    } catch {
+      if (errors.length === 0) setTimeout(() => setImportStatus('idle'), 5000);
+    } catch (err) {
       setImportStatus('error');
-      setImportMsg('حدث خطأ أثناء الاستيراد');
+      setImportMsg(`حدث خطأ أثناء الاستيراد: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -233,26 +357,33 @@ export default function SettingsView() {
             <span className="text-xs text-slate-400 font-medium">{rows.length} صنف</span>
             <button
               onClick={handleExport}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-              title="تصدير CSV"
+              disabled={rows.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 transition-colors"
+              title="تصدير Excel"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              تصدير
+              تصدير Excel
             </button>
             <button
               onClick={() => importRef.current?.click()}
               disabled={importStatus === 'importing'}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-              title="استيراد CSV"
+              title="استيراد Excel"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l4-4m0 0l4 4m-4-4v12" />
               </svg>
-              {importStatus === 'importing' ? 'جاري الاستيراد...' : 'استيراد'}
+              {importStatus === 'importing' ? 'جاري الاستيراد...' : 'استيراد Excel'}
             </button>
-            <input ref={importRef} type="file" accept=".csv" className="hidden" onChange={handleImport} />
+            <input
+              ref={importRef}
+              type="file"
+              accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+              className="hidden"
+              onChange={handleImport}
+            />
           </div>
         </div>
         {(importStatus === 'done' || importStatus === 'error') && (

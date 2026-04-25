@@ -70,15 +70,17 @@ function notify(u: AppUser | null) {
 }
 
 export function useCurrentUser() {
-  const [user, setUser] = useState<AppUser | null>(() => readCache()?.user ?? null);
-  const [loading, setLoading] = useState(() => !readCache());
+  // Always start with null/loading so SSR and the first client render produce
+  // identical HTML. Reading sessionStorage during render would diverge between
+  // server and client and trip a React hydration error.
+  const [user, setUser] = useState<AppUser | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     const cur = readCache();
     if (cur) {
-      // Already have a fresh cached value — skip the network round-trip.
-      if (!user) setUser(cur.user);
+      setUser(cur.user);
       setLoading(false);
     } else {
       fetchUser().then((u) => {
@@ -93,7 +95,6 @@ export function useCurrentUser() {
     const listener: Listener = (u) => setUser(u);
     listeners.add(listener);
     return () => { cancelled = true; listeners.delete(listener); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refresh = useCallback(async () => {
