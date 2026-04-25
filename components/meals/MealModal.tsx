@@ -46,7 +46,7 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
           .update({ word: payload.name })
           .eq('word', meal.name);
       }
-      await logActivity({
+      void logActivity({
         action: 'update',
         entity_type: 'meal',
         entity_id: meal.id,
@@ -60,7 +60,7 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
     } else {
       const { data, error } = await supabase.from('meals').insert(payload).select('id').single();
       if (error) { setError(error.message); setSaving(false); return; }
-      await logActivity({
+      void logActivity({
         action: 'create',
         entity_type: 'meal',
         entity_id: data?.id ?? null,

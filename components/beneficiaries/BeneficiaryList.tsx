@@ -142,7 +142,7 @@ export default function BeneficiaryList() {
         setDialog(null);
         setDeleting(id);
         await supabase.from('beneficiaries').delete().eq('id', id);
-        await logActivity({
+        void logActivity({
           action: 'delete',
           entity_type: 'beneficiary',
           entity_id: id,
@@ -166,7 +166,7 @@ export default function BeneficiaryList() {
         const ids = beneficiaries.map(b => b.id);
         const count = ids.length;
         await supabase.from('beneficiaries').delete().in('id', ids);
-        await logActivity({
+        void logActivity({
           action: 'delete',
           entity_type: 'beneficiary',
           entity_name: `حذف جماعي (${count} مستفيد)`,
@@ -646,7 +646,7 @@ export default function BeneficiaryList() {
               }
             }
 
-            await logActivity({
+            void logActivity({
               action: 'create',
               entity_type: 'beneficiary',
               entity_name: `استيراد (${codeToId.size} مستفيد)`,

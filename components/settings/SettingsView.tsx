@@ -93,7 +93,7 @@ export default function SettingsView() {
     if (!translit && row.customId) {
       // Empty value → delete the custom entry so auto-transliteration takes over
       await supabase.from('custom_transliterations').delete().eq('id', row.customId);
-      await logActivity({
+      void logActivity({
         action: 'delete',
         entity_type: 'transliteration',
         entity_id: row.customId,
@@ -102,7 +102,7 @@ export default function SettingsView() {
       });
     } else if (translit && row.customId) {
       await supabase.from('custom_transliterations').update({ transliteration: translit }).eq('id', row.customId);
-      await logActivity({
+      void logActivity({
         action: 'update',
         entity_type: 'transliteration',
         entity_id: row.customId,
@@ -111,7 +111,7 @@ export default function SettingsView() {
       });
     } else if (translit) {
       await supabase.from('custom_transliterations').insert({ word: row.name, transliteration: translit });
-      await logActivity({
+      void logActivity({
         action: 'create',
         entity_type: 'transliteration',
         entity_name: row.name,
@@ -155,7 +155,7 @@ export default function SettingsView() {
         .upsert(parsed, { onConflict: 'word' });
       if (error) throw error;
 
-      await logActivity({
+      void logActivity({
         action: 'create',
         entity_type: 'transliteration',
         entity_name: `استيراد ترجمات (${parsed.length})`,
@@ -309,7 +309,7 @@ export default function SettingsView() {
                           onChange={async e => {
                             const { type: newType, isSnack: newIsSnack } = keyToFields(e.target.value);
                             await supabase.from('meals').update({ type: newType, is_snack: newIsSnack }).eq('id', row.mealId);
-                            await logActivity({
+                            void logActivity({
                               action: 'update',
                               entity_type: 'meal',
                               entity_id: row.mealId,

@@ -105,7 +105,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     if (rpcErr) { setError(rpcErr.message); setSaving(false); return; }
 
     const orderId = isEdit && editingOrder ? editingOrder.id : (typeof rpcData === 'string' ? rpcData : null);
-    await logActivity({
+    void logActivity({
       action: isEdit ? 'update' : 'create',
       entity_type: 'order',
       entity_id: orderId,

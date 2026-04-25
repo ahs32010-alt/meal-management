@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
   const buffer = Buffer.from(await file.arrayBuffer());
   const { error: uploadErr } = await admin.storage
     .from('avatars')
-    .upload(path, buffer, { contentType: file.type, upsert: true, cacheControl: '0' });
+    .upload(path, buffer, { contentType: file.type, upsert: true, cacheControl: '31536000' });
   if (uploadErr) {
     return NextResponse.json({ error: uploadErr.message }, { status: 500 });
   }

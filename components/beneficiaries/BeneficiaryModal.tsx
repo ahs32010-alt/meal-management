@@ -364,7 +364,7 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
       );
       if (fixedRows.length > 0) await supabase.from('beneficiary_fixed_meals').insert(fixedRows);
 
-      await logActivity({
+      void logActivity({
         action: isEdit ? 'update' : 'create',
         entity_type: 'beneficiary',
         entity_id: beneficiaryId,

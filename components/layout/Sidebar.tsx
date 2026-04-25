@@ -97,7 +97,7 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
   const pathname = usePathname();
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
-  const { user: currentUser, loading: userLoading } = useCurrentUser();
+  const { user: currentUser, loading: userLoading, refresh: refreshUser } = useCurrentUser();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   // While loading, show nothing (avoid flashing restricted links). Admins see everything.
@@ -260,7 +260,7 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
         <AvatarUploadModal
           user={currentUser}
           onClose={() => setAvatarOpen(false)}
-          onSaved={() => { setAvatarOpen(false); router.refresh(); window.location.reload(); }}
+          onSaved={() => { setAvatarOpen(false); void refreshUser(); }}
         />
       )}
     </aside>

@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import type { AppUser } from '@/lib/permissions';
 
 const CACHE_KEY = 'kha:user';
-const CACHE_TTL_MS = 60_000; // 1 minute
+const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 
 interface CachedEntry {
   user: AppUser | null;
@@ -62,10 +62,16 @@ async function fetchUser(): Promise<AppUser | null> {
   }
 }
 
+type Listener = (u: AppUser | null) => void;
+const listeners = new Set<Listener>();
+
+function notify(u: AppUser | null) {
+  for (const l of listeners) l(u);
+}
+
 export function useCurrentUser() {
-  const cached = readCache();
-  const [user, setUser] = useState<AppUser | null>(cached?.user ?? null);
-  const [loading, setLoading] = useState(!cached);
+  const [user, setUser] = useState<AppUser | null>(() => readCache()?.user ?? null);
+  const [loading, setLoading] = useState(() => !readCache());
 
   useEffect(() => {
     let cancelled = false;
@@ -74,18 +80,31 @@ export function useCurrentUser() {
       // Already have a fresh cached value — skip the network round-trip.
       if (!user) setUser(cur.user);
       setLoading(false);
-      return;
+    } else {
+      fetchUser().then((u) => {
+        if (cancelled) return;
+        writeCache({ user: u, ts: Date.now() });
+        setUser(u);
+        setLoading(false);
+      });
     }
-    fetchUser().then((u) => {
-      if (cancelled) return;
-      writeCache({ user: u, ts: Date.now() });
-      setUser(u);
-      setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [user]);
 
-  return { user, loading };
+    // Subscribe to refreshes triggered elsewhere (e.g. avatar upload).
+    const listener: Listener = (u) => setUser(u);
+    listeners.add(listener);
+    return () => { cancelled = true; listeners.delete(listener); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const refresh = useCallback(async () => {
+    clearCurrentUserCache();
+    const u = await fetchUser();
+    writeCache({ user: u, ts: Date.now() });
+    notify(u);
+    return u;
+  }, []);
+
+  return { user, loading, refresh };
 }
 
 export function clearCurrentUserCache() {
@@ -93,4 +112,12 @@ export function clearCurrentUserCache() {
   if (typeof window !== 'undefined') {
     try { window.sessionStorage.removeItem(CACHE_KEY); } catch { /* ignore */ }
   }
+}
+
+export async function refreshCurrentUser(): Promise<AppUser | null> {
+  clearCurrentUserCache();
+  const u = await fetchUser();
+  writeCache({ user: u, ts: Date.now() });
+  notify(u);
+  return u;
 }

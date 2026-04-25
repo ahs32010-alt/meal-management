@@ -234,7 +234,7 @@ export default function MealList() {
         setDeleting(id);
         await supabase.from('meals').delete().eq('id', id);
         if (meal) await supabase.from('custom_transliterations').delete().eq('word', meal.name);
-        await logActivity({
+        void logActivity({
           action: 'delete',
           entity_type: 'meal',
           entity_id: id,
@@ -262,7 +262,7 @@ export default function MealList() {
         const count = ids.length;
         await supabase.from('meals').delete().in('id', ids);
         await supabase.from('custom_transliterations').delete().in('word', names);
-        await logActivity({
+        void logActivity({
           action: 'delete',
           entity_type: 'meal',
           entity_name: `حذف جماعي — ${label} ${MEAL_TYPE_LABELS[type]} (${count})`,
@@ -302,7 +302,7 @@ export default function MealList() {
       }
     }
     if (added > 0) {
-      await logActivity({
+      void logActivity({
         action: 'create',
         entity_type: 'meal',
         entity_name: `إضافة جماعية — ${isSnack ? 'سناكات' : 'أصناف'} ${MEAL_TYPE_LABELS[type]} (${added})`,
@@ -350,7 +350,7 @@ export default function MealList() {
       imported++;
     }
     if (imported > 0) {
-      await logActivity({
+      void logActivity({
         action: 'create',
         entity_type: 'meal',
         entity_name: `استيراد أصناف (${imported})`,

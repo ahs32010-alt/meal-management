@@ -74,7 +74,7 @@ export default function OrderList() {
         setDialog(null);
         setDeleting(id);
         await supabase.from('daily_orders').delete().eq('id', id);
-        await logActivity({
+        void logActivity({
           action: 'delete',
           entity_type: 'order',
           entity_id: id,
