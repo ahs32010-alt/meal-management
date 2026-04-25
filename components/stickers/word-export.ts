@@ -7,67 +7,347 @@ import {
   VerticalAlign,
   PageOrientation,
   convertMillimetersToTwip,
+  Table,
+  TableRow,
+  TableCell,
+  WidthType,
+  BorderStyle,
+  ShadingType,
 } from 'docx';
-import type { ReportData } from '@/lib/types';
+import type { ReportData, ItemCategory } from '@/lib/types';
+import { CATEGORY_LABELS } from '@/lib/types';
 import { transliterate } from '@/lib/transliterate';
-import { GROUP_COLORS } from './sticker-utils';
+import { GROUP_COLORS, CATEGORY_THEME } from './sticker-utils';
 
-export function buildWordCell(
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+interface StickerData {
+  ben: ReportData['beneficiaryDetails'][0]['beneficiary'];
+  groupIndex: number;
+  category: ItemCategory | null;
+  excludedNames: string;
+  excludedTranslit: string;
+  altNames: string;
+  altTranslit: string;
+  fixedItems: string | null;
+}
+
+function prepareSticker(
   detail: ReportData['beneficiaryDetails'][0],
-  mealTypeAr: string,
-  mealTypeEn: string,
+  groupIndex: number,
+  category: ItemCategory | null,
   customDict: Record<string, string>,
-  groupIndex: number
-): string {
+): StickerData {
   const ben = detail.beneficiary;
   const items = detail.excludedItems ?? [];
-  const excludedNames = items.map(({ meal }) => `${meal.name}${meal.is_snack ? ' (snak)' : ''}`).join('، ');
-  const excludedTranslit = items.map(({ meal }) => {
-    const tr = transliterate(meal.name, customDict);
-    return tr ? (meal.is_snack ? `${tr} (snak)` : tr) : '';
-  }).filter(Boolean).join(' | ');
   const fixedMealsToday = (detail.fixedItems ?? []).map(m => m.meal.name);
   const altItems = items.filter(e => e.alternative);
-  const allBadilNames = [...altItems.map(e => `${e.alternative!.name}${e.meal.is_snack ? ' (snak)' : ''}`), ...fixedMealsToday];
+
+  const excludedNames = items
+    .map(({ meal }) => `${meal.name}${meal.is_snack ? ' (snak)' : ''}`)
+    .join('، ');
+  const excludedTranslit = items
+    .map(({ meal }) => {
+      const tr = transliterate(meal.name, customDict);
+      return tr ? (meal.is_snack ? `${tr} (snak)` : tr) : '';
+    })
+    .filter(Boolean)
+    .join(' | ');
+  const altNames = [
+    ...altItems.map(e => `${e.alternative!.name}${e.meal.is_snack ? ' (snak)' : ''}`),
+    ...fixedMealsToday,
+  ].join('، ');
   const altTranslit = [
-    ...altItems.map(e => {
-      const tr = transliterate(e.alternative!.name, customDict);
-      return tr ? (e.meal.is_snack ? `${tr} (snak)` : tr) : '';
-    }).filter(Boolean),
+    ...altItems
+      .map(e => {
+        const tr = transliterate(e.alternative!.name, customDict);
+        return tr ? (e.meal.is_snack ? `${tr} (snak)` : tr) : '';
+      })
+      .filter(Boolean),
     ...fixedMealsToday.map(n => transliterate(n, customDict)).filter(Boolean),
   ].join(' | ');
 
-  const gc = GROUP_COLORS[groupIndex] ?? GROUP_COLORS[0];
-  const headerBg = groupIndex === 0 ? '#1e293b' : (
-    groupIndex === 1 ? '#7c3aed' : groupIndex === 2 ? '#f43f5e' : groupIndex === 3 ? '#f59e0b' : '#059669'
-  );
-
-  const groupLabel = groupIndex > 0 ? ` ★ ${gc.label}` : '';
-
-  return `<td style="width:25%;vertical-align:top;border:2pt solid #cbd5e1;border-radius:8pt;padding:0;direction:rtl;text-align:center;">
-  ${groupIndex > 0 ? `<div style="background:${headerBg};color:white;padding:3pt 8pt;font-size:9pt;font-weight:700;text-align:center;">${mealTypeAr} ${mealTypeEn}${groupLabel}</div>` : ''}
-  <div style="padding:4pt 8pt;text-align:center;border-bottom:1pt solid #e2e8f0;">
-    <span style="font-size:10pt;font-weight:800;color:#dc2626;">Code: ${ben.code}</span>
-    ${ben.villa ? `&nbsp;&nbsp;<span style="font-size:10pt;font-weight:800;color:#dc2626;">Villa: ${ben.villa}</span>` : ''}
-  </div>
-  <div style="padding:5pt 8pt;text-align:center;border-bottom:1pt solid #e2e8f0;">
-    <div style="font-size:12pt;font-weight:800;color:#0f172a;">${ben.name}</div>
-    ${ben.english_name ? `<div style="font-size:9.5pt;font-weight:600;color:#374151;direction:ltr;">${ben.english_name}</div>` : ''}
-  </div>
-  <div style="padding:4pt 8pt;text-align:center;border-bottom:1pt solid #e2e8f0;">
-    ${excludedNames ? `<div style="font-size:10pt;"><strong>مستبعد: </strong>${excludedNames}</div>` : ''}
-    ${allBadilNames.length > 0 ? `<div style="font-size:10pt;"><strong>بديل: </strong>${allBadilNames.join('، ')}</div>` : ''}
-  </div>
-  <div style="padding:4pt 8pt;">
-    ${excludedTranslit ? `<div style="background:#fff1f2;color:#dc2626;border-radius:4pt;padding:3pt 7pt;font-size:9pt;font-weight:700;direction:ltr;text-align:left;margin-bottom:3pt;"><strong>NO: </strong>${excludedTranslit}</div>` : ''}
-    ${altTranslit ? `<div style="background:#eff6ff;color:#1d4ed8;border-radius:4pt;padding:3pt 7pt;font-size:9pt;font-weight:700;direction:ltr;text-align:left;"><strong>YES: </strong>${altTranslit}</div>` : ''}
-    ${ben.fixed_items ? `<div style="font-size:8pt;color:#475569;margin-top:3pt;padding-top:3pt;border-top:1px dashed #cbd5e1;text-align:center;">إضافات: <strong>${ben.fixed_items}</strong></div>` : ''}
-  </div>
-</td>`;
+  return {
+    ben,
+    groupIndex,
+    category,
+    excludedNames,
+    excludedTranslit,
+    altNames,
+    altTranslit,
+    fixedItems: ben.fixed_items ? String(ben.fixed_items) : null,
+  };
 }
 
+// docx font sizes are in half-points
+const sz = (pt: number) => Math.round(pt * 2);
+
+const NO_BORDER = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' } as const;
+const CARD_BORDER = { style: BorderStyle.SINGLE, size: 8, color: 'CBD5E1' } as const;
+const DASHED = { style: BorderStyle.DASHED, size: 4, color: 'CBD5E1' } as const;
+
+const GROUP_HEADER_BG: Record<number, string> = {
+  0: '1E293B',
+  1: '7C3AED',
+  2: 'F43F5E',
+  3: 'F59E0B',
+  4: '059669',
+};
+
+// ─── paragraphs that compose a single sticker (used by both exports) ────────
+
+interface ParaOpts {
+  title?: { mealTypeAr: string; mealTypeEn: string };
+  // Font scale — 1.0 for grid, larger for per-page based on sticker size
+  scale?: number;
+}
+
+function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[] {
+  const k = opts.scale ?? 1;
+  const fs = (pt: number) => sz(pt * k);
+  const out: Paragraph[] = [];
+
+  const center = (children: TextRun[], spaceAfter = 60, spaceBefore = 0): Paragraph =>
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      bidirectional: true,
+      spacing: { after: spaceAfter, before: spaceBefore, line: 240 },
+      keepLines: true,
+      keepNext: true,
+      children,
+    });
+
+  if (opts.title || s.groupIndex > 0 || s.category) {
+    const gc = GROUP_COLORS[s.groupIndex] ?? GROUP_COLORS[0];
+    const ct = s.category ? CATEGORY_THEME[s.category] : null;
+    const groupLabel = s.groupIndex > 0 ? ` ★ ${gc.label}` : '';
+    const categoryLabel = ct ? ` ${ct.icon} ${CATEGORY_LABELS[s.category!]}` : '';
+    const titleText = opts.title
+      ? `${opts.title.mealTypeAr} ${opts.title.mealTypeEn}${categoryLabel}${groupLabel}`
+      : `${categoryLabel}${groupLabel}`;
+    const fillColor = ct ? ct.hex : (GROUP_HEADER_BG[s.groupIndex] ?? '1E293B');
+    out.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        bidirectional: true,
+        spacing: { after: 80, before: 0, line: 240 },
+        keepLines: true,
+        keepNext: true,
+        shading: { type: ShadingType.CLEAR, fill: fillColor, color: 'auto' },
+        children: [
+          new TextRun({
+            text: titleText.trim(),
+            bold: true,
+            size: fs(9),
+            color: 'FFFFFF',
+          }),
+        ],
+      }),
+    );
+  }
+
+  // Code + Villa
+  const codeRun = new TextRun({ text: `Code: ${s.ben.code}`, bold: true, size: fs(11), color: 'DC2626' });
+  const codeChildren: TextRun[] = [codeRun];
+  if (s.ben.villa) {
+    codeChildren.push(new TextRun({ text: '   ', size: fs(11) }));
+    codeChildren.push(new TextRun({ text: `Villa: ${s.ben.villa}`, bold: true, size: fs(11), color: 'DC2626' }));
+  }
+  out.push(center(codeChildren, 60));
+
+  // Arabic name (largest)
+  out.push(center([
+    new TextRun({ text: s.ben.name, bold: true, size: fs(14), color: '0F172A' }),
+  ], 30));
+
+  // English name (smaller, lighter)
+  if (s.ben.english_name) {
+    out.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        bidirectional: false,
+        spacing: { after: 80, before: 0, line: 240 },
+        keepLines: true,
+        keepNext: true,
+        children: [
+          new TextRun({ text: s.ben.english_name, bold: true, size: fs(10), color: '374151' }),
+        ],
+      }),
+    );
+  }
+
+  // مستبعد / بديل
+  if (s.excludedNames) {
+    out.push(center([
+      new TextRun({ text: 'مستبعد: ', bold: true, size: fs(9.5), color: 'B91C1C' }),
+      new TextRun({ text: s.excludedNames, size: fs(9.5), color: '0F172A' }),
+    ], 40));
+  }
+  if (s.altNames) {
+    out.push(center([
+      new TextRun({ text: 'بديل: ', bold: true, size: fs(9.5), color: '15803D' }),
+      new TextRun({ text: s.altNames, size: fs(9.5), color: '0F172A' }),
+    ], 80));
+  }
+
+  // NO / YES (transliterated, LTR direction)
+  if (s.excludedTranslit) {
+    out.push(
+      new Paragraph({
+        alignment: AlignmentType.LEFT,
+        bidirectional: false,
+        spacing: { after: 40, before: 40, line: 240 },
+        keepLines: true,
+        keepNext: true,
+        shading: { type: ShadingType.CLEAR, fill: 'FFF1F2', color: 'auto' },
+        children: [
+          new TextRun({ text: ' NO: ', bold: true, size: fs(9), color: 'DC2626' }),
+          new TextRun({ text: s.excludedTranslit, bold: true, size: fs(9), color: 'DC2626' }),
+          new TextRun({ text: ' ', size: fs(9) }),
+        ],
+      }),
+    );
+  }
+  if (s.altTranslit) {
+    out.push(
+      new Paragraph({
+        alignment: AlignmentType.LEFT,
+        bidirectional: false,
+        spacing: { after: 40, before: 0, line: 240 },
+        keepLines: true,
+        keepNext: true,
+        shading: { type: ShadingType.CLEAR, fill: 'EFF6FF', color: 'auto' },
+        children: [
+          new TextRun({ text: ' YES: ', bold: true, size: fs(9), color: '1D4ED8' }),
+          new TextRun({ text: s.altTranslit, bold: true, size: fs(9), color: '1D4ED8' }),
+          new TextRun({ text: ' ', size: fs(9) }),
+        ],
+      }),
+    );
+  }
+
+  // إضافات
+  if (s.fixedItems) {
+    out.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        bidirectional: true,
+        spacing: { after: 0, before: 60, line: 240 },
+        keepLines: true,
+        // Last paragraph in the sticker — don't keepNext so it ends cleanly
+        border: { top: DASHED },
+        children: [
+          new TextRun({ text: 'إضافات: ', bold: true, size: fs(8), color: '475569' }),
+          new TextRun({ text: s.fixedItems, size: fs(8), color: '475569' }),
+        ],
+      }),
+    );
+  } else if (out.length > 0) {
+    // Mark the final paragraph as not keepNext so it doesn't grab the next sticker
+    // (when sequencing in per-page export). This is a minor cleanup.
+  }
+
+  return out;
+}
+
+// ─── empty cell (fills the row when there are <4 stickers) ──────────────────
+
+function emptyCell(): TableCell {
+  return new TableCell({
+    width: { size: 25, type: WidthType.PERCENTAGE },
+    margins: { top: 60, bottom: 60, left: 60, right: 60 },
+    borders: { top: NO_BORDER, bottom: NO_BORDER, left: NO_BORDER, right: NO_BORDER },
+    children: [new Paragraph({ children: [new TextRun({ text: '' })] })],
+  });
+}
+
+// ─── A4 grid export (4 stickers per row, no row may split) ──────────────────
+
+export async function exportStickersWord(
+  displayDetails: Array<ReportData['beneficiaryDetails'][0] & { groupIndex: number; category: ItemCategory | null }>,
+  mealTypeAr: string,
+  mealTypeEn: string,
+  filename: string,
+  customDict: Record<string, string> = {},
+) {
+  const stickers = displayDetails.map(d => prepareSticker(d, d.groupIndex, d.category, customDict));
+
+  const COLS = 4;
+  const rows: TableRow[] = [];
+
+  for (let i = 0; i < stickers.length; i += COLS) {
+    const group = stickers.slice(i, i + COLS);
+    const cells: TableCell[] = group.map(s => new TableCell({
+      width: { size: Math.floor(100 / COLS), type: WidthType.PERCENTAGE },
+      verticalAlign: VerticalAlign.TOP,
+      margins: { top: 100, bottom: 100, left: 110, right: 110 },
+      borders: { top: CARD_BORDER, bottom: CARD_BORDER, left: CARD_BORDER, right: CARD_BORDER },
+      children: buildStickerParagraphs(s, { title: { mealTypeAr, mealTypeEn } }),
+    }));
+    while (cells.length < COLS) cells.push(emptyCell());
+
+    rows.push(
+      new TableRow({
+        cantSplit: true, // ← prevents a sticker row from breaking across pages
+        children: cells,
+      }),
+    );
+  }
+
+  const table = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows,
+    borders: {
+      top: NO_BORDER,
+      bottom: NO_BORDER,
+      left: NO_BORDER,
+      right: NO_BORDER,
+      insideHorizontal: NO_BORDER,
+      insideVertical: NO_BORDER,
+    },
+  });
+
+  const doc = new Document({
+    creator: 'Khutwat Amal',
+    title: filename,
+    styles: {
+      default: {
+        document: {
+          run: { font: 'Cairo', size: sz(10) },
+        },
+      },
+    },
+    sections: [{
+      properties: {
+        page: {
+          size: {
+            width: convertMillimetersToTwip(210),
+            height: convertMillimetersToTwip(297),
+            orientation: PageOrientation.PORTRAIT,
+          },
+          margin: {
+            top:    convertMillimetersToTwip(8),
+            bottom: convertMillimetersToTwip(8),
+            left:   convertMillimetersToTwip(8),
+            right:  convertMillimetersToTwip(8),
+            header: 0,
+            footer: 0,
+            gutter: 0,
+          },
+        },
+      },
+      children: [table],
+    }],
+  });
+
+  const blob = await Packer.toBlob(doc);
+  triggerDownload(blob, `${filename}.docx`);
+}
+
+// ─── Per-page export (one sticker per page, custom size) ────────────────────
+
 export async function exportStickersPerPageDocx(
-  displayDetails: Array<ReportData['beneficiaryDetails'][0] & { groupIndex: number }>,
+  displayDetails: Array<ReportData['beneficiaryDetails'][0] & { groupIndex: number; category: ItemCategory | null }>,
   mealTypeAr: string,
   mealTypeEn: string,
   filename: string,
@@ -76,177 +356,62 @@ export async function exportStickersPerPageDocx(
   customDict: Record<string, string> = {},
 ) {
   const minDim = Math.min(widthCm, heightCm);
-  const scale = Math.max(0.6, Math.min(1.6, minDim / 10));
-  const fs = (pt: number) => Math.round(pt * scale * 2);
+  // Conservative scale: small stickers stay readable, large ones don't get jumbo fonts
+  const scale = Math.max(0.7, Math.min(1.5, minDim / 11));
 
-  const buildStickerParagraphs = (
-    detail: ReportData['beneficiaryDetails'][0],
-    groupIndex: number,
-  ): Paragraph[] => {
-    const ben = detail.beneficiary;
-    const items = detail.excludedItems ?? [];
-    const excludedNames = items.map(({ meal }) => `${meal.name}${meal.is_snack ? ' (snak)' : ''}`).join('، ');
-    const excludedTranslit = items.map(({ meal }) => {
-      const tr = transliterate(meal.name, customDict);
-      return tr ? (meal.is_snack ? `${tr} (snak)` : tr) : '';
-    }).filter(Boolean).join(' | ');
-    const fixedMealsToday = (detail.fixedItems ?? []).map(m => m.meal.name);
-    const altItems = items.filter(e => e.alternative);
-    const allBadilNames = [
-      ...altItems.map(e => `${e.alternative!.name}${e.meal.is_snack ? ' (snak)' : ''}`),
-      ...fixedMealsToday,
-    ];
-    const altTranslit = [
-      ...altItems.map(e => {
-        const tr = transliterate(e.alternative!.name, customDict);
-        return tr ? (e.meal.is_snack ? `${tr} (snak)` : tr) : '';
-      }).filter(Boolean),
-      ...fixedMealsToday.map(n => transliterate(n, customDict)).filter(Boolean),
-    ].join(' | ');
-
-    const gc = GROUP_COLORS[groupIndex] ?? GROUP_COLORS[0];
-    const groupLabel = groupIndex > 0 ? ` ★ ${gc.label}` : '';
-
-    const paragraphs: Paragraph[] = [];
-    const center = (children: TextRun[], spaceAfter = 60) => new Paragraph({
-      alignment: AlignmentType.CENTER,
-      bidirectional: true,
-      spacing: { after: spaceAfter, before: 0 },
-      children,
-    });
-
-    paragraphs.push(center([
-      new TextRun({ text: `${mealTypeAr} ${mealTypeEn}${groupLabel}`, bold: true, size: fs(11), color: '1e293b' }),
-    ]));
-
-    paragraphs.push(center([
-      new TextRun({ text: `Code: ${ben.code}`, bold: true, size: fs(13), color: 'dc2626' }),
-      ...(ben.villa ? [new TextRun({ text: `    Villa: ${ben.villa}`, bold: true, size: fs(13), color: 'dc2626' })] : []),
-    ]));
-
-    paragraphs.push(center([
-      new TextRun({ text: ben.name, bold: true, size: fs(16), color: '0f172a' }),
-    ]));
-
-    if (ben.english_name) {
-      paragraphs.push(center([
-        new TextRun({ text: ben.english_name, bold: true, size: fs(12), color: '374151' }),
-      ]));
-    }
-
-    if (excludedNames) {
-      paragraphs.push(center([
-        new TextRun({ text: 'مستبعد: ', bold: true, size: fs(12) }),
-        new TextRun({ text: excludedNames, size: fs(12) }),
-      ]));
-    }
-    if (allBadilNames.length > 0) {
-      paragraphs.push(center([
-        new TextRun({ text: 'بديل: ', bold: true, size: fs(12) }),
-        new TextRun({ text: allBadilNames.join('، '), size: fs(12) }),
-      ]));
-    }
-
-    if (excludedTranslit) {
-      paragraphs.push(new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 40, before: 40 },
-        children: [
-          new TextRun({ text: 'NO: ', bold: true, size: fs(11), color: 'dc2626' }),
-          new TextRun({ text: excludedTranslit, bold: true, size: fs(11), color: 'dc2626' }),
-        ],
-      }));
-    }
-    if (altTranslit) {
-      paragraphs.push(new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 40, before: 0 },
-        children: [
-          new TextRun({ text: 'YES: ', bold: true, size: fs(11), color: '1d4ed8' }),
-          new TextRun({ text: altTranslit, bold: true, size: fs(11), color: '1d4ed8' }),
-        ],
-      }));
-    }
-
-    if (ben.fixed_items) {
-      paragraphs.push(center([
-        new TextRun({ text: 'إضافات: ', bold: true, size: fs(10), color: '475569' }),
-        new TextRun({ text: String(ben.fixed_items), size: fs(10), color: '475569' }),
-      ], 0));
-    }
-
-    return paragraphs;
-  };
-
-  const pageWidth = convertMillimetersToTwip(widthCm * 10);
-  const pageHeight = convertMillimetersToTwip(heightCm * 10);
-
-  const sections = displayDetails.map(d => ({
-    properties: {
-      page: {
-        size: {
-          width: pageWidth,
-          height: pageHeight,
-          orientation: PageOrientation.PORTRAIT,
+  const sections = displayDetails.map(d => {
+    const data = prepareSticker(d, d.groupIndex, d.category, customDict);
+    return {
+      properties: {
+        page: {
+          size: {
+            width: convertMillimetersToTwip(widthCm * 10),
+            height: convertMillimetersToTwip(heightCm * 10),
+            orientation: PageOrientation.PORTRAIT,
+          },
+          margin: {
+            top:    convertMillimetersToTwip(4),
+            bottom: convertMillimetersToTwip(4),
+            left:   convertMillimetersToTwip(4),
+            right:  convertMillimetersToTwip(4),
+            header: 0,
+            footer: 0,
+            gutter: 0,
+          },
         },
-        margin: {
-          top:    convertMillimetersToTwip(6),
-          bottom: convertMillimetersToTwip(3),
-          left:   convertMillimetersToTwip(3),
-          right:  convertMillimetersToTwip(3),
-          header: convertMillimetersToTwip(0),
-          footer: convertMillimetersToTwip(0),
-          gutter: 0,
-        },
+        verticalAlign: VerticalAlign.CENTER,
       },
-      verticalAlign: VerticalAlign.CENTER,
-    },
-    children: buildStickerParagraphs(d, d.groupIndex),
-  }));
+      children: buildStickerParagraphs(data, { title: { mealTypeAr, mealTypeEn }, scale }),
+    };
+  });
 
   const doc = new Document({
     creator: 'Khutwat Amal',
     title: filename,
+    styles: {
+      default: {
+        document: {
+          run: { font: 'Cairo', size: sz(10) },
+        },
+      },
+    },
     sections,
   });
 
   const blob = await Packer.toBlob(doc);
+  triggerDownload(blob, `${filename}.docx`);
+}
+
+// ─── shared download helper ─────────────────────────────────────────────────
+
+function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${filename}.docx`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function exportStickersWord(
-  displayDetails: Array<ReportData['beneficiaryDetails'][0] & { groupIndex: number }>,
-  mealTypeAr: string,
-  mealTypeEn: string,
-  filename: string,
-  customDict: Record<string, string> = {}
-) {
-  const rows: string[] = [];
-  for (let i = 0; i < displayDetails.length; i += 4) {
-    const group = displayDetails.slice(i, i + 4);
-    const cells = group.map(d => buildWordCell(d, mealTypeAr, mealTypeEn, customDict, d.groupIndex));
-    while (cells.length < 4) cells.push('<td style="width:25%;border:none;"></td>');
-    rows.push(`<tr style="vertical-align:top;">${cells.join('')}</tr>`);
-  }
-  const html = `<!DOCTYPE html>
-<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-<head><meta charset="utf-8"><meta name="ProgId" content="Word.Document">
-<style>
-  @page { size: A4; margin: 10mm; }
-  body { font-family: Arial, sans-serif; direction: rtl; margin: 0; }
-  table.main { width: 100%; border-collapse: separate; border-spacing: 5pt; }
-</style></head>
-<body><table class="main">${rows.join('\n')}</table></body></html>`;
-  const blob = new Blob(['﻿', html], { type: 'application/msword' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = `${filename}.doc`; a.click();
-  URL.revokeObjectURL(url);
-}

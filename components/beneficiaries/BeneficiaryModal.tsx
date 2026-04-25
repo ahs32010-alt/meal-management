@@ -334,15 +334,26 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
       notes: notes.trim() || null,
     };
 
+    const friendlyError = (msg: string) => {
+      const m = msg.toLowerCase();
+      if (m.includes('beneficiaries_code_key') || (m.includes('unique') && m.includes('code'))) {
+        return `الكود "${payload.code}" مستخدم مسبقاً لمستفيد آخر — استخدم كود مختلف`;
+      }
+      if (m.includes('unique') || m.includes('duplicate key')) {
+        return 'البيانات المدخلة مكررة — تحقق من الكود أو الاسم';
+      }
+      return msg;
+    };
+
     try {
       let beneficiaryId = beneficiary?.id;
       const isEdit = !!beneficiary;
       if (beneficiary) {
         const { error } = await supabase.from('beneficiaries').update(payload).eq('id', beneficiary.id);
-        if (error) { setError(error.message); setSaving(false); return; }
+        if (error) { setError(friendlyError(error.message)); setSaving(false); return; }
       } else {
         const { data, error } = await supabase.from('beneficiaries').insert(payload).select().single();
-        if (error) { setError(error.message.includes('unique') ? 'الكود مستخدم مسبقاً' : error.message); setSaving(false); return; }
+        if (error) { setError(friendlyError(error.message)); setSaving(false); return; }
         beneficiaryId = data.id;
       }
 

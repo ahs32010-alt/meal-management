@@ -553,12 +553,21 @@ export default function BeneficiaryList() {
             };
             const parsed: ParsedRow[] = [];
 
+            const seenCodes = new Map<string, number>(); // code → first row index
             for (let i = 0; i < rows.length; i++) {
               const row = rows[i];
               const name = row['الاسم']?.toString().trim();
               const code = row['الكود']?.toString().trim();
               if (!name && !code) continue;
               if (!name || !code) { errors.push(`صف ${i + 2}: الاسم والكود مطلوبان`); continue; }
+
+              const previousRow = seenCodes.get(code);
+              if (previousRow !== undefined) {
+                errors.push(`صف ${i + 2} (${name}): الكود "${code}" مكرر — مستخدم مسبقاً في صف ${previousRow + 2}`);
+                continue;
+              }
+              seenCodes.set(code, i);
+
               parsed.push({
                 rowIdx: i,
                 payload: {
@@ -587,7 +596,32 @@ export default function BeneficiaryList() {
                 .from('beneficiaries')
                 .insert(chunk.map(r => r.payload))
                 .select('id, code');
-              if (error) { errors.push(`خطأ في إدراج المجموعة ${Math.floor(c / CHUNK) + 1}: ${error.message}`); continue; }
+              if (error) {
+                const msg = error.message.toLowerCase();
+                if (msg.includes('beneficiaries_code_key') || (msg.includes('unique') && msg.includes('code'))) {
+                  // Fall back to one-by-one inserts so we can pinpoint which code failed
+                  for (const r of chunk) {
+                    const { data: one, error: oneErr } = await supabase
+                      .from('beneficiaries')
+                      .insert(r.payload)
+                      .select('id, code')
+                      .single();
+                    if (oneErr) {
+                      const m = oneErr.message.toLowerCase();
+                      if (m.includes('beneficiaries_code_key') || (m.includes('unique') && m.includes('code'))) {
+                        errors.push(`صف ${r.rowIdx + 2} (${r.payload.name as string}): الكود "${r.payload.code as string}" مكرر`);
+                      } else {
+                        errors.push(`صف ${r.rowIdx + 2} (${r.payload.name as string}): ${oneErr.message}`);
+                      }
+                      continue;
+                    }
+                    if (one) codeToId.set(one.code, one.id);
+                  }
+                  continue;
+                }
+                errors.push(`خطأ في إدراج المجموعة ${Math.floor(c / CHUNK) + 1}: ${error.message}`);
+                continue;
+              }
               for (const b of data ?? []) codeToId.set(b.code, b.id);
             }
 

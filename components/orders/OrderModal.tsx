@@ -3,13 +3,14 @@
 import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { DailyOrder, Meal, MealType, OrderItem } from '@/lib/types';
-import { MEAL_TYPE_LABELS } from '@/lib/types';
+import type { DailyOrder, Meal, MealType, OrderItem, ItemCategory } from '@/lib/types';
+import { MEAL_TYPE_LABELS, CATEGORY_LABELS, CATEGORY_ORDER } from '@/lib/types';
 
 interface SelectedItem {
   meal_id: string;
   display_name: string;
   extra_quantity: number;
+  category: ItemCategory;
 }
 
 interface Props {
@@ -21,6 +22,20 @@ interface Props {
   onSaved: () => void;
 }
 
+const CATEGORY_THEME: Record<ItemCategory, {
+  icon: string;
+  bg: string;
+  textOn: string;
+  bgChip: string;
+  border: string;
+  badge: string;
+  ring: string;
+}> = {
+  hot:   { icon: '🔥', bg: 'bg-red-500',     textOn: 'text-white', bgChip: 'bg-red-50',     border: 'border-red-200',     badge: 'bg-red-100 text-red-700',     ring: 'ring-red-400' },
+  cold:  { icon: '❄️', bg: 'bg-sky-500',     textOn: 'text-white', bgChip: 'bg-sky-50',     border: 'border-sky-200',     badge: 'bg-sky-100 text-sky-700',     ring: 'ring-sky-400' },
+  snack: { icon: '🍿', bg: 'bg-amber-500',   textOn: 'text-white', bgChip: 'bg-amber-50',   border: 'border-amber-200',   badge: 'bg-amber-100 text-amber-700',   ring: 'ring-amber-400' },
+};
+
 export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts, editingOrder, onClose, onSaved }: Props) {
   const isEdit = !!editingOrder;
 
@@ -30,6 +45,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       meal_id: item.meal_id,
       display_name: item.display_name ?? item.meals?.name ?? '',
       extra_quantity: item.extra_quantity ?? 0,
+      category: item.category ?? (item.meals?.is_snack ? 'snack' : 'hot'),
     }));
   };
 
@@ -38,6 +54,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
   const [weekOfMonth, setWeekOfMonth] = useState<number | ''>(editingOrder?.week_of_month ?? '');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<SelectedItem[]>(initSelected);
+  const [activeCategory, setActiveCategory] = useState<ItemCategory>('hot');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -54,16 +71,13 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       ? list.filter(m => m.name.includes(search.trim()) || (m.english_name ?? '').toLowerCase().includes(search.toLowerCase()))
       : list;
 
-  const selectedIds = selected.map(s => s.meal_id);
+  const selectedByMealId = useMemo(() => {
+    const map = new Map<string, SelectedItem>();
+    for (const s of selected) map.set(s.meal_id, s);
+    return map;
+  }, [selected]);
 
-  const toggleMeal = (meal: Meal) => {
-    if (selectedIds.includes(meal.id)) {
-      setSelected(prev => prev.filter(s => s.meal_id !== meal.id));
-      if (editingId === meal.id) setEditingId(null);
-    } else {
-      setSelected(prev => [...prev, { meal_id: meal.id, display_name: meal.name, extra_quantity: 0 }]);
-    }
-  };
+  const itemsByCategory = (cat: ItemCategory) => selected.filter(s => s.category === cat);
 
   const handleTypeChange = (t: MealType) => {
     setMealType(t);
@@ -71,8 +85,34 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     setSearch('');
   };
 
+  // Click a meal chip:
+  //   - if it's already in the active category → remove it
+  //   - if it's in another category → move it to the active category
+  //   - if it's not selected → add it to the active category
+  const toggleMeal = (meal: Meal) => {
+    setSelected(prev => {
+      const existing = prev.find(s => s.meal_id === meal.id);
+      if (existing) {
+        if (existing.category === activeCategory) {
+          if (editingId === meal.id) setEditingId(null);
+          return prev.filter(s => s.meal_id !== meal.id);
+        }
+        return prev.map(s => s.meal_id === meal.id ? { ...s, category: activeCategory } : s);
+      }
+      return [...prev, { meal_id: meal.id, display_name: meal.name, extra_quantity: 0, category: activeCategory }];
+    });
+  };
+
+  const removeItem = (meal_id: string) => {
+    setSelected(prev => prev.filter(s => s.meal_id !== meal_id));
+    if (editingId === meal_id) setEditingId(null);
+  };
+
   const updateDisplayName = (meal_id: string, value: string) =>
     setSelected(prev => prev.map(s => s.meal_id === meal_id ? { ...s, display_name: value } : s));
+
+  const setItemCategory = (meal_id: string, category: ItemCategory) =>
+    setSelected(prev => prev.map(s => s.meal_id === meal_id ? { ...s, category } : s));
 
   const beneficiaryCount = (meal_id: string) =>
     Math.max(0, totalBeneficiaries - (exclusionCounts[meal_id] ?? 0));
@@ -93,6 +133,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       meal_id: s.meal_id,
       display_name: s.display_name !== meals.find(m => m.id === s.meal_id)?.name ? s.display_name : null,
       extra_quantity: s.extra_quantity,
+      category: s.category,
     }));
 
     const { data: rpcData, error: rpcErr } = await supabase.rpc('replace_order_items', {
@@ -115,31 +156,51 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
         meal_type: mealType,
         week_of_month: weekOfMonth === '' ? null : weekOfMonth,
         items_count: items.length,
-        items: selected.map(s => ({
-          name: s.display_name,
-          extra: s.extra_quantity,
-        })),
+        items_by_category: {
+          hot:   items.filter(i => i.category === 'hot').length,
+          cold:  items.filter(i => i.category === 'cold').length,
+          snack: items.filter(i => i.category === 'snack').length,
+        },
       },
     });
 
     onSaved();
   };
 
-  const MealChip = ({ meal, isSnack }: { meal: Meal; isSnack: boolean }) => {
-    const active = selectedIds.includes(meal.id);
-    const base = isSnack
-      ? active ? 'bg-amber-500 text-white border-amber-500' : 'bg-white border-amber-200 text-amber-700 hover:bg-amber-50'
-      : active ? 'bg-emerald-500 text-white border-emerald-500' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50';
+  // Renders one chip in the meal picker. Visual states:
+  //   - in active category    → solid colored
+  //   - in another category   → outline + small badge of where it is
+  //   - not selected          → plain outline
+  const MealChip = ({ meal }: { meal: Meal }) => {
+    const sel = selectedByMealId.get(meal.id);
+    const inActive = sel?.category === activeCategory;
+    const inOther = sel && sel.category !== activeCategory;
+    const activeTheme = CATEGORY_THEME[activeCategory];
+    const otherTheme = inOther ? CATEGORY_THEME[sel.category] : null;
+
+    let cls = '';
+    if (inActive) {
+      cls = `${activeTheme.bg} ${activeTheme.textOn} border-transparent shadow-sm`;
+    } else if (inOther && otherTheme) {
+      cls = `bg-white border-2 ${otherTheme.border} text-slate-700`;
+    } else {
+      cls = 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50';
+    }
+
     return (
       <button
         type="button"
         onClick={() => toggleMeal(meal)}
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-sm font-medium transition-all ${base}`}
+        title={inOther && otherTheme ? `حالياً في ${CATEGORY_LABELS[sel.category]} — اضغط للنقل إلى ${CATEGORY_LABELS[activeCategory]}` : undefined}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${cls}`}
       >
-        {active && (
+        {inActive && (
           <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
           </svg>
+        )}
+        {inOther && otherTheme && (
+          <span className="text-base leading-none" title={CATEGORY_LABELS[sel.category]}>{otherTheme.icon}</span>
         )}
         {meal.name}
       </button>
@@ -188,15 +249,45 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
               </div>
             </div>
 
-            {/* Meal picker */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="label mb-0">اختر الأصناف</label>
-                {selected.length > 0 && (
-                  <span className="text-xs text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-full">{selected.length} محدد</span>
-                )}
+            {/* ── Top: Active Category Picker ───────────────────────── */}
+            <div className="space-y-2">
+              <label className="label mb-0">القسم النشط</label>
+              <div className="grid grid-cols-3 gap-2">
+                {CATEGORY_ORDER.map(cat => {
+                  const t = CATEGORY_THEME[cat];
+                  const count = itemsByCategory(cat).length;
+                  const active = cat === activeCategory;
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setActiveCategory(cat)}
+                      className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 font-bold text-sm transition-all ${
+                        active
+                          ? `${t.bg} ${t.textOn} border-transparent shadow-md`
+                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className="text-lg leading-none">{t.icon}</span>
+                      <span>{CATEGORY_LABELS[cat]}</span>
+                      {count > 0 && (
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                          active ? 'bg-white/20 text-white' : t.badge
+                        }`}>
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
+              <p className="text-xs text-slate-500">
+                اختر القسم اللي تبيه ثم اضغط على الأصناف تحت لإضافتها فيه — كل صنف يمكن يكون في قسم واحد فقط
+              </p>
+            </div>
 
+            {/* ── Bottom: Meal Picker (preserves Main / Snack split) ── */}
+            <div className="space-y-3">
               <div className="relative">
                 <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -216,20 +307,24 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                   <p className="mt-1 text-xs">أضف أصناف من صفحة الأصناف أولاً</p>
                 </div>
               ) : (
-                <div className="border border-slate-200 rounded-xl p-4 space-y-4 max-h-52 overflow-y-auto">
+                <div className="border border-slate-200 rounded-xl p-4 space-y-4 max-h-64 overflow-y-auto">
                   {filterMeals(mainMeals).length > 0 && (
                     <div className="space-y-2">
-                      <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">أصناف {MEAL_TYPE_LABELS[mealType]}</p>
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">
+                        أصناف {MEAL_TYPE_LABELS[mealType]}
+                      </p>
                       <div className="flex flex-wrap gap-2">
-                        {filterMeals(mainMeals).map(m => <MealChip key={m.id} meal={m} isSnack={false} />)}
+                        {filterMeals(mainMeals).map(m => <MealChip key={m.id} meal={m} />)}
                       </div>
                     </div>
                   )}
                   {filterMeals(snackMeals).length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">سناكات {MEAL_TYPE_LABELS[mealType]}</p>
+                    <div className="space-y-2 pt-2 border-t border-slate-100">
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">
+                        سناكات {MEAL_TYPE_LABELS[mealType]}
+                      </p>
                       <div className="flex flex-wrap gap-2">
-                        {filterMeals(snackMeals).map(m => <MealChip key={m.id} meal={m} isSnack={true} />)}
+                        {filterMeals(snackMeals).map(m => <MealChip key={m.id} meal={m} />)}
                       </div>
                     </div>
                   )}
@@ -240,20 +335,24 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
               )}
             </div>
 
-            {/* Selected items */}
+            {/* ── Selected items: grouped by category, with quantities ── */}
             {selected.length > 0 && (
               <div className="space-y-2">
-                <p className="label mb-0">تفاصيل الأصناف المختارة</p>
+                <p className="label mb-0">تفاصيل الكميات</p>
                 <div className="space-y-2">
-                  {selected.map(item => {
+                  {CATEGORY_ORDER.flatMap(cat => itemsByCategory(cat)).map(item => {
                     const meal = meals.find(m => m.id === item.meal_id);
                     if (!meal) return null;
                     const count = beneficiaryCount(item.meal_id);
                     const total = count + item.extra_quantity;
                     const isEditing = editingId === item.meal_id;
+                    const theme = CATEGORY_THEME[item.category];
                     return (
-                      <div key={item.meal_id} className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
-                        {/* Name section */}
+                      <div key={item.meal_id} className={`flex items-center gap-3 p-3 rounded-xl border ${theme.border} ${theme.bgChip}`}>
+                        <span className={`text-xs font-bold px-2 py-1 rounded-md shrink-0 ${theme.badge}`}>
+                          {theme.icon} {CATEGORY_LABELS[item.category]}
+                        </span>
+
                         <div className="flex-1 min-w-0">
                           <p className="text-xs text-slate-400 mb-0.5">{meal.name}</p>
                           {isEditing ? (
@@ -283,7 +382,27 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                           )}
                         </div>
 
-                        {/* Editable final quantity */}
+                        {/* Quick switch category */}
+                        <div className="hidden md:flex items-center gap-0.5 shrink-0">
+                          {CATEGORY_ORDER.map(cat => {
+                            const tt = CATEGORY_THEME[cat];
+                            const active = item.category === cat;
+                            return (
+                              <button
+                                key={cat}
+                                type="button"
+                                onClick={() => setItemCategory(item.meal_id, cat)}
+                                title={CATEGORY_LABELS[cat]}
+                                className={`w-7 h-7 text-base rounded-md transition-all ${
+                                  active ? `${tt.bg} ${tt.textOn} shadow-sm` : 'bg-white text-slate-400 hover:bg-slate-100'
+                                }`}
+                              >
+                                {tt.icon}
+                              </button>
+                            );
+                          })}
+                        </div>
+
                         <div className="shrink-0 text-center">
                           <div className="text-xs text-slate-500 mb-1">الكمية</div>
                           <input
@@ -298,8 +417,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                           />
                         </div>
 
-                        {/* Remove */}
-                        <button type="button" onClick={() => toggleMeal(meal)}
+                        <button type="button" onClick={() => removeItem(item.meal_id)}
                           className="shrink-0 w-7 h-7 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

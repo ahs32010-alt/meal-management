@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase-server';
 import { NextResponse } from 'next/server';
-import type { ReportData, Meal } from '@/lib/types';
+import type { ReportData, Meal, ItemCategory } from '@/lib/types';
 import { uuidSchema } from '@/lib/validation';
 import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
 
@@ -33,23 +33,25 @@ export async function GET(
 
   const { data: order, error: orderError } = await supabase
     .from('daily_orders')
-    .select(`*, order_items(id, meal_id, display_name, extra_quantity, meals(id, name, english_name, type, is_snack))`)
+    .select(`*, order_items(id, meal_id, display_name, extra_quantity, category, meals(id, name, english_name, type, is_snack))`)
     .eq('id', params.id)
     .single();
 
   if (orderError || !order) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
 
-  const orderItems: { meal_id: string; display_name?: string | null; extra_quantity?: number; meals: Meal }[] = order.order_items || [];
+  const orderItems: { meal_id: string; display_name?: string | null; extra_quantity?: number; category?: string; meals: Meal }[] = order.order_items || [];
   if (orderItems.length === 0) return NextResponse.json({ error: 'No items in this order' }, { status: 400 });
 
   // Build base meal map and display-name-overridden meal map
   const mealMap: Record<string, Meal> = {};
   const displayMealMap: Record<string, Meal> = {};
   const extraQtyMap: Record<string, number> = {};
+  const categoryMap: Record<string, ItemCategory> = {};
 
   orderItems.forEach(item => {
     mealMap[item.meal_id] = item.meals;
     extraQtyMap[item.meal_id] = item.extra_quantity ?? 0;
+    categoryMap[item.meal_id] = (item.category as ItemCategory) ?? (item.meals.is_snack ? 'snack' : 'hot');
     // Create a display-name version of the meal (overrides name if set)
     displayMealMap[item.meal_id] = item.display_name
       ? { ...item.meals, name: item.display_name }
@@ -117,13 +119,18 @@ export async function GET(
         if (ex.alternative_meal_id && altMealMap[ex.alternative_meal_id]) {
           alternative = altMealMap[ex.alternative_meal_id];
         }
-        return { meal, alternative };
+        const category = categoryMap[ex.meal_id] ?? (meal.is_snack ? 'snack' : 'hot');
+        return { meal, alternative, category };
       });
 
     // Fixed meals for today's day + this meal type
-    const todayFixed: { meal: Meal; quantity: number }[] = (ben.fixed_meals || [])
+    const todayFixed: { meal: Meal; quantity: number; category: ItemCategory }[] = (ben.fixed_meals || [])
       .filter(fm => fm.day_of_week === orderDayOfWeek && fm.meal_type === order.meal_type && fm.meals)
-      .map(fm => ({ meal: fm.meals, quantity: fm.quantity ?? 1 }));
+      .map(fm => ({
+        meal: fm.meals,
+        quantity: fm.quantity ?? 1,
+        category: categoryMap[fm.meal_id] ?? (fm.meals.is_snack ? 'snack' : 'hot'),
+      }));
 
     // Count main meals
     orderItems.forEach(item => {

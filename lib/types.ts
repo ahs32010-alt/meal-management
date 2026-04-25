@@ -12,6 +12,23 @@ export const MEAL_TYPE_EN: Record<MealType, string> = {
   dinner: 'DINNER',
 };
 
+// تصنيف الصنف داخل أمر التشغيل — يُستخدم لفصل الستيكرات (كل تصنيف = كيس)
+export type ItemCategory = 'hot' | 'cold' | 'snack';
+
+export const CATEGORY_LABELS: Record<ItemCategory, string> = {
+  hot: 'حار',
+  cold: 'بارد',
+  snack: 'سناك',
+};
+
+export const CATEGORY_LABELS_EN: Record<ItemCategory, string> = {
+  hot: 'HOT',
+  cold: 'COLD',
+  snack: 'SNACK',
+};
+
+export const CATEGORY_ORDER: ItemCategory[] = ['hot', 'cold', 'snack'];
+
 export const DAY_LABELS: Record<number, string> = {
   0: 'الأحد',
   1: 'الاثنين',
@@ -82,13 +99,14 @@ export interface OrderItem {
   meal_id: string;
   display_name?: string | null;
   extra_quantity?: number;
+  category?: ItemCategory;
   meals?: Meal;
 }
 
 export interface BeneficiaryReportDetail {
   beneficiary: Beneficiary;
-  excludedItems: { meal: Meal; alternative: Meal | null }[];
-  fixedItems: { meal: Meal; quantity: number }[];
+  excludedItems: { meal: Meal; alternative: Meal | null; category: ItemCategory }[];
+  fixedItems: { meal: Meal; quantity: number; category: ItemCategory }[];
 }
 
 export interface ReportData {

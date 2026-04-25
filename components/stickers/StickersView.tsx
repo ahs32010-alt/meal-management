@@ -2,12 +2,13 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
-import type { DailyOrder, ReportData } from '@/lib/types';
-import { MEAL_TYPE_LABELS, MEAL_TYPE_EN } from '@/lib/types';
+import type { DailyOrder, ReportData, ItemCategory } from '@/lib/types';
+import { MEAL_TYPE_LABELS, MEAL_TYPE_EN, CATEGORY_ORDER, CATEGORY_LABELS } from '@/lib/types';
 import { formatDate, formatDateFull } from '@/lib/date-utils';
 import { transliterate } from '@/lib/transliterate';
 import {
   GROUP_COLORS,
+  CATEGORY_THEME,
   serializeSplits,
   deserializeSplits,
   maxGroup,
@@ -20,14 +21,16 @@ const t = (s: string, dict: Record<string, string>) => dict[s] ?? transliterate(
 
 
 // ── Sticker Card ──────────────────────────────────────────────────────────────
-function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 0 }: {
+function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 0, category = null }: {
   detail: ReportData['beneficiaryDetails'][0];
   mealTypeAr: string;
   mealTypeEn: string;
   customDict: Record<string, string>;
   groupIndex?: number;
+  category?: ItemCategory | null;
 }) {
   const gc = GROUP_COLORS[groupIndex] ?? GROUP_COLORS[0];
+  const ct = category ? CATEGORY_THEME[category] : null;
   const ben = detail.beneficiary;
   const [editMode, setEditMode] = useState(false);
   const [nameAr, setNameAr] = useState(ben.name);
@@ -86,10 +89,16 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
         </button>
       </div>
 
-      {/* Split group badge */}
+      {/* Split group badge (manual override) */}
       {groupIndex > 0 && (
         <div className={`sticker-group-badge ${gc.bg} ${gc.text}`}>
           ★ {gc.label} — {mealTypeAr} {mealTypeEn}
+        </div>
+      )}
+      {/* Category badge (auto-split) */}
+      {ct && groupIndex === 0 && (
+        <div className={`sticker-group-badge ${ct.bg} ${ct.text}`}>
+          {ct.icon} {CATEGORY_LABELS[category!]} — {mealTypeAr} {mealTypeEn}
         </div>
       )}
 
@@ -564,20 +573,60 @@ export default function StickersView() {
   const mealTypeAr = report ? MEAL_TYPE_LABELS[report.order.meal_type] : '';
   const mealTypeEn = report ? MEAL_TYPE_EN[report.order.meal_type] : '';
 
-  // Expand splits into per-group sticker details
+  // Expand into per-sticker details.
+  //  – If a manual split exists (sticker_splits) for this beneficiary → use it
+  //    (legacy override).
+  //  – Otherwise auto-split by category, BUT only EXCLUSIONS drive new stickers.
+  //    A fixed meal alone never creates a new sticker — it gets folded into the
+  //    first exclusion-driven sticker (the "original"), so the user can split
+  //    manually if they want.
   const displayDetails = stickerDetails.flatMap(detail => {
     const gm = splits[detail.beneficiary.id] ?? {};
     const nGroups = maxGroup(gm);
 
-    if (nGroups === 0) return [{ ...detail, groupIndex: 0 }];
-
-    const result: Array<typeof detail & { groupIndex: number }> = [];
-    for (let g = 0; g <= nGroups; g++) {
-      const groupExcluded = detail.excludedItems.filter(item => (gm[item.meal.id] ?? 0) === g);
-      const groupFixed    = (detail.fixedItems ?? []).filter(m => (gm[m.meal.id] ?? 0) === g);
-      if (groupExcluded.length > 0 || groupFixed.length > 0) {
-        result.push({ ...detail, excludedItems: groupExcluded, fixedItems: groupFixed, groupIndex: g });
+    // Manual override path
+    if (nGroups > 0) {
+      const result: Array<typeof detail & { groupIndex: number; category: ItemCategory | null }> = [];
+      for (let g = 0; g <= nGroups; g++) {
+        const groupExcluded = detail.excludedItems.filter(item => (gm[item.meal.id] ?? 0) === g);
+        const groupFixed    = (detail.fixedItems ?? []).filter(m => (gm[m.meal.id] ?? 0) === g);
+        if (groupExcluded.length > 0 || groupFixed.length > 0) {
+          result.push({ ...detail, excludedItems: groupExcluded, fixedItems: groupFixed, groupIndex: g, category: null });
+        }
       }
+      return result;
+    }
+
+    // Auto-split: only exclusion categories generate stickers.
+    const exclCategories = new Set(detail.excludedItems.map(item => item.category));
+    const allFixed = detail.fixedItems ?? [];
+
+    // No exclusions → single sticker carrying all fixed meals (no category badge)
+    if (exclCategories.size === 0) {
+      return [{ ...detail, groupIndex: 0, category: null }];
+    }
+
+    const result: Array<typeof detail & { groupIndex: number; category: ItemCategory | null }> = [];
+    let isFirst = true;
+    for (const cat of CATEGORY_ORDER) {
+      if (!exclCategories.has(cat)) continue;
+      const groupExcluded = detail.excludedItems.filter(item => item.category === cat);
+      let groupFixed = allFixed.filter(m => m.category === cat);
+      if (isFirst) {
+        // Attach fixed meals from categories that have NO exclusions to the
+        // first sticker — keeps the fixed meal with the "original" until the
+        // user manually splits it.
+        const orphans = allFixed.filter(m => !exclCategories.has(m.category));
+        groupFixed = [...groupFixed, ...orphans];
+      }
+      result.push({
+        ...detail,
+        excludedItems: groupExcluded,
+        fixedItems: groupFixed,
+        groupIndex: 0,
+        category: cat,
+      });
+      isFirst = false;
     }
     return result;
   });
@@ -682,12 +731,13 @@ export default function StickersView() {
               <div className="sticker-grid">
                 {displayDetails.map((detail) => (
                   <StickerCard
-                    key={`${detail.beneficiary.id}_g${detail.groupIndex}_${detail.excludedItems.map(i => i.meal.id).join(',')}_${(detail.fixedItems ?? []).map(m => m.meal.id).join(',')}`}
+                    key={`${detail.beneficiary.id}_g${detail.groupIndex}_c${detail.category ?? 'x'}_${detail.excludedItems.map(i => i.meal.id).join(',')}_${(detail.fixedItems ?? []).map(m => m.meal.id).join(',')}`}
                     detail={detail}
                     mealTypeAr={mealTypeAr}
                     mealTypeEn={mealTypeEn}
                     customDict={customDict}
                     groupIndex={detail.groupIndex}
+                    category={detail.category}
                   />
                 ))}
               </div>
