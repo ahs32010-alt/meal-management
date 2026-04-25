@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import type { Meal, MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
-import MealModal from './MealModal';
-import ImportModal from '@/components/shared/ImportModal';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import { exportXLSX } from '@/lib/xlsx-utils';
+
+const MealModal = dynamic(() => import('./MealModal'), { ssr: false });
+const ImportModal = dynamic(() => import('@/components/shared/ImportModal'), { ssr: false });
 
 const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner'];
 

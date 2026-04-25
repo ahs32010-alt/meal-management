@@ -1,15 +1,17 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import type { Beneficiary, Meal } from '@/lib/types';
 import { DAY_LABELS, DAYS_ORDER } from '@/lib/types';
-import BeneficiaryModal from './BeneficiaryModal';
-import ImportModal from '@/components/shared/ImportModal';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import Pagination from '@/components/shared/Pagination';
-import { exportXLSX } from '@/lib/xlsx-utils';
 import { usePagination } from '@/lib/use-pagination';
+import { exportXLSX } from '@/lib/xlsx-utils';
+
+const BeneficiaryModal = dynamic(() => import('./BeneficiaryModal'), { ssr: false });
+const ImportModal = dynamic(() => import('@/components/shared/ImportModal'), { ssr: false });
 
 // ─── Collapsible pills with popover ────────────────────────────────────────
 function PillGroup({ pills, max = 3 }: {

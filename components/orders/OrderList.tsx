@@ -2,14 +2,16 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import type { DailyOrder, Meal } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
-import OrderModal from './OrderModal';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import Pagination from '@/components/shared/Pagination';
 import { usePagination } from '@/lib/use-pagination';
+
+const OrderModal = dynamic(() => import('./OrderModal'), { ssr: false });
 
 const MEAL_TYPE_STYLES: Record<string, string> = {
   breakfast: 'bg-yellow-100 text-yellow-700',

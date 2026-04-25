@@ -1,11 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  swcMinify: true,
   experimental: {
     serverComponentsExternalPackages: [],
   },
   webpack: (config, { dev }) => {
     if (dev) {
-      // Disable filesystem cache — prevents stale chunk errors after code changes
       config.cache = false;
     }
     return config;

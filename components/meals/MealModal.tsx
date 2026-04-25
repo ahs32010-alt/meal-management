@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import type { Meal, MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
@@ -20,7 +20,7 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
   const [isSnack, setIsSnack] = useState(meal?.is_snack ?? defaultIsSnack);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

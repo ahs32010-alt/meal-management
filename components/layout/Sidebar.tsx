@@ -2,9 +2,9 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
-import { useCurrentUser } from '@/lib/use-current-user';
+import { useCurrentUser, clearCurrentUserCache } from '@/lib/use-current-user';
 import { can, type PageKey } from '@/lib/permissions';
 import ThemeToggle from '@/components/layout/ThemeToggle';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -93,7 +93,7 @@ interface SidebarProps {
 export default function Sidebar({ open = true, desktopOpen = true, onClose, onToggleDesktop }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const { user: currentUser, loading: userLoading } = useCurrentUser();
   const [confirmOpen, setConfirmOpen] = useState(false);
   // While loading, show nothing (avoid flashing restricted links). Admins see everything.
@@ -107,6 +107,7 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
     setConfirmOpen(false);
     try { await supabase.removeAllChannels(); } catch {}
     try { await supabase.auth.signOut(); } catch {}
+    clearCurrentUserCache();
     router.push('/login');
   };
 

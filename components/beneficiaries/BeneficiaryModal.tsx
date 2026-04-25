@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import type { Beneficiary, Meal, MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER } from '@/lib/types';
@@ -277,7 +277,7 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<Tab>('info');
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner'];
 

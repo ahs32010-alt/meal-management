@@ -1,9 +1,8 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase-client';
-import { MEAL_TYPE_LABELS } from '@/lib/types';
 import type { MealType } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
 import { useCurrentUser } from '@/lib/use-current-user';
@@ -219,18 +218,41 @@ export default function DashboardHome() {
     fetchAnalytics();
   }, [fetchStats, fetchAnalytics]);
 
+  // ── Coalesce realtime bursts: collapse N events within 600ms into one refresh ─
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingFull = useRef(false);
+  const scheduleRefresh = useCallback((full: boolean) => {
+    if (full) pendingFull.current = true;
+    if (refreshTimer.current) return;
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      if (pendingFull.current) {
+        pendingFull.current = false;
+        refreshAll();
+      } else {
+        fetchStats();
+      }
+    }, 600);
+  }, [refreshAll, fetchStats]);
+
   // ── Realtime: refresh on any change to relevant tables ───────────────────
   useEffect(() => {
     const channel = supabase
       .channel('dashboard-refresh')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_orders' }, () => refreshAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => refreshAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'meals' }, () => refreshAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'beneficiaries' }, () => fetchStats())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'exclusions' }, () => refreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_orders' }, () => scheduleRefresh(true))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => scheduleRefresh(true))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'meals' }, () => scheduleRefresh(true))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'beneficiaries' }, () => scheduleRefresh(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'exclusions' }, () => scheduleRefresh(true))
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [supabase, refreshAll, fetchStats]);
+    return () => {
+      if (refreshTimer.current) {
+        clearTimeout(refreshTimer.current);
+        refreshTimer.current = null;
+      }
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, scheduleRefresh]);
 
   // ── Refresh on window focus (fallback if realtime isn't enabled) ─────────
   useEffect(() => {

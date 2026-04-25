@@ -14,11 +14,7 @@ import {
   type GroupMap,
   type SplitsMap,
 } from './sticker-utils';
-import {
-  buildWordCell,
-  exportStickersWord,
-  exportStickersPerPageDocx,
-} from './word-export';
+// `./word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
 const t = (s: string, dict: Record<string, string>) => dict[s] ?? transliterate(s);
 
@@ -586,9 +582,10 @@ export default function StickersView() {
     return result;
   });
 
-  const handleExportWord = () => {
+  const handleExportWord = async () => {
     if (!report || displayDetails.length === 0) return;
     const fn = `ستيكرات_${new Date(report.order.date).toISOString().slice(0, 10)}_${mealTypeAr}`;
+    const { exportStickersWord } = await import('./word-export');
     exportStickersWord(displayDetails, mealTypeAr, mealTypeEn, fn, customDict);
   };
 
@@ -602,6 +599,7 @@ export default function StickersView() {
     }
     const fn = `ستيكرات_${new Date(report.order.date).toISOString().slice(0, 10)}_${mealTypeAr}_${w}x${h}سم`;
     try {
+      const { exportStickersPerPageDocx } = await import('./word-export');
       await exportStickersPerPageDocx(displayDetails, mealTypeAr, mealTypeEn, fn, w, h, customDict);
     } catch (e) {
       alert('حدث خطأ أثناء إنشاء الملف');

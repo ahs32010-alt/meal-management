@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import type { DailyOrder, Meal, MealType, OrderItem } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
@@ -43,7 +43,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
   const [showFixed, setShowFixed] = useState(() =>
     typeof window !== 'undefined' ? localStorage.getItem('orderPrintShowFixed') !== '0' : true
   );
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const mainMeals = useMemo(() => meals.filter(m => m.type === mealType && !m.is_snack), [meals, mealType]);
   const snackMeals = useMemo(() => meals.filter(m => m.type === mealType && m.is_snack), [meals, mealType]);
