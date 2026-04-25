@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
+import { logActivity } from '@/lib/activity-log';
 import type { Meal, MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 
@@ -45,9 +46,27 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
           .update({ word: payload.name })
           .eq('word', meal.name);
       }
+      await logActivity({
+        action: 'update',
+        entity_type: 'meal',
+        entity_id: meal.id,
+        entity_name: payload.name,
+        details: {
+          previous_name: meal.name !== payload.name ? meal.name : undefined,
+          type: payload.type,
+          is_snack: payload.is_snack,
+        },
+      });
     } else {
-      const { error } = await supabase.from('meals').insert(payload);
+      const { data, error } = await supabase.from('meals').insert(payload).select('id').single();
       if (error) { setError(error.message); setSaving(false); return; }
+      await logActivity({
+        action: 'create',
+        entity_type: 'meal',
+        entity_id: data?.id ?? null,
+        entity_name: payload.name,
+        details: { type: payload.type, is_snack: payload.is_snack },
+      });
     }
 
     onSaved();

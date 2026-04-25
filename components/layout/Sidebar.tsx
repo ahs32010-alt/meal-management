@@ -3,11 +3,14 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { useCurrentUser, clearCurrentUserCache } from '@/lib/use-current-user';
 import { can, type PageKey } from '@/lib/permissions';
 import ThemeToggle from '@/components/layout/ThemeToggle';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
+
+const AvatarUploadModal = dynamic(() => import('./AvatarUploadModal'), { ssr: false });
 
 const navItems: { href: string; label: string; page: PageKey; icon: React.ReactNode }[] = [
   {
@@ -96,6 +99,7 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
   const supabase = useMemo(() => createClient(), []);
   const { user: currentUser, loading: userLoading } = useCurrentUser();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [avatarOpen, setAvatarOpen] = useState(false);
   // While loading, show nothing (avoid flashing restricted links). Admins see everything.
   const visibleItems = userLoading
     ? []
@@ -179,9 +183,50 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
           );
         })}
 
-        {/* Logout — placed below Settings with extra spacing + a subtle divider */}
-        {!userLoading && (
-          <div className="pt-6 mt-4 border-t border-slate-700/50">
+        {/* Current user info + Logout */}
+        {!userLoading && currentUser && (
+          <div className="pt-6 mt-4 border-t border-slate-700/50 space-y-1">
+            <button
+              type="button"
+              onClick={() => setAvatarOpen(true)}
+              title="تغيير صورة المستخدم"
+              className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-slate-800/50 hover:bg-slate-800 transition-colors w-full text-right group"
+            >
+              <div className="relative shrink-0">
+                <div className="w-9 h-9 rounded-full overflow-hidden bg-emerald-600 flex items-center justify-center text-white font-bold text-sm">
+                  {currentUser.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={currentUser.avatar_url} alt={currentUser.full_name ?? currentUser.email} className="w-full h-full object-cover" />
+                  ) : (
+                    (currentUser.full_name ?? currentUser.email ?? '?').trim().charAt(0).toUpperCase()
+                  )}
+                </div>
+                <span className="absolute -bottom-0.5 -left-0.5 w-4 h-4 bg-slate-900 border border-slate-700 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <svg className="w-2.5 h-2.5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-white font-semibold text-sm truncate" title={currentUser.full_name ?? currentUser.email}>
+                    {currentUser.full_name ?? currentUser.email}
+                  </span>
+                  {currentUser.is_admin && (
+                    <span title="مدير" className="text-emerald-400 shrink-0">
+                      <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                      </svg>
+                    </span>
+                  )}
+                </div>
+                <div dir="ltr" className="text-[11px] text-slate-400 truncate text-right" title={currentUser.email}>
+                  {currentUser.email}
+                </div>
+              </div>
+            </button>
+
             <button
               onClick={() => setConfirmOpen(true)}
               className="flex items-center gap-3 px-4 py-2.5 rounded-xl w-full text-slate-300 hover:bg-rose-500/15 hover:text-rose-300 transition-colors"
@@ -210,6 +255,14 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
         onConfirm={handleLogout}
         onCancel={() => setConfirmOpen(false)}
       />
+
+      {avatarOpen && currentUser && (
+        <AvatarUploadModal
+          user={currentUser}
+          onClose={() => setAvatarOpen(false)}
+          onSaved={() => { setAvatarOpen(false); router.refresh(); window.location.reload(); }}
+        />
+      )}
     </aside>
   );
 }

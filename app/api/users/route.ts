@@ -4,6 +4,7 @@ import { assertAdmin } from '@/lib/auth';
 import { createUserSchema, parseJson } from '@/lib/validation';
 import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
 import { sanitizeOptional } from '@/lib/sanitize';
+import { logActivityServer } from '@/lib/activity-log-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -77,6 +78,15 @@ export async function POST(req: NextRequest) {
     await admin.auth.admin.deleteUser(created.user.id);
     return NextResponse.json({ error: insertErr.message }, { status: 500 });
   }
+
+  await logActivityServer({
+    user_id: check.currentUserId,
+    action: 'create',
+    entity_type: 'user',
+    entity_id: created.user.id,
+    entity_name: cleanFullName ?? email,
+    details: { email, is_admin: Boolean(is_admin) },
+  });
 
   return NextResponse.json({ user: row });
 }

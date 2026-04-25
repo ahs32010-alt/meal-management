@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
+import { logActivity } from '@/lib/activity-log';
 import type { Meal, MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -233,6 +234,13 @@ export default function MealList() {
         setDeleting(id);
         await supabase.from('meals').delete().eq('id', id);
         if (meal) await supabase.from('custom_transliterations').delete().eq('word', meal.name);
+        await logActivity({
+          action: 'delete',
+          entity_type: 'meal',
+          entity_id: id,
+          entity_name: meal?.name ?? null,
+          details: meal ? { type: meal.type, is_snack: meal.is_snack } : null,
+        });
         await fetchMeals();
         setDeleting(null);
       },
@@ -251,8 +259,15 @@ export default function MealList() {
         setDeletingAll(true);
         const ids = section.map(m => m.id);
         const names = section.map(m => m.name);
+        const count = ids.length;
         await supabase.from('meals').delete().in('id', ids);
         await supabase.from('custom_transliterations').delete().in('word', names);
+        await logActivity({
+          action: 'delete',
+          entity_type: 'meal',
+          entity_name: `حذف جماعي — ${label} ${MEAL_TYPE_LABELS[type]} (${count})`,
+          details: { count, type, is_snack: isSnack, scope: 'section' },
+        });
         await fetchMeals();
         setDeletingAll(false);
       },
@@ -285,6 +300,14 @@ export default function MealList() {
       } else {
         added++;
       }
+    }
+    if (added > 0) {
+      await logActivity({
+        action: 'create',
+        entity_type: 'meal',
+        entity_name: `إضافة جماعية — ${isSnack ? 'سناكات' : 'أصناف'} ${MEAL_TYPE_LABELS[type]} (${added})`,
+        details: { added, type, is_snack: isSnack, source: 'bulk_add' },
+      });
     }
     await fetchMeals();
     return { added, errors };
@@ -325,6 +348,14 @@ export default function MealList() {
       const { error } = await supabase.from('meals').upsert(payload, { onConflict: 'name' });
       if (error) { errors.push(`صف ${i + 2} (${name}): ${error.message}`); continue; }
       imported++;
+    }
+    if (imported > 0) {
+      await logActivity({
+        action: 'create',
+        entity_type: 'meal',
+        entity_name: `استيراد أصناف (${imported})`,
+        details: { imported, errors_count: errors.length, source: 'excel_import' },
+      });
     }
     return { imported, errors };
   };

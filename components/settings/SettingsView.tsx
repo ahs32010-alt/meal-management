@@ -6,9 +6,11 @@ import type { MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import { toCSV, parseCSV, downloadCSV } from '@/lib/csv-utils';
 import UsersManager from './UsersManager';
+import ActivityLogView from './ActivityLogView';
 import { useCurrentUser } from '@/lib/use-current-user';
+import { logActivity } from '@/lib/activity-log';
 
-type Tab = 'translit' | 'users';
+type Tab = 'translit' | 'users' | 'activity';
 
 interface Row {
   mealId: string;
@@ -91,10 +93,30 @@ export default function SettingsView() {
     if (!translit && row.customId) {
       // Empty value → delete the custom entry so auto-transliteration takes over
       await supabase.from('custom_transliterations').delete().eq('id', row.customId);
+      await logActivity({
+        action: 'delete',
+        entity_type: 'transliteration',
+        entity_id: row.customId,
+        entity_name: row.name,
+        details: { previous: row.customTranslit },
+      });
     } else if (translit && row.customId) {
       await supabase.from('custom_transliterations').update({ transliteration: translit }).eq('id', row.customId);
+      await logActivity({
+        action: 'update',
+        entity_type: 'transliteration',
+        entity_id: row.customId,
+        entity_name: row.name,
+        details: { previous: row.customTranslit, new: translit },
+      });
     } else if (translit) {
       await supabase.from('custom_transliterations').insert({ word: row.name, transliteration: translit });
+      await logActivity({
+        action: 'create',
+        entity_type: 'transliteration',
+        entity_name: row.name,
+        details: { transliteration: translit },
+      });
     }
     setEditingId(null);
     setSaving(false);
@@ -132,6 +154,13 @@ export default function SettingsView() {
         .from('custom_transliterations')
         .upsert(parsed, { onConflict: 'word' });
       if (error) throw error;
+
+      await logActivity({
+        action: 'create',
+        entity_type: 'transliteration',
+        entity_name: `استيراد ترجمات (${parsed.length})`,
+        details: { count: parsed.length, source: 'csv_import' },
+      });
 
       setImportStatus('done');
       setImportMsg(`تم استيراد ${parsed.length} ترجمة بنجاح`);
@@ -179,9 +208,19 @@ export default function SettingsView() {
             المستخدمون والصلاحيات
           </button>
         )}
+        <button
+          onClick={() => setTab('activity')}
+          className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${
+            tab === 'activity'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          آخر التحديثات
+        </button>
       </div>
 
-      {tab === 'users' && isAdmin ? <UsersManager /> : (
+      {tab === 'users' && isAdmin ? <UsersManager /> : tab === 'activity' ? <ActivityLogView /> : (
       <div className="card overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 bg-slate-50 flex items-center gap-3">
           <div className="flex-1">
@@ -270,6 +309,19 @@ export default function SettingsView() {
                           onChange={async e => {
                             const { type: newType, isSnack: newIsSnack } = keyToFields(e.target.value);
                             await supabase.from('meals').update({ type: newType, is_snack: newIsSnack }).eq('id', row.mealId);
+                            await logActivity({
+                              action: 'update',
+                              entity_type: 'meal',
+                              entity_id: row.mealId,
+                              entity_name: row.name,
+                              details: {
+                                previous_type: row.type,
+                                previous_is_snack: row.isSnack,
+                                new_type: newType,
+                                new_is_snack: newIsSnack,
+                                source: 'settings_translit_table',
+                              },
+                            });
                             fetchData();
                           }}
                           className={`text-xs font-semibold px-2 py-1 rounded border cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-400 ${TYPE_BADGE[tk].cls}`}

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
+import { logActivity } from '@/lib/activity-log';
 import type { DailyOrder, Meal, MealType, OrderItem } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 
@@ -94,7 +95,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       extra_quantity: s.extra_quantity,
     }));
 
-    const { error: rpcErr } = await supabase.rpc('replace_order_items', {
+    const { data: rpcData, error: rpcErr } = await supabase.rpc('replace_order_items', {
       p_order_id: isEdit && editingOrder ? editingOrder.id : null,
       p_date: date,
       p_meal_type: mealType,
@@ -102,6 +103,24 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       p_items: items,
     });
     if (rpcErr) { setError(rpcErr.message); setSaving(false); return; }
+
+    const orderId = isEdit && editingOrder ? editingOrder.id : (typeof rpcData === 'string' ? rpcData : null);
+    await logActivity({
+      action: isEdit ? 'update' : 'create',
+      entity_type: 'order',
+      entity_id: orderId,
+      entity_name: `أمر تشغيل ${MEAL_TYPE_LABELS[mealType]} — ${date}`,
+      details: {
+        date,
+        meal_type: mealType,
+        week_of_month: weekOfMonth === '' ? null : weekOfMonth,
+        items_count: items.length,
+        items: selected.map(s => ({
+          name: s.display_name,
+          extra: s.extra_quantity,
+        })),
+      },
+    });
 
     onSaved();
   };

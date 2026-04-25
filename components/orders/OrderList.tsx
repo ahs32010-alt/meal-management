@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
+import { logActivity } from '@/lib/activity-log';
 import type { DailyOrder, Meal } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
@@ -73,6 +74,13 @@ export default function OrderList() {
         setDialog(null);
         setDeleting(id);
         await supabase.from('daily_orders').delete().eq('id', id);
+        await logActivity({
+          action: 'delete',
+          entity_type: 'order',
+          entity_id: id,
+          entity_name: order ? `أمر تشغيل ${MEAL_TYPE_LABELS[order.meal_type]} — ${order.date}` : null,
+          details: order ? { date: order.date, meal_type: order.meal_type } : null,
+        });
         await fetchData();
         setDeleting(null);
       },

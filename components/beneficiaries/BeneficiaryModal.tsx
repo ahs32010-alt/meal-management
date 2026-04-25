@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
+import { logActivity } from '@/lib/activity-log';
 import type { Beneficiary, Meal, MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER } from '@/lib/types';
 
@@ -335,6 +336,7 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
 
     try {
       let beneficiaryId = beneficiary?.id;
+      const isEdit = !!beneficiary;
       if (beneficiary) {
         const { error } = await supabase.from('beneficiaries').update(payload).eq('id', beneficiary.id);
         if (error) { setError(error.message); setSaving(false); return; }
@@ -361,6 +363,20 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
         }))
       );
       if (fixedRows.length > 0) await supabase.from('beneficiary_fixed_meals').insert(fixedRows);
+
+      await logActivity({
+        action: isEdit ? 'update' : 'create',
+        entity_type: 'beneficiary',
+        entity_id: beneficiaryId,
+        entity_name: payload.name,
+        details: {
+          code: payload.code,
+          category: payload.category,
+          villa: payload.villa,
+          exclusions_count: exclusions.length,
+          fixed_meals_count: fixedRows.length,
+        },
+      });
 
       onSaved();
     } catch (err) {

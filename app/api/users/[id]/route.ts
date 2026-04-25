@@ -4,6 +4,7 @@ import { assertAdmin } from '@/lib/auth';
 import { parseJson, updateUserSchema, uuidSchema } from '@/lib/validation';
 import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
 import { sanitizeOptional } from '@/lib/sanitize';
+import { logActivityServer } from '@/lib/activity-log-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,6 +69,22 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   const { data: row } = await admin.from('app_users').select('*').eq('id', params.id).maybeSingle();
+
+  await logActivityServer({
+    user_id: check.currentUserId,
+    action: 'update',
+    entity_type: 'user',
+    entity_id: params.id,
+    entity_name: row?.full_name ?? row?.email ?? null,
+    details: {
+      email_changed: email !== undefined,
+      password_changed: !!password,
+      full_name_changed: full_name !== undefined,
+      is_admin_changed: is_admin !== undefined,
+      permissions_changed: permissions !== undefined,
+    },
+  });
+
   return NextResponse.json({ user: row });
 }
 
@@ -95,7 +112,25 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   }
 
   const admin = createAdminClient();
+
+  // Capture user info before deletion so we can log a meaningful entry.
+  const { data: target } = await admin
+    .from('app_users')
+    .select('email, full_name')
+    .eq('id', params.id)
+    .maybeSingle();
+
   const { error } = await admin.auth.admin.deleteUser(params.id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  await logActivityServer({
+    user_id: check.currentUserId,
+    action: 'delete',
+    entity_type: 'user',
+    entity_id: params.id,
+    entity_name: target?.full_name ?? target?.email ?? null,
+    details: target ? { email: target.email } : null,
+  });
+
   return NextResponse.json({ ok: true });
 }

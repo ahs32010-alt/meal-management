@@ -24,6 +24,7 @@ export interface AppUser {
   full_name: string | null;
   is_admin: boolean;
   permissions: PermissionsMap;
+  avatar_url: string | null;
   created_at: string;
   updated_at: string;
 }

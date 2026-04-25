@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
+import { logActivity } from '@/lib/activity-log';
 import type { Beneficiary, Meal } from '@/lib/types';
 import { DAY_LABELS, DAYS_ORDER } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -141,6 +142,13 @@ export default function BeneficiaryList() {
         setDialog(null);
         setDeleting(id);
         await supabase.from('beneficiaries').delete().eq('id', id);
+        await logActivity({
+          action: 'delete',
+          entity_type: 'beneficiary',
+          entity_id: id,
+          entity_name: ben?.name ?? null,
+          details: ben ? { code: ben.code, villa: ben.villa } : null,
+        });
         await fetchData();
         setDeleting(null);
       },
@@ -156,7 +164,14 @@ export default function BeneficiaryList() {
         setDialog(null);
         setDeletingAll(true);
         const ids = beneficiaries.map(b => b.id);
+        const count = ids.length;
         await supabase.from('beneficiaries').delete().in('id', ids);
+        await logActivity({
+          action: 'delete',
+          entity_type: 'beneficiary',
+          entity_name: `حذف جماعي (${count} مستفيد)`,
+          details: { count, scope: 'all' },
+        });
         await fetchData();
         setDeletingAll(false);
       },
@@ -630,6 +645,13 @@ export default function BeneficiaryList() {
                 if (error) errors.push(`خطأ في الأصناف الثابتة: ${error.message}`);
               }
             }
+
+            await logActivity({
+              action: 'create',
+              entity_type: 'beneficiary',
+              entity_name: `استيراد (${codeToId.size} مستفيد)`,
+              details: { imported: codeToId.size, errors_count: errors.length, source: 'excel_import' },
+            });
 
             await fetchData();
             return { imported: codeToId.size, errors };
