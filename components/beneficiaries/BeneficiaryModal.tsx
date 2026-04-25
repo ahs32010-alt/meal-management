@@ -3,8 +3,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { Beneficiary, Meal, MealType } from '@/lib/types';
-import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER } from '@/lib/types';
+import type { Beneficiary, Meal, MealType, ItemCategory } from '@/lib/types';
+import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, CATEGORY_LABELS, CATEGORY_ORDER } from '@/lib/types';
 
 interface Props {
   beneficiary: Beneficiary | null;
@@ -20,17 +20,33 @@ interface ExclusionEntry {
   alternative_meal_id: string;
 }
 
-type FixedEntry = { meal_id: string; meal_type: MealType; days: Set<number>; quantity: number };
+type FixedEntry = { meal_id: string; meal_type: MealType; days: Set<number>; quantity: number; category: ItemCategory };
 
 function buildFixedEntries(fixedMeals: Beneficiary['fixed_meals']): FixedEntry[] {
   const map: Record<string, FixedEntry> = {};
   for (const fm of fixedMeals ?? []) {
     const key = `${fm.meal_id}_${fm.meal_type}`;
-    if (!map[key]) map[key] = { meal_id: fm.meal_id, meal_type: fm.meal_type as MealType, days: new Set(), quantity: fm.quantity ?? 1 };
+    if (!map[key]) {
+      const meal = (fm as unknown as { meals?: { is_snack?: boolean } }).meals;
+      const inferred: ItemCategory = meal?.is_snack ? 'snack' : 'hot';
+      map[key] = {
+        meal_id: fm.meal_id,
+        meal_type: fm.meal_type as MealType,
+        days: new Set(),
+        quantity: fm.quantity ?? 1,
+        category: (fm.category as ItemCategory) ?? inferred,
+      };
+    }
     map[key].days.add(fm.day_of_week);
   }
   return Object.values(map);
 }
+
+const CATEGORY_THEME_FIXED: Record<ItemCategory, { icon: string; bg: string; textOn: string }> = {
+  hot:   { icon: '🔥', bg: 'bg-red-500',     textOn: 'text-white' },
+  cold:  { icon: '❄️', bg: 'bg-sky-500',     textOn: 'text-white' },
+  snack: { icon: '🍿', bg: 'bg-amber-500',   textOn: 'text-white' },
+};
 
 // ─── Searchable dropdown ────────────────────────────────────────────────────
 function MealPicker({
@@ -293,10 +309,11 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
 
   // fixed helpers
   const addFixedMeal = (meal: Meal) => {
-    const key = `${meal.id}_${newFixedMealType}`;
     const exists = fixedEntries.find(fe => fe.meal_id === meal.id && fe.meal_type === newFixedMealType);
-    if (!exists)
-      setFixedEntries(prev => [...prev, { meal_id: meal.id, meal_type: newFixedMealType, days: new Set(), quantity: 1 }]);
+    if (!exists) {
+      const category: ItemCategory = meal.is_snack ? 'snack' : 'hot';
+      setFixedEntries(prev => [...prev, { meal_id: meal.id, meal_type: newFixedMealType, days: new Set(), quantity: 1, category }]);
+    }
     setAddingFixed(false);
   };
   const removeFixedEntry = (meal_id: string, meal_type: MealType) =>
@@ -304,6 +321,10 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
   const setFixedEntryQty = (meal_id: string, meal_type: MealType, quantity: number) =>
     setFixedEntries(prev => prev.map(fe =>
       fe.meal_id === meal_id && fe.meal_type === meal_type ? { ...fe, quantity } : fe
+    ));
+  const setFixedEntryCategory = (meal_id: string, meal_type: MealType, category: ItemCategory) =>
+    setFixedEntries(prev => prev.map(fe =>
+      fe.meal_id === meal_id && fe.meal_type === meal_type ? { ...fe, category } : fe
     ));
   const toggleDay = (meal_id: string, meal_type: MealType, day: number) =>
     setFixedEntries(prev => prev.map(fe => {
@@ -371,9 +392,27 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
           meal_type: fe.meal_type,
           meal_id: fe.meal_id,
           quantity: fe.quantity,
+          category: fe.category,
         }))
       );
-      if (fixedRows.length > 0) await supabase.from('beneficiary_fixed_meals').insert(fixedRows);
+      if (fixedRows.length > 0) {
+        const { error: fixedErr } = await supabase.from('beneficiary_fixed_meals').insert(fixedRows);
+        if (fixedErr) {
+          if (/category|column/i.test(fixedErr.message)) {
+            // Migration not run — let the user know category won't persist
+            const fallback = fixedRows.map(({ category: _c, ...rest }) => rest);
+            const { error: fallbackErr } = await supabase.from('beneficiary_fixed_meals').insert(fallback);
+            if (fallbackErr) { throw fallbackErr; }
+            alert(
+              'تنبيه: تم حفظ المستفيد لكن لم يتم حفظ تصنيف (حار/بارد/سناك) للأصناف الثابتة.\n\n' +
+              'السبب: عمود category غير موجود في جدول beneficiary_fixed_meals.\n\n' +
+              'الحل: شغّل ملف supabase/fixed-meals-category-migration.sql في Supabase SQL Editor.'
+            );
+          } else {
+            throw fixedErr;
+          }
+        }
+      }
 
       void logActivity({
         action: isEdit ? 'update' : 'create',
@@ -632,6 +671,26 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-slate-400">{fe.days.size} يوم</span>
+                            {/* Category toggle (3 buttons) — splits stickers when categories differ */}
+                            <div className="flex items-center gap-0.5 bg-white border border-slate-200 rounded-lg p-0.5" title="نوع الكيس — يحدد ستيكر منفصل">
+                              {CATEGORY_ORDER.map(cat => {
+                                const t = CATEGORY_THEME_FIXED[cat];
+                                const active = fe.category === cat;
+                                return (
+                                  <button
+                                    key={cat}
+                                    type="button"
+                                    onClick={() => setFixedEntryCategory(fe.meal_id, fe.meal_type, cat)}
+                                    title={CATEGORY_LABELS[cat]}
+                                    className={`w-6 h-6 text-sm rounded transition-all ${
+                                      active ? `${t.bg} ${t.textOn} shadow-sm` : 'text-slate-400 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    {t.icon}
+                                  </button>
+                                );
+                              })}
+                            </div>
                             {/* Quantity control */}
                             <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-1.5 py-0.5">
                               <button type="button"

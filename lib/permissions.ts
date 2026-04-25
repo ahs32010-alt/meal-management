@@ -9,6 +9,7 @@ export type PageKey =
   | 'dashboard'
   | 'beneficiaries'
   | 'meals'
+  | 'menu'
   | 'orders'
   | 'reports'
   | 'stickers'
@@ -33,6 +34,7 @@ export const PAGES: { key: PageKey; label: string; href: string }[] = [
   { key: 'dashboard',     label: 'لوحة التحكم',  href: '/' },
   { key: 'beneficiaries', label: 'المستفيدون',   href: '/beneficiaries' },
   { key: 'meals',         label: 'الأصناف',      href: '/meals' },
+  { key: 'menu',          label: 'قائمة الطعام', href: '/menu' },
   { key: 'orders',        label: 'أوامر التشغيل', href: '/orders' },
   { key: 'reports',       label: 'التقارير',     href: '/reports' },
   { key: 'stickers',      label: 'الستيكرات',    href: '/stickers' },

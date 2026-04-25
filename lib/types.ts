@@ -81,6 +81,7 @@ export interface BeneficiaryFixedMeal {
   meal_type: MealType;
   meal_id: string;
   quantity: number;
+  category?: ItemCategory;
   meals?: Meal;
 }
 
@@ -88,9 +89,25 @@ export interface DailyOrder {
   id: string;
   date: string;
   meal_type: MealType;
+  week_number?: number | null;
+  day_of_week?: number | null;
+  // Legacy alias retained while older orders still hold this column.
   week_of_month?: number | null;
   created_at: string;
   order_items?: OrderItem[];
+}
+
+export interface MenuItem {
+  id: string;
+  week_number: number;     // 1..4
+  day_of_week: number;     // 0..6 (Sun..Sat)
+  meal_type: MealType;
+  meal_id: string;
+  category: ItemCategory;  // 'hot' | 'cold' | 'snack'
+  position: number;
+  multiplier: number;      // default 1 — copied to order_items on auto-fill
+  created_at: string;
+  meals?: Meal;
 }
 
 export interface OrderItem {
@@ -100,6 +117,12 @@ export interface OrderItem {
   display_name?: string | null;
   extra_quantity?: number;
   category?: ItemCategory;
+  /**
+   * How many portions per beneficiary. Defaults to 1.
+   * Multiplies only the cooking/order count — never per-beneficiary stickers
+   * or alternative/fixed meal counts.
+   */
+  multiplier?: number;
   meals?: Meal;
 }
 

@@ -597,28 +597,30 @@ export default function StickersView() {
       return result;
     }
 
-    // Auto-split: only exclusion categories generate stickers.
-    const exclCategories = new Set(detail.excludedItems.map(item => item.category));
+    // Auto-split: union of categories from BOTH excluded items and fixed meals.
+    // A fixed meal with an explicit category drives a sticker just like an
+    // exclusion does, so the user can keep hot/cold/snack in separate bags.
     const allFixed = detail.fixedItems ?? [];
+    const activeCategories = new Set<ItemCategory>([
+      ...detail.excludedItems.map(item => item.category),
+      ...allFixed.map(fi => fi.category),
+    ]);
 
-    // No exclusions → single sticker carrying all fixed meals (no category badge)
-    if (exclCategories.size === 0) {
+    if (activeCategories.size === 0) {
       return [{ ...detail, groupIndex: 0, category: null }];
     }
 
+    if (activeCategories.size === 1) {
+      const onlyCat = [...activeCategories][0];
+      return [{ ...detail, groupIndex: 0, category: onlyCat }];
+    }
+
+    // Multiple categories → one sticker per active category
     const result: Array<typeof detail & { groupIndex: number; category: ItemCategory | null }> = [];
-    let isFirst = true;
     for (const cat of CATEGORY_ORDER) {
-      if (!exclCategories.has(cat)) continue;
+      if (!activeCategories.has(cat)) continue;
       const groupExcluded = detail.excludedItems.filter(item => item.category === cat);
-      let groupFixed = allFixed.filter(m => m.category === cat);
-      if (isFirst) {
-        // Attach fixed meals from categories that have NO exclusions to the
-        // first sticker — keeps the fixed meal with the "original" until the
-        // user manually splits it.
-        const orphans = allFixed.filter(m => !exclCategories.has(m.category));
-        groupFixed = [...groupFixed, ...orphans];
-      }
+      const groupFixed    = allFixed.filter(m => m.category === cat);
       result.push({
         ...detail,
         excludedItems: groupExcluded,
@@ -626,7 +628,6 @@ export default function StickersView() {
         groupIndex: 0,
         category: cat,
       });
-      isFirst = false;
     }
     return result;
   });

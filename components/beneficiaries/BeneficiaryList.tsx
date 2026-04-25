@@ -75,7 +75,7 @@ export default function BeneficiaryList() {
   const [importOpen, setImportOpen] = useState(false);
   const [editingBeneficiary, setEditingBeneficiary] = useState<Beneficiary | null>(null);
   const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState<'name' | 'code' | 'villa'>('name');
+  const [sortKey, setSortKey] = useState<'name' | 'code' | 'category' | 'villa' | 'diet_type' | 'fixed_count' | 'excluded_count' | 'notes'>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [deleting, setDeleting] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
@@ -87,7 +87,9 @@ export default function BeneficiaryList() {
     setLoading(true);
 
     try {
-      const [bensResult, mealsResult] = await Promise.all([
+      // Try with the category column on fixed_meals first; if migration not run,
+      // retry without it so the page still works.
+      const fetchBens = (withFixedCategory: boolean) =>
         supabase
           .from('beneficiaries')
           .select(`
@@ -99,19 +101,23 @@ export default function BeneficiaryList() {
               alternative_meal:meals!exclusions_alternative_meal_id_fkey(id, name)
             ),
             fixed_meals:beneficiary_fixed_meals(
-              id, beneficiary_id, day_of_week, meal_type, meal_id, quantity,
+              id, beneficiary_id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category' : ''},
               meals(id, name, type, is_snack)
             )
           `)
-          .order('name'),
+          .order('name');
 
-        supabase
-          .from('meals')
-          .select('id, name, english_name, type, is_snack, created_at')
-          .order('type')
-          .order('is_snack')
-          .order('name'),
-      ]);
+      let bensResult = await fetchBens(true);
+      if (bensResult.error && /category|column/i.test(bensResult.error.message)) {
+        bensResult = await fetchBens(false);
+      }
+
+      const mealsResult = await supabase
+        .from('meals')
+        .select('id, name, english_name, type, is_snack, created_at')
+        .order('type')
+        .order('is_snack')
+        .order('name');
 
       // ✅ FIX 1: لازم نحفظ المستفيدين فعلياً
       if (bensResult.data) {
@@ -254,25 +260,30 @@ export default function BeneficiaryList() {
   const filtered = beneficiaries.filter(b => {
     if (!search.trim()) return true;
 
-    const q = search.toLowerCase();
+    const q = search.trim().toLowerCase();
 
-    const exclusionNames = (b.exclusions ?? [])
-      .map(e => e.meals?.name ?? '')
-      .join(' ');
-
+    const exclusionMealNames = (b.exclusions ?? [])
+      .map(e => e.meals?.name ?? '').join(' ');
+    const alternativeMealNames = (b.exclusions ?? [])
+      .map(e => (e as any).alternative_meal?.name ?? '').join(' ');
     const fixedMealNames = (b.fixed_meals ?? [])
-      .map(fm => (fm as any)?.meals?.name ?? '')
-      .join(' ');
+      .map(fm => (fm as any)?.meals?.name ?? '').join(' ');
 
-    return (
-      b.name?.toLowerCase().includes(q) ||
-      b.code?.toLowerCase().includes(q) ||
-      (b.category ?? '').toLowerCase().includes(q) ||
-      (b.villa ?? '').toLowerCase().includes(q) ||
-      (b.english_name ?? '').toLowerCase().includes(q) ||
-      exclusionNames.includes(q) ||
-      fixedMealNames.includes(q)
-    );
+    const haystack = [
+      b.name,
+      b.english_name,
+      b.code,
+      b.category,
+      b.villa,
+      b.diet_type,
+      b.notes,
+      b.fixed_items,
+      exclusionMealNames,
+      alternativeMealNames,
+      fixedMealNames,
+    ].filter(Boolean).join(' ').toLowerCase();
+
+    return haystack.includes(q);
   });
 
   const toggleSort = (key: typeof sortKey) => {
@@ -281,11 +292,33 @@ export default function BeneficiaryList() {
   };
 
   const sorted = [...filtered].sort((a, b) => {
+    // Numeric sorts (counts)
+    if (sortKey === 'fixed_count') {
+      const av = (a.fixed_meals ?? []).length;
+      const bv = (b.fixed_meals ?? []).length;
+      return sortDir === 'asc' ? av - bv : bv - av;
+    }
+    if (sortKey === 'excluded_count') {
+      const av = (a.exclusions ?? []).length;
+      const bv = (b.exclusions ?? []).length;
+      return sortDir === 'asc' ? av - bv : bv - av;
+    }
+
+    // String sorts — empty values always go to the bottom regardless of direction
     let av = '', bv = '';
-    if (sortKey === 'name')  { av = a.name ?? '';  bv = b.name ?? ''; }
-    if (sortKey === 'code')  { av = a.code ?? '';  bv = b.code ?? ''; }
-    if (sortKey === 'villa') { av = a.villa ?? ''; bv = b.villa ?? ''; }
-    const cmp = av.localeCompare(bv, 'ar', { numeric: true });
+    if (sortKey === 'name')      { av = a.name ?? '';      bv = b.name ?? ''; }
+    if (sortKey === 'code')      { av = a.code ?? '';      bv = b.code ?? ''; }
+    if (sortKey === 'category')  { av = a.category ?? '';  bv = b.category ?? ''; }
+    if (sortKey === 'villa')     { av = a.villa ?? '';     bv = b.villa ?? ''; }
+    if (sortKey === 'diet_type') { av = a.diet_type ?? ''; bv = b.diet_type ?? ''; }
+    if (sortKey === 'notes')     { av = a.notes ?? '';     bv = b.notes ?? ''; }
+
+    const aEmpty = !av.trim();
+    const bEmpty = !bv.trim();
+    if (aEmpty && !bEmpty) return 1;
+    if (!aEmpty && bEmpty) return -1;
+
+    const cmp = av.localeCompare(bv, 'ar', { numeric: true, sensitivity: 'base' });
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
@@ -323,13 +356,28 @@ export default function BeneficiaryList() {
 
       {/* Search + count */}
       <div className="flex items-center gap-3">
-        <input
-          type="text"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="ابحث بالاسم أو الكود أو الفيلا..."
-          className="input-field max-w-sm"
-        />
+        <div className="relative max-w-sm flex-1">
+          <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="ابحث في أي حقل: اسم، كود، فيلا، نظام غذائي، ملاحظات، صنف..."
+            className="input-field pr-10"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors"
+              title="مسح البحث"
+            >
+              ✕
+            </button>
+          )}
+        </div>
         <span className="text-sm text-slate-500">{filtered.length} مستفيد</span>
       </div>
 
@@ -358,16 +406,36 @@ export default function BeneficiaryList() {
                     الكود <SortIcon col="code" />
                   </button>
                 </th>
-                <th className="table-header">الفئة</th>
+                <th className="table-header">
+                  <button onClick={() => toggleSort('category')} className="flex items-center gap-1 hover:text-emerald-700 transition-colors">
+                    الفئة <SortIcon col="category" />
+                  </button>
+                </th>
                 <th className="table-header">
                   <button onClick={() => toggleSort('villa')} className="flex items-center gap-1 hover:text-emerald-700 transition-colors">
                     الفيلا <SortIcon col="villa" />
                   </button>
                 </th>
-                <th className="table-header">النظام الغذائي</th>
-                <th className="table-header">الأصناف الثابتة</th>
-                <th className="table-header">الأصناف المحظورة</th>
-                <th className="table-header">ملاحظات</th>
+                <th className="table-header">
+                  <button onClick={() => toggleSort('diet_type')} className="flex items-center gap-1 hover:text-emerald-700 transition-colors">
+                    النظام الغذائي <SortIcon col="diet_type" />
+                  </button>
+                </th>
+                <th className="table-header">
+                  <button onClick={() => toggleSort('fixed_count')} className="flex items-center gap-1 hover:text-emerald-700 transition-colors">
+                    الأصناف الثابتة <SortIcon col="fixed_count" />
+                  </button>
+                </th>
+                <th className="table-header">
+                  <button onClick={() => toggleSort('excluded_count')} className="flex items-center gap-1 hover:text-emerald-700 transition-colors">
+                    الأصناف المحظورة <SortIcon col="excluded_count" />
+                  </button>
+                </th>
+                <th className="table-header">
+                  <button onClick={() => toggleSort('notes')} className="flex items-center gap-1 hover:text-emerald-700 transition-colors">
+                    ملاحظات <SortIcon col="notes" />
+                  </button>
+                </th>
                 <th className="table-header text-center">الإجراءات</th>
               </tr>
             </thead>

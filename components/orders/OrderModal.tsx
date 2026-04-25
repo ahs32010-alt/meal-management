@@ -1,16 +1,18 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { DailyOrder, Meal, MealType, OrderItem, ItemCategory } from '@/lib/types';
+import type { DailyOrder, Meal, MealType, OrderItem, ItemCategory, MenuItem } from '@/lib/types';
 import { MEAL_TYPE_LABELS, CATEGORY_LABELS, CATEGORY_ORDER } from '@/lib/types';
+import { MENU_DAYS, WEEK_NUMBERS, WEEK_TITLES, type WeekNumber } from '@/lib/menu-utils';
 
 interface SelectedItem {
   meal_id: string;
   display_name: string;
   extra_quantity: number;
   category: ItemCategory;
+  multiplier: number;
 }
 
 interface Props {
@@ -46,12 +48,18 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       display_name: item.display_name ?? item.meals?.name ?? '',
       extra_quantity: item.extra_quantity ?? 0,
       category: item.category ?? (item.meals?.is_snack ? 'snack' : 'hot'),
+      multiplier: item.multiplier ?? 1,
     }));
   };
 
   const [date, setDate] = useState(editingOrder?.date ?? new Date().toISOString().split('T')[0]);
   const [mealType, setMealType] = useState<MealType>(editingOrder?.meal_type ?? 'lunch');
-  const [weekOfMonth, setWeekOfMonth] = useState<number | ''>(editingOrder?.week_of_month ?? '');
+  const [weekNumber, setWeekNumber] = useState<WeekNumber | ''>(
+    (editingOrder?.week_number ?? editingOrder?.week_of_month ?? '') as WeekNumber | ''
+  );
+  const [dayOfWeek, setDayOfWeek] = useState<number | ''>(
+    editingOrder?.day_of_week ?? (editingOrder?.date ? new Date(editingOrder.date).getDay() : '')
+  );
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<SelectedItem[]>(initSelected);
   const [activeCategory, setActiveCategory] = useState<ItemCategory>('hot');
@@ -61,6 +69,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
   const [showFixed, setShowFixed] = useState(() =>
     typeof window !== 'undefined' ? localStorage.getItem('orderPrintShowFixed') !== '0' : true
   );
+  const [autoFilledKey, setAutoFilledKey] = useState<string | null>(null);
   const supabase = useMemo(() => createClient(), []);
 
   const mainMeals = useMemo(() => meals.filter(m => m.type === mealType && !m.is_snack), [meals, mealType]);
@@ -79,16 +88,78 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
 
   const itemsByCategory = (cat: ItemCategory) => selected.filter(s => s.category === cat);
 
+  // Auto-fill from menu when (week, day, meal_type) changes — only for NEW orders
+  // (preserves edits to existing orders).
+  useEffect(() => {
+    if (isEdit) return;
+    if (weekNumber === '' || dayOfWeek === '') return;
+    const key = `${weekNumber}|${dayOfWeek}|${mealType}`;
+    if (key === autoFilledKey) return;
+
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('menu_items')
+        .select('meal_id, category, position, multiplier, meals(id, name, is_snack)')
+        .eq('week_number', weekNumber)
+        .eq('day_of_week', dayOfWeek)
+        .eq('meal_type', mealType);
+      if (cancelled) return;
+
+      const items = (data as unknown as MenuItem[] | null) ?? [];
+      // Sort: hot, cold, snack — then position
+      const sorted = items.sort((a, b) => {
+        const r = (c: ItemCategory) => c === 'hot' ? 0 : c === 'cold' ? 1 : 2;
+        if (a.category !== b.category) return r(a.category) - r(b.category);
+        return a.position - b.position;
+      });
+
+      setSelected(sorted.map(it => ({
+        meal_id: it.meal_id,
+        display_name: it.meals?.name ?? '',
+        extra_quantity: 0,
+        category: it.category,
+        multiplier: it.multiplier ?? 1,
+      })));
+      setAutoFilledKey(key);
+    })();
+
+    return () => { cancelled = true; };
+  }, [isEdit, weekNumber, dayOfWeek, mealType, supabase, autoFilledKey]);
+
   const handleTypeChange = (t: MealType) => {
     setMealType(t);
-    setSelected([]);
+    if (!isEdit) setSelected([]);
     setSearch('');
   };
 
-  // Click a meal chip:
-  //   - if it's already in the active category → remove it
-  //   - if it's in another category → move it to the active category
-  //   - if it's not selected → add it to the active category
+  const refillFromMenu = async () => {
+    if (weekNumber === '' || dayOfWeek === '') {
+      setError('اختر رقم الأسبوع واليوم أولاً');
+      return;
+    }
+    if (selected.length > 0 && !confirm('سيتم استبدال الأصناف الحالية بأصناف المنيو لهذا اليوم. تأكيد؟')) return;
+    const { data } = await supabase
+      .from('menu_items')
+      .select('meal_id, category, position, meals(id, name, is_snack)')
+      .eq('week_number', weekNumber)
+      .eq('day_of_week', dayOfWeek)
+      .eq('meal_type', mealType);
+    const items = (data as unknown as MenuItem[] | null) ?? [];
+    const sorted = items.sort((a, b) => {
+      const r = (c: ItemCategory) => c === 'hot' ? 0 : c === 'cold' ? 1 : 2;
+      if (a.category !== b.category) return r(a.category) - r(b.category);
+      return a.position - b.position;
+    });
+    setSelected(sorted.map(it => ({
+      meal_id: it.meal_id,
+      display_name: it.meals?.name ?? '',
+      extra_quantity: 0,
+      category: it.category,
+      multiplier: it.multiplier ?? 1,
+    })));
+  };
+
   const toggleMeal = (meal: Meal) => {
     setSelected(prev => {
       const existing = prev.find(s => s.meal_id === meal.id);
@@ -99,7 +170,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
         }
         return prev.map(s => s.meal_id === meal.id ? { ...s, category: activeCategory } : s);
       }
-      return [...prev, { meal_id: meal.id, display_name: meal.name, extra_quantity: 0, category: activeCategory }];
+      return [...prev, { meal_id: meal.id, display_name: meal.name, extra_quantity: 0, category: activeCategory, multiplier: 1 }];
     });
   };
 
@@ -114,12 +185,17 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
   const setItemCategory = (meal_id: string, category: ItemCategory) =>
     setSelected(prev => prev.map(s => s.meal_id === meal_id ? { ...s, category } : s));
 
+  const setItemMultiplier = (meal_id: string, multiplier: number) =>
+    setSelected(prev => prev.map(s => s.meal_id === meal_id ? { ...s, multiplier: Math.max(1, Math.min(100, multiplier || 1)) } : s));
+
   const beneficiaryCount = (meal_id: string) =>
     Math.max(0, totalBeneficiaries - (exclusionCounts[meal_id] ?? 0));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selected.length === 0) { setError('يرجى اختيار صنف واحد على الأقل'); return; }
+    if (weekNumber === '') { setError('اختر رقم الأسبوع'); return; }
+    if (dayOfWeek === '') { setError('اختر اليوم'); return; }
     setSaving(true);
     setError('');
 
@@ -134,18 +210,44 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       display_name: s.display_name !== meals.find(m => m.id === s.meal_id)?.name ? s.display_name : null,
       extra_quantity: s.extra_quantity,
       category: s.category,
+      multiplier: s.multiplier,
     }));
 
     const { data: rpcData, error: rpcErr } = await supabase.rpc('replace_order_items', {
       p_order_id: isEdit && editingOrder ? editingOrder.id : null,
       p_date: date,
       p_meal_type: mealType,
-      p_week_of_month: weekOfMonth === '' ? null : weekOfMonth,
+      p_week_number: weekNumber,
+      p_day_of_week: dayOfWeek,
       p_items: items,
     });
     if (rpcErr) { setError(rpcErr.message); setSaving(false); return; }
 
-    const orderId = isEdit && editingOrder ? editingOrder.id : (typeof rpcData === 'string' ? rpcData : null);
+    const rpcOrderId = rpcData && typeof rpcData === 'object' && 'order_id' in rpcData
+      ? (rpcData as { order_id: string }).order_id
+      : null;
+    const orderId = isEdit && editingOrder ? editingOrder.id : rpcOrderId;
+
+    if (orderId) {
+      try {
+        const snapRes = await fetch(`/api/orders/${orderId}/snapshot`, { method: 'POST' });
+        if (!snapRes.ok) {
+          const j = await snapRes.json().catch(() => ({}));
+          if (j?.reason === 'migration_required') {
+            alert(
+              'تنبيه: تم حفظ أمر التشغيل لكن لم يتم تجميد الإحصاءات.\n\n' +
+              'السبب: عمود snapshot غير موجود في قاعدة البيانات.\n\n' +
+              'الحل: شغّل ملف supabase/order-snapshot-migration.sql في Supabase SQL Editor.'
+            );
+          } else if (process.env.NODE_ENV !== 'production') {
+            console.warn('Snapshot save failed:', j);
+          }
+        }
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') console.warn('Snapshot request errored:', err);
+      }
+    }
+
     void logActivity({
       action: isEdit ? 'update' : 'create',
       entity_type: 'order',
@@ -154,7 +256,8 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       details: {
         date,
         meal_type: mealType,
-        week_of_month: weekOfMonth === '' ? null : weekOfMonth,
+        week_number: weekNumber,
+        day_of_week: dayOfWeek,
         items_count: items.length,
         items_by_category: {
           hot:   items.filter(i => i.category === 'hot').length,
@@ -167,10 +270,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     onSaved();
   };
 
-  // Renders one chip in the meal picker. Visual states:
-  //   - in active category    → solid colored
-  //   - in another category   → outline + small badge of where it is
-  //   - not selected          → plain outline
   const MealChip = ({ meal }: { meal: Meal }) => {
     const sel = selectedByMealId.get(meal.id);
     const inActive = sel?.category === activeCategory;
@@ -210,7 +309,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[92vh] overflow-hidden flex flex-col">
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 shrink-0">
           <h2 className="text-lg font-bold text-slate-800">
             {isEdit ? 'تعديل أمر التشغيل' : 'إنشاء أمر تشغيل جديد'}
@@ -221,37 +319,43 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
           <div className="p-6 space-y-5 overflow-y-auto flex-1">
 
-            {/* Date + type + week */}
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <label className="label">التاريخ *</label>
-                <input type="date" value={date} onChange={e => setDate(e.target.value)} className="input-field" required />
-              </div>
-              <div>
-                <label className="label">نوع الوجبة *</label>
-                <select value={mealType} onChange={e => handleTypeChange(e.target.value as MealType)} className="input-field">
-                  {Object.entries(MEAL_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            {/* Week + Day + Meal type */}
+            <div>
+              <label className="label">الأسبوع واليوم — يحدد المنيو والمستفيدين <span className="text-red-500">*</span></label>
+              <div className="grid grid-cols-3 gap-3 mt-1">
+                <select value={weekNumber} onChange={e => setWeekNumber(e.target.value === '' ? '' : Number(e.target.value) as WeekNumber)} className="input-field" required>
+                  <option value="">— الأسبوع —</option>
+                  {WEEK_NUMBERS.map(w => <option key={w} value={w}>{WEEK_TITLES[w]}</option>)}
                 </select>
-              </div>
-              <div>
-                <label className="label">الأسبوع</label>
-                <select
-                  value={weekOfMonth}
-                  onChange={e => setWeekOfMonth(e.target.value === '' ? '' : Number(e.target.value))}
-                  className="input-field"
-                >
-                  <option value="">— بدون —</option>
-                  <option value={1}>الأسبوع الأول</option>
-                  <option value={2}>الأسبوع الثاني</option>
-                  <option value={3}>الأسبوع الثالث</option>
-                  <option value={4}>الأسبوع الرابع</option>
+                <select value={dayOfWeek} onChange={e => setDayOfWeek(e.target.value === '' ? '' : Number(e.target.value))} className="input-field" required>
+                  <option value="">— اليوم —</option>
+                  {MENU_DAYS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+                </select>
+                <select value={mealType} onChange={e => handleTypeChange(e.target.value as MealType)} className="input-field" required>
+                  {Object.entries(MEAL_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </div>
             </div>
 
-            {/* ── Top: Active Category Picker ───────────────────────── */}
+            {/* Date — informational only */}
+            <div>
+              <label className="label">التاريخ <span className="text-xs text-slate-400 font-normal">(تعريفي فقط — لا يؤثر على المستفيدين)</span></label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} className="input-field" required />
+            </div>
+
+            {isEdit && (
+              <button
+                type="button"
+                onClick={refillFromMenu}
+                className="text-sm font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 hover:bg-emerald-100 transition-colors"
+              >
+                ↺ إعادة تعبئة من المنيو
+              </button>
+            )}
+
+            {/* Active category picker */}
             <div className="space-y-2">
-              <label className="label mb-0">القسم النشط</label>
+              <label className="label mb-0">القسم النشط للاختيار</label>
               <div className="grid grid-cols-3 gap-2">
                 {CATEGORY_ORDER.map(cat => {
                   const t = CATEGORY_THEME[cat];
@@ -281,12 +385,9 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                   );
                 })}
               </div>
-              <p className="text-xs text-slate-500">
-                اختر القسم اللي تبيه ثم اضغط على الأصناف تحت لإضافتها فيه — كل صنف يمكن يكون في قسم واحد فقط
-              </p>
             </div>
 
-            {/* ── Bottom: Meal Picker (preserves Main / Snack split) ── */}
+            {/* Meal picker */}
             <div className="space-y-3">
               <div className="relative">
                 <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -304,7 +405,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
               {mainMeals.length === 0 && snackMeals.length === 0 ? (
                 <div className="border border-dashed border-slate-200 rounded-xl p-6 text-center text-slate-400 text-sm">
                   <p>لا توجد أصناف لوجبة {MEAL_TYPE_LABELS[mealType]}</p>
-                  <p className="mt-1 text-xs">أضف أصناف من صفحة الأصناف أولاً</p>
                 </div>
               ) : (
                 <div className="border border-slate-200 rounded-xl p-4 space-y-4 max-h-64 overflow-y-auto">
@@ -328,14 +428,11 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                       </div>
                     </div>
                   )}
-                  {filterMeals(mainMeals).length === 0 && filterMeals(snackMeals).length === 0 && (
-                    <p className="text-sm text-slate-400 text-center py-2">لا توجد نتائج للبحث</p>
-                  )}
                 </div>
               )}
             </div>
 
-            {/* ── Selected items: grouped by category, with quantities ── */}
+            {/* Selected items */}
             {selected.length > 0 && (
               <div className="space-y-2">
                 <p className="label mb-0">تفاصيل الكميات</p>
@@ -344,7 +441,9 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                     const meal = meals.find(m => m.id === item.meal_id);
                     if (!meal) return null;
                     const count = beneficiaryCount(item.meal_id);
-                    const total = count + item.extra_quantity;
+                    // total = (people who get it) × multiplier + manual offset
+                    const baseAfterMultiplier = count * item.multiplier;
+                    const total = baseAfterMultiplier + item.extra_quantity;
                     const isEditing = editingId === item.meal_id;
                     const theme = CATEGORY_THEME[item.category];
                     return (
@@ -382,7 +481,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                           )}
                         </div>
 
-                        {/* Quick switch category */}
                         <div className="hidden md:flex items-center gap-0.5 shrink-0">
                           {CATEGORY_ORDER.map(cat => {
                             const tt = CATEGORY_THEME[cat];
@@ -403,6 +501,22 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                           })}
                         </div>
 
+                        <div className="shrink-0 text-center" title="مضاعف الكمية لكل مستفيد (مثلاً ٢ للخبز)">
+                          <div className="text-xs text-slate-500 mb-1">×</div>
+                          <input
+                            type="number"
+                            min={1}
+                            max={100}
+                            value={item.multiplier}
+                            onChange={e => setItemMultiplier(item.meal_id, parseInt(e.target.value) || 1)}
+                            className={`w-12 text-center text-sm font-bold rounded-lg py-1 focus:outline-none focus:ring-1 ${
+                              item.multiplier > 1
+                                ? 'text-violet-700 border border-violet-300 bg-violet-50 focus:border-violet-400 focus:ring-violet-200'
+                                : 'text-slate-500 border border-slate-200 focus:border-slate-400 focus:ring-slate-200'
+                            }`}
+                          />
+                        </div>
+
                         <div className="shrink-0 text-center">
                           <div className="text-xs text-slate-500 mb-1">الكمية</div>
                           <input
@@ -411,7 +525,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                             value={total}
                             onChange={e => {
                               const n = parseInt(e.target.value);
-                              if (!isNaN(n)) setSelected(prev => prev.map(s => s.meal_id === item.meal_id ? { ...s, extra_quantity: n - count } : s));
+                              if (!isNaN(n)) setSelected(prev => prev.map(s => s.meal_id === item.meal_id ? { ...s, extra_quantity: n - baseAfterMultiplier } : s));
                             }}
                             className="w-16 text-center text-base font-bold text-emerald-700 border border-slate-200 rounded-lg py-1 focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200"
                           />
@@ -430,7 +544,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
               </div>
             )}
 
-            {/* Fixed items toggle */}
             <label className="flex items-center gap-2.5 cursor-pointer select-none py-2 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors">
               <input
                 type="checkbox"
@@ -447,7 +560,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
             {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>}
           </div>
 
-          {/* Footer */}
           <div className="flex gap-3 px-6 py-4 border-t border-slate-100 shrink-0">
             <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
               {saving ? (isEdit ? 'جاري الحفظ...' : 'جاري الإنشاء...') : (isEdit ? 'حفظ التعديلات' : 'إنشاء أمر التشغيل')}

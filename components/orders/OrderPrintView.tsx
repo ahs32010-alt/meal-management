@@ -11,7 +11,7 @@ interface BeneficiaryDetail {
   fixedItems: { meal: Meal; quantity: number }[];
 }
 interface FullReport {
-  order: { id: string; date: string; meal_type: string; week_of_month?: number | null };
+  order: { id: string; date: string; meal_type: string; week_number?: number | null; week_of_month?: number | null; day_of_week?: number | null };
   itemsSummary: MealCount[];
   beneficiaryDetails: BeneficiaryDetail[];
   mainMealsSummary: MealCount[];
@@ -458,9 +458,12 @@ ${contentHtml}
         <div style={s.infoBar}>
           <div style={s.infoMain}>{arabicDate(order.date)}</div>
           <div style={s.infoLine}>نوع الوجبة: <strong>{mealLabel}</strong></div>
-          {order.week_of_month && WEEK_LABELS[order.week_of_month] && (
-            <div style={s.infoLine}>الأسبوع: <strong>{WEEK_LABELS[order.week_of_month]}</strong></div>
-          )}
+          {(() => {
+            const wk = order.week_number ?? order.week_of_month;
+            return wk && WEEK_LABELS[wk] ? (
+              <div style={s.infoLine}>الأسبوع: <strong>{WEEK_LABELS[wk]}</strong></div>
+            ) : null;
+          })()}
         </div>
 
         {/* ── Main + Alt side-by-side ── */}

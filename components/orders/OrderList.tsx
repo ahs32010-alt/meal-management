@@ -35,16 +35,29 @@ export default function OrderList() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [ordersResult, mealsResult, bensResult, exclusionsResult] = await Promise.all([
-        supabase
-          .from('daily_orders')
-          .select(`id, date, meal_type, created_at, order_items(id, meal_id, display_name, extra_quantity, meals(id, name, is_snack))`)
-          .order('date', { ascending: false }),
+      // Try with the snapshot column first; if the migration hasn't been run yet
+      // (column doesn't exist), retry without it so the page still works.
+      const fetchOrders = async (withSnapshot: boolean) => {
+        const sel = withSnapshot
+          ? `id, date, meal_type, created_at, snapshot, order_items(id, meal_id, display_name, extra_quantity, multiplier, meals(id, name, is_snack))`
+          : `id, date, meal_type, created_at, order_items(id, meal_id, display_name, extra_quantity, multiplier, meals(id, name, is_snack))`;
+        return supabase.from('daily_orders').select(sel).order('date', { ascending: false });
+      };
+
+      let ordersResult = await fetchOrders(true);
+      if (ordersResult.error && /snapshot|column/i.test(ordersResult.error.message)) {
+        ordersResult = await fetchOrders(false);
+      }
+
+      const [mealsResult, bensResult, exclusionsResult] = await Promise.all([
         supabase.from('meals').select('id, name, english_name, type, is_snack, created_at').order('type').order('is_snack').order('name'),
         supabase.from('beneficiaries').select('id', { count: 'exact', head: true }),
         supabase.from('exclusions').select('meal_id'),
       ]);
 
+      if (ordersResult.error) {
+        console.error('Orders fetch error:', ordersResult.error);
+      }
       if (ordersResult.data) setOrders(ordersResult.data as unknown as DailyOrder[]);
       if (mealsResult.data) setMeals(mealsResult.data as Meal[]);
       if (bensResult.count != null) setTotalBeneficiaries(bensResult.count);
@@ -157,14 +170,32 @@ export default function OrderList() {
                           {order.order_items.map((item) => {
                             const label = itemLabel(item);
                             const extra = item.extra_quantity ?? 0;
-                            const count = Math.max(0, totalBeneficiaries - (exclusionCounts[item.meal_id] ?? 0));
+                            const mult = item.multiplier ?? 1;
+                            // Prefer the order's snapshot count (frozen at save time).
+                            // Fall back to the live calculation if no snapshot yet.
+                            const snap = (order as DailyOrder & { snapshot?: { itemFinalCounts?: Record<string, number> } }).snapshot;
+                            const snapCount = snap?.itemFinalCounts?.[item.meal_id];
+                            const liveBase = Math.max(0, totalBeneficiaries - (exclusionCounts[item.meal_id] ?? 0));
+                            const finalCount = snapCount != null
+                              ? snapCount
+                              : liveBase * mult + extra;
+                            const isFrozen = snapCount != null;
                             return (
                               <div key={item.id}
+                                title={isFrozen ? 'محفوظ من وقت إنشاء الأمر' : 'محسوب بناءً على الوضع الحالي'}
                                 className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium border ${item.meals?.is_snack ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
                               >
                                 <span>{label}</span>
+                                {mult > 1 && (
+                                  <span
+                                    title={`مضاعف ×${mult}`}
+                                    className="font-bold text-violet-700 bg-violet-50 border border-violet-200 rounded px-1 leading-none"
+                                  >
+                                    ×{mult}
+                                  </span>
+                                )}
                                 <span className={`font-bold ${item.meals?.is_snack ? 'text-amber-600' : 'text-emerald-700'}`}>
-                                  {count + extra}
+                                  {finalCount}
                                 </span>
                               </div>
                             );
