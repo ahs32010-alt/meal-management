@@ -7,7 +7,9 @@ import { DAY_LABELS, DAYS_ORDER } from '@/lib/types';
 import BeneficiaryModal from './BeneficiaryModal';
 import ImportModal from '@/components/shared/ImportModal';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
+import Pagination from '@/components/shared/Pagination';
 import { exportXLSX } from '@/lib/xlsx-utils';
+import { usePagination } from '@/lib/use-pagination';
 
 // ─── Collapsible pills with popover ────────────────────────────────────────
 function PillGroup({ pills, max = 3 }: {
@@ -270,6 +272,11 @@ export default function BeneficiaryList() {
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
+  const pagination = usePagination(sorted, {
+    pageSize: 50,
+    resetKey: `${search}|${sortKey}|${sortDir}`,
+  });
+
   const SortIcon = ({ col }: { col: typeof sortKey }) => (
     <span className="inline-flex flex-col leading-none mr-1 opacity-50">
       <span className={sortKey === col && sortDir === 'asc'  ? 'opacity-100 text-emerald-600' : ''}>▲</span>
@@ -348,9 +355,11 @@ export default function BeneficiaryList() {
               </tr>
             </thead>
             <tbody>
-              {sorted.map((b, idx) => (
+              {pagination.pageItems.map((b, idx) => (
                 <tr key={b.id} className="hover:bg-slate-50 transition-colors border-t border-slate-100">
-                  <td className="table-cell text-slate-400 text-xs">{idx + 1}</td>
+                  <td className="table-cell text-slate-400 text-xs">
+                    {(pagination.page - 1) * pagination.pageSize + idx + 1}
+                  </td>
                   <td className="table-cell">
                     <div className="font-semibold text-slate-800">{b.name}</div>
                     {b.english_name && <div className="text-xs text-slate-400">{b.english_name}</div>}
@@ -429,6 +438,13 @@ export default function BeneficiaryList() {
               ))}
             </tbody>
           </table>
+          <Pagination
+            page={pagination.page}
+            pageCount={pagination.pageCount}
+            pageSize={pagination.pageSize}
+            total={pagination.total}
+            onPageChange={pagination.setPage}
+          />
         </div>
       )}
 

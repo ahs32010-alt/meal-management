@@ -1,23 +1,15 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { createClient as createServerClient } from '@/lib/supabase-server';
 import { createAdminClient } from '@/lib/supabase-admin';
+import { assertAdmin } from '@/lib/auth';
+import { createUserSchema, parseJson } from '@/lib/validation';
+import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
+import { sanitizeOptional } from '@/lib/sanitize';
 
-async function assertAdmin() {
-  const supabase = createServerClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) return { error: 'Unauthorized', status: 401 as const };
-  const { data: row } = await supabase
-    .from('app_users')
-    .select('is_admin')
-    .eq('id', auth.user.id)
-    .maybeSingle();
-  if (!row?.is_admin) return { error: 'Forbidden', status: 403 as const };
-  return { ok: true as const };
-}
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const check = await assertAdmin();
-  if ('error' in check) return NextResponse.json({ error: check.error }, { status: check.status });
+  if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
 
   const admin = createAdminClient();
   const { data, error } = await admin
@@ -30,17 +22,32 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const check = await assertAdmin();
-  if ('error' in check) return NextResponse.json({ error: check.error }, { status: check.status });
+  if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
 
-  const body = await req.json();
-  const { email, password, full_name, is_admin, permissions } = body ?? {};
+  const limit = rateLimit({
+    key: `users:create:${check.currentUserId}:${clientIdFromRequest(req)}`,
+    limit: 20,
+    windowMs: 60_000,
+  });
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { error: 'محاولات كثيرة، حاول لاحقاً' },
+      { status: 429, headers: { 'Retry-After': String(Math.ceil((limit.resetAt - Date.now()) / 1000)) } }
+    );
+  }
 
-  if (!email || !password) {
-    return NextResponse.json({ error: 'الإيميل وكلمة السر مطلوبان' }, { status: 400 });
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'صيغة JSON غير صالحة' }, { status: 400 });
   }
-  if (String(password).length < 6) {
-    return NextResponse.json({ error: 'كلمة السر يجب أن تكون 6 أحرف على الأقل' }, { status: 400 });
-  }
+
+  const parsed = parseJson(createUserSchema, body);
+  if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+
+  const { email, password, full_name, is_admin, permissions } = parsed.data;
+  const cleanFullName = sanitizeOptional(full_name, 120);
 
   const admin = createAdminClient();
 
@@ -48,7 +55,7 @@ export async function POST(req: NextRequest) {
     email,
     password,
     email_confirm: true,
-    user_metadata: { full_name: full_name ?? null },
+    user_metadata: { full_name: cleanFullName },
   });
   if (authErr || !created.user) {
     return NextResponse.json({ error: authErr?.message ?? 'فشل إنشاء المستخدم' }, { status: 400 });
@@ -59,7 +66,7 @@ export async function POST(req: NextRequest) {
     .insert({
       id: created.user.id,
       email,
-      full_name: full_name ?? null,
+      full_name: cleanFullName,
       is_admin: Boolean(is_admin),
       permissions: permissions ?? {},
     })
@@ -67,7 +74,6 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (insertErr) {
-    // Rollback the auth user if profile insert fails
     await admin.auth.admin.deleteUser(created.user.id);
     return NextResponse.json({ error: insertErr.message }, { status: 500 });
   }

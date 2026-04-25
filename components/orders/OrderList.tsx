@@ -8,6 +8,8 @@ import { MEAL_TYPE_LABELS } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
 import OrderModal from './OrderModal';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
+import Pagination from '@/components/shared/Pagination';
+import { usePagination } from '@/lib/use-pagination';
 
 const MEAL_TYPE_STYLES: Record<string, string> = {
   breakfast: 'bg-yellow-100 text-yellow-700',
@@ -78,6 +80,8 @@ export default function OrderList() {
   const itemLabel = (item: { display_name?: string | null; meals?: { name?: string } | null }) =>
     item.display_name ?? item.meals?.name ?? '';
 
+  const pagination = usePagination(orders, { pageSize: 25 });
+
   return (
     <div className="p-6 space-y-4">
       {/* Header */}
@@ -122,9 +126,11 @@ export default function OrderList() {
                 </tr>
               </thead>
               <tbody>
-                {orders.map((order, index) => (
+                {pagination.pageItems.map((order, index) => (
                   <tr key={order.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="table-cell text-slate-400 text-xs">{index + 1}</td>
+                    <td className="table-cell text-slate-400 text-xs">
+                      {(pagination.page - 1) * pagination.pageSize + index + 1}
+                    </td>
                     <td className="table-cell font-semibold text-slate-800">
                       {formatDate(order.date)}
                     </td>
@@ -203,6 +209,13 @@ export default function OrderList() {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              page={pagination.page}
+              pageCount={pagination.pageCount}
+              pageSize={pagination.pageSize}
+              total={pagination.total}
+              onPageChange={pagination.setPage}
+            />
           </div>
         )}
       </div>

@@ -82,45 +82,26 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     setSaving(true);
     setError('');
 
-    if (isEdit && editingOrder) {
-      // Update date/type
-      const { error: updErr } = await supabase
-        .from('daily_orders')
-        .update({ date, meal_type: mealType, week_of_month: weekOfMonth === '' ? null : weekOfMonth })
-        .eq('id', editingOrder.id);
-      if (updErr) { setError(updErr.message); setSaving(false); return; }
-
-      // Replace items
-      await supabase.from('order_items').delete().eq('order_id', editingOrder.id);
-      const { error: itemsErr } = await supabase.from('order_items').insert(
-        selected.map(s => ({
-          order_id: editingOrder.id,
-          meal_id: s.meal_id,
-          display_name: s.display_name !== meals.find(m => m.id === s.meal_id)?.name ? s.display_name : null,
-          extra_quantity: s.extra_quantity,
-        }))
-      );
-      if (itemsErr) { setError(itemsErr.message); setSaving(false); return; }
-    } else {
-      // Create new
+    if (!isEdit) {
       const { data: existing } = await supabase
-        .from('daily_orders').select('id').eq('date', date).eq('meal_type', mealType).single();
+        .from('daily_orders').select('id').eq('date', date).eq('meal_type', mealType).maybeSingle();
       if (existing) { setError('يوجد أمر تشغيل لهذا التاريخ ونوع الوجبة مسبقاً'); setSaving(false); return; }
-
-      const { data: order, error: orderError } = await supabase
-        .from('daily_orders').insert({ date, meal_type: mealType, week_of_month: weekOfMonth === '' ? null : weekOfMonth }).select().single();
-      if (orderError) { setError(orderError.message); setSaving(false); return; }
-
-      const { error: itemsError } = await supabase.from('order_items').insert(
-        selected.map(s => ({
-          order_id: order.id,
-          meal_id: s.meal_id,
-          display_name: s.display_name !== meals.find(m => m.id === s.meal_id)?.name ? s.display_name : null,
-          extra_quantity: s.extra_quantity,
-        }))
-      );
-      if (itemsError) { setError(itemsError.message); setSaving(false); return; }
     }
+
+    const items = selected.map(s => ({
+      meal_id: s.meal_id,
+      display_name: s.display_name !== meals.find(m => m.id === s.meal_id)?.name ? s.display_name : null,
+      extra_quantity: s.extra_quantity,
+    }));
+
+    const { error: rpcErr } = await supabase.rpc('replace_order_items', {
+      p_order_id: isEdit && editingOrder ? editingOrder.id : null,
+      p_date: date,
+      p_meal_type: mealType,
+      p_week_of_month: weekOfMonth === '' ? null : weekOfMonth,
+      p_items: items,
+    });
+    if (rpcErr) { setError(rpcErr.message); setSaving(false); return; }
 
     onSaved();
   };

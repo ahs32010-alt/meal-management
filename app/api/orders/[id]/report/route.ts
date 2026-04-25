@@ -1,15 +1,35 @@
 import { createClient } from '@/lib/supabase-server';
 import { NextResponse } from 'next/server';
 import type { ReportData, Meal } from '@/lib/types';
+import { uuidSchema } from '@/lib/validation';
+import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(
   request: Request,
   { params }: { params: { id: string } }
 ) {
+  if (!uuidSchema.safeParse(params.id).success) {
+    return NextResponse.json({ error: 'معرّف غير صالح' }, { status: 400 });
+  }
+
   const supabase = createClient();
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const limit = rateLimit({
+    key: `report:${user.id}:${clientIdFromRequest(request)}`,
+    limit: 120,
+    windowMs: 60_000,
+  });
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { error: 'محاولات كثيرة، حاول لاحقاً' },
+      { status: 429, headers: { 'Retry-After': String(Math.ceil((limit.resetAt - Date.now()) / 1000)) } }
+    );
+  }
 
   const { data: order, error: orderError } = await supabase
     .from('daily_orders')
