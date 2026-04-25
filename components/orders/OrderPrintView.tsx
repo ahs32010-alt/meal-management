@@ -53,6 +53,9 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
   const [showFixedSection, setShowFixedSection] = useState(() =>
     typeof window !== 'undefined' ? localStorage.getItem('orderPrintShowFixed') !== '0' : true
   );
+  const [showCustomSection, setShowCustomSection] = useState(() =>
+    typeof window !== 'undefined' ? localStorage.getItem('orderPrintShowCustom') !== '0' : true
+  );
   // Always start unchecked — user must explicitly toggle it on each time
   const [fitOnePage, setFitOnePage] = useState(false);
   const pageRef = useRef<HTMLDivElement>(null);
@@ -77,7 +80,7 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
     const h = el.scrollHeight;
     const s = h <= TARGET_HEIGHT ? 1 : Math.max(0.3, TARGET_HEIGHT / h);
     setScale(s);
-  }, [report, fitOnePage, showFixedSection]);
+  }, [report, fitOnePage, showFixedSection, showCustomSection]);
 
   if (error) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'sans-serif', color: '#c00' }}>
@@ -392,6 +395,18 @@ ${contentHtml}
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 12, userSelect: 'none' }}>
             <input
               type="checkbox"
+              checked={showCustomSection}
+              onChange={e => {
+                setShowCustomSection(e.target.checked);
+                localStorage.setItem('orderPrintShowCustom', e.target.checked ? '1' : '0');
+              }}
+              style={{ cursor: 'pointer', accentColor: '#6d28d9' }}
+            />
+            إظهار تخصيصات المستفيدين
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 12, userSelect: 'none' }}>
+            <input
+              type="checkbox"
               checked={fitOnePage}
               onChange={e => setFitOnePage(e.target.checked)}
               style={{ cursor: 'pointer', accentColor: '#10b981' }}
@@ -477,7 +492,7 @@ ${contentHtml}
         )}
 
         {/* ── Beneficiary custom details ── */}
-        {withCustom.length > 0 && (
+        {showCustomSection && withCustom.length > 0 && (
           <div className="print-section" style={{ breakInside: 'avoid' }}>
             <div style={{ ...s.bensHeader, background: PALETTE.bens.bg, color: PALETTE.bens.text }}>
               تخصيصات المستفيدين
