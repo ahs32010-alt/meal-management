@@ -21,7 +21,7 @@ const PAGE_TITLES: Record<string, string> = {
 function getTitle(pathname: string) {
   if (pathname === '/') return PAGE_TITLES['/'];
   const match = Object.keys(PAGE_TITLES).find(k => k !== '/' && pathname.startsWith(k));
-  return match ? PAGE_TITLES[match] : 'نظام إدارة الوجبات';
+  return match ? PAGE_TITLES[match] : 'مركز خطوة أمل';
 }
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

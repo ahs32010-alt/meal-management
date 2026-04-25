@@ -2,12 +2,12 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'نظام إدارة الوجبات',
-  description: 'نظام إدارة وجبات المطعم للمستفيدين ذوي القيود الغذائية',
-  applicationName: 'إدارة الوجبات',
+  title: 'مركز خطوة أمل',
+  description: 'مركز خطوة أمل — نظام إدارة وجبات المستفيدين ذوي القيود الغذائية',
+  applicationName: 'مركز خطوة أمل',
   appleWebApp: {
     capable: true,
-    title: 'إدارة الوجبات',
+    title: 'مركز خطوة أمل',
     statusBarStyle: 'default',
   },
   formatDetection: { telephone: false },

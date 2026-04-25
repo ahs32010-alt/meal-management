@@ -180,7 +180,7 @@ export default function ReportView({ initialOrderId }: Props) {
 
           {/* Print title */}
           <div className="hidden print:block text-center mb-4 pb-4 border-b-2 border-slate-800">
-            <h1 className="text-2xl font-bold">نظام إدارة الوجبات — تقرير يومي</h1>
+            <h1 className="text-2xl font-bold">مركز خطوة أمل — تقرير يومي</h1>
             <p className="text-base mt-1">
               {formatDateFull(report.order.date)}
               {' — '}وجبة {MEAL_TYPE_LABELS[report.order.meal_type]}

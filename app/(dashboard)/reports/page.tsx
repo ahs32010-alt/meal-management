@@ -1,6 +1,6 @@
 import ReportView from '@/components/reports/ReportView';
 
-export const metadata = { title: 'التقارير - نظام إدارة الوجبات' };
+export const metadata = { title: 'التقارير - مركز خطوة أمل' };
 
 interface Props {
   searchParams: { orderId?: string };

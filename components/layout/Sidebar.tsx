@@ -131,8 +131,8 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
             </svg>
           </div>
           <div className="flex-1 min-w-0">
-            <h1 className="text-white font-bold text-sm leading-tight truncate">نظام إدارة</h1>
-            <p className="text-slate-400 text-xs truncate">الوجبات</p>
+            <h1 className="text-white font-bold text-sm leading-tight truncate">مركز خطوة</h1>
+            <p className="text-slate-400 text-xs truncate">أمل</p>
           </div>
 
           {/* Theme toggle (icon) */}
