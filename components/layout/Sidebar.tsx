@@ -130,8 +130,7 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
             <img src="/logo.png" alt="مركز خطوة أمل" className="w-full h-full object-contain" />
           </div>
           <div className="flex-1 min-w-0">
-            <h1 className="text-white font-bold text-sm leading-tight truncate">مركز خطوة</h1>
-            <p className="text-slate-400 text-xs truncate">أمل</p>
+            <h1 className="text-white font-bold text-sm leading-tight truncate">مركز خطوة أمل</h1>
           </div>
 
           {/* Theme toggle (icon) */}
