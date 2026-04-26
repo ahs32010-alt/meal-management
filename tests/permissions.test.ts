@@ -7,6 +7,7 @@ const baseUser = (overrides: Partial<AppUser> = {}): AppUser => ({
   full_name: 'User',
   is_admin: false,
   permissions: {},
+  avatar_url: null,
   created_at: '2026-01-01',
   updated_at: '2026-01-01',
   ...overrides,
