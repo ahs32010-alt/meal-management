@@ -377,7 +377,7 @@ export default function BackupRestoreView() {
             <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
               النسخة التلقائية اليومية تعمل عبر <span className="font-semibold text-slate-700">pg_cron</span> في الوقت المحدّد أدناه (تقدر تغيّره).
               ولو ما تشغّلت لأي سبب، يتم أخذ نسخة فالبَك تلقائياً عند فتح هذا التبويب.
-              يُحتفظ بآخر {AUTO_BACKUP_RETENTION} نسخ تلقائية فقط؛ اليدوية و"قبل الاستعادة" لا تُحذف تلقائياً.
+              يُحتفظ بآخر {AUTO_BACKUP_RETENTION} نسخ تلقائية فقط؛ اليدوية و&quot;قبل الاستعادة&quot; لا تُحذف تلقائياً.
             </p>
           </div>
           <button
@@ -508,7 +508,7 @@ export default function BackupRestoreView() {
       ) : backups.length === 0 ? (
         <div className="card p-10 text-center text-slate-400">
           <p className="font-medium">لا توجد نسخ احتياطية بعد</p>
-          <p className="text-sm mt-1">ستُنشأ أول نسخة تلقائياً، أو اضغط "تشغيل نسخة احتياطية الآن".</p>
+          <p className="text-sm mt-1">ستُنشأ أول نسخة تلقائياً، أو اضغط &quot;تشغيل نسخة احتياطية الآن&quot;.</p>
         </div>
       ) : (
         <div className="space-y-3">

@@ -634,7 +634,7 @@ export default function MealList() {
       {duplicateResult && (
         <div className="bg-violet-50 border border-violet-200 text-violet-800 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-sm">
-            ✓ تم إنشاء <span className="font-bold">"{duplicateResult.name}"</span> ونُسخ معها{' '}
+            ✓ تم إنشاء <span className="font-bold">&quot;{duplicateResult.name}&quot;</span> ونُسخ معها{' '}
             <span className="font-bold">{duplicateResult.excl}</span> محظور،{' '}
             <span className="font-bold">{duplicateResult.fixed}</span> صنف ثابت،{' '}
             <span className="font-bold">{duplicateResult.menu}</span> بند منيو.
