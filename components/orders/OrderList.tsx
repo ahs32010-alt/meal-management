@@ -5,8 +5,8 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { DailyOrder, Meal } from '@/lib/types';
-import { MEAL_TYPE_LABELS } from '@/lib/types';
+import type { DailyOrder, Meal, EntityType } from '@/lib/types';
+import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import Pagination from '@/components/shared/Pagination';
@@ -20,13 +20,25 @@ const MEAL_TYPE_STYLES: Record<string, string> = {
   dinner: 'bg-purple-100 text-purple-700',
 };
 
+// عدد المستفيدين/المرافقين وعدد المحظورات لكل صنف — مفصول حسب نوع الكيان.
+type EntityCounts = { total: number; exclusions: Record<string, number> };
+const EMPTY_COUNTS: EntityCounts = { total: 0, exclusions: {} };
+
 export default function OrderList() {
   const [orders, setOrders] = useState<DailyOrder[]>([]);
   const [meals, setMeals] = useState<Meal[]>([]);
-  const [totalBeneficiaries, setTotalBeneficiaries] = useState(0);
-  const [exclusionCounts, setExclusionCounts] = useState<Record<string, number>>({});
+  // نخزن عدّاد لكل نوع — كل أمر تشغيل يستخدم العداد الخاص بنوعه.
+  const [counts, setCounts] = useState<Record<EntityType, EntityCounts>>({
+    beneficiary: EMPTY_COUNTS,
+    companion: EMPTY_COUNTS,
+  });
+  // مهم: نتأكد إن العمود entity_type موجود في DB قبل ما نظهر اختيار النوع
+  // (لو الـmigration ما اتشغّل، نخفي الميزة بدل ما يتصلّح خطأ)
+  const [hasEntityTypeColumn, setHasEntityTypeColumn] = useState(true);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalEntityType, setModalEntityType] = useState<EntityType>('beneficiary');
+  const [pickEntityOpen, setPickEntityOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<DailyOrder | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
@@ -35,24 +47,58 @@ export default function OrderList() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      // Try with the snapshot column first; if the migration hasn't been run yet
-      // (column doesn't exist), retry without it so the page still works.
-      const fetchOrders = async (withSnapshot: boolean) => {
-        const sel = withSnapshot
-          ? `id, date, meal_type, created_at, snapshot, order_items(id, meal_id, display_name, extra_quantity, multiplier, meals(id, name, is_snack))`
-          : `id, date, meal_type, created_at, order_items(id, meal_id, display_name, extra_quantity, multiplier, meals(id, name, is_snack))`;
+      // Try with the snapshot + entity_type columns first; fall back if either
+      // migration hasn't been run yet so the page still works.
+      const fetchOrders = async (withSnapshot: boolean, withEntityType: boolean) => {
+        const baseCols = `id, date, meal_type, created_at`;
+        const extra = `${withSnapshot ? ', snapshot' : ''}${withEntityType ? ', entity_type' : ''}`;
+        const sel = `${baseCols}${extra}, order_items(id, meal_id, display_name, extra_quantity, multiplier, meals(id, name, is_snack))`;
         return supabase.from('daily_orders').select(sel).order('date', { ascending: false });
       };
 
-      let ordersResult = await fetchOrders(true);
-      if (ordersResult.error && /snapshot|column/i.test(ordersResult.error.message)) {
-        ordersResult = await fetchOrders(false);
+      let entityTypeOk = true;
+      let ordersResult = await fetchOrders(true, true);
+      if (ordersResult.error && /entity_type|column/i.test(ordersResult.error.message)) {
+        entityTypeOk = false;
+        ordersResult = await fetchOrders(true, false);
       }
+      if (ordersResult.error && /snapshot|column/i.test(ordersResult.error.message)) {
+        ordersResult = await fetchOrders(false, entityTypeOk);
+        if (ordersResult.error && /entity_type|column/i.test(ordersResult.error.message)) {
+          entityTypeOk = false;
+          ordersResult = await fetchOrders(false, false);
+        }
+      }
+      setHasEntityTypeColumn(entityTypeOk);
+
+      // نجلب المستفيدين والمحظورات مع entity_type عشان نقدر نقسّم العداد.
+      // لو entity_type ما كان موجود في beneficiaries (migration ما اتشغّل)،
+      // نعتبر الكل مستفيدين.
+      const bensSelect = entityTypeOk ? 'id, entity_type' : 'id';
+      const exclSelect = entityTypeOk
+        ? 'meal_id, beneficiaries!inner(entity_type)'
+        : 'meal_id';
+
+      // الأصناف نجلبها كاملة مع عمود entity_type عشان OrderModal يفلتر
+      // حسب نوع الأمر (مستفيدين/مرافقين). لو العمود ما موجود نرجع للسلوك القديم.
+      const fetchMealsList = async () => {
+        const r = await supabase
+          .from('meals')
+          .select('id, name, english_name, type, is_snack, entity_type, created_at')
+          .order('type').order('is_snack').order('name');
+        if (r.error && /entity_type|column/i.test(r.error.message)) {
+          return supabase
+            .from('meals')
+            .select('id, name, english_name, type, is_snack, created_at')
+            .order('type').order('is_snack').order('name');
+        }
+        return r;
+      };
 
       const [mealsResult, bensResult, exclusionsResult] = await Promise.all([
-        supabase.from('meals').select('id, name, english_name, type, is_snack, created_at').order('type').order('is_snack').order('name'),
-        supabase.from('beneficiaries').select('id', { count: 'exact', head: true }),
-        supabase.from('exclusions').select('meal_id'),
+        fetchMealsList(),
+        supabase.from('beneficiaries').select(bensSelect),
+        supabase.from('exclusions').select(exclSelect),
       ]);
 
       if (ordersResult.error) {
@@ -60,15 +106,34 @@ export default function OrderList() {
       }
       if (ordersResult.data) setOrders(ordersResult.data as unknown as DailyOrder[]);
       if (mealsResult.data) setMeals(mealsResult.data as Meal[]);
-      if (bensResult.count != null) setTotalBeneficiaries(bensResult.count);
+
+      // نبني عدّادات منفصلة لكل entity_type
+      const nextCounts: Record<EntityType, EntityCounts> = {
+        beneficiary: { total: 0, exclusions: {} },
+        companion:   { total: 0, exclusions: {} },
+      };
+
+      if (bensResult.data) {
+        for (const b of bensResult.data as Array<{ entity_type?: string }>) {
+          const t: EntityType = (b.entity_type === 'companion' ? 'companion' : 'beneficiary');
+          nextCounts[t].total++;
+        }
+      }
 
       if (exclusionsResult.data) {
-        const counts: Record<string, number> = {};
-        for (const ex of exclusionsResult.data) {
-          counts[ex.meal_id] = (counts[ex.meal_id] ?? 0) + 1;
+        const rows = exclusionsResult.data as unknown as Array<{
+          meal_id: string;
+          beneficiaries?: { entity_type?: string } | { entity_type?: string }[] | null;
+        }>;
+        for (const ex of rows) {
+          // قد يرجع `beneficiaries` إما object (لو !inner) أو array (لو join عادي)
+          const ben = Array.isArray(ex.beneficiaries) ? ex.beneficiaries[0] : ex.beneficiaries;
+          const t: EntityType = (ben?.entity_type === 'companion' ? 'companion' : 'beneficiary');
+          nextCounts[t].exclusions[ex.meal_id] = (nextCounts[t].exclusions[ex.meal_id] ?? 0) + 1;
         }
-        setExclusionCounts(counts);
       }
+
+      setCounts(nextCounts);
     } catch (err) {
       console.error('Fetch error:', err);
     } finally {
@@ -113,7 +178,20 @@ export default function OrderList() {
           <h1 className="text-2xl font-bold text-slate-800">أوامر التشغيل</h1>
           <p className="text-slate-500 text-sm mt-0.5">{orders.length} أمر تشغيل</p>
         </div>
-        <button onClick={() => { setEditingOrder(null); setIsModalOpen(true); }} className="btn-primary">
+        <button
+          onClick={() => {
+            setEditingOrder(null);
+            // لو الـmigration ما اتشغّل بعد، نخش مباشرة بنوع المستفيدين عشان ما نكسر شي
+            if (!hasEntityTypeColumn) {
+              setModalEntityType('beneficiary');
+              setIsModalOpen(true);
+              return;
+            }
+            // نطلب من المستخدم يختار: مستفيدين ولا مرافقين؟
+            setPickEntityOpen(true);
+          }}
+          className="btn-primary"
+        >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
@@ -143,19 +221,28 @@ export default function OrderList() {
                 <tr className="bg-slate-50">
                   <th className="table-header">#</th>
                   <th className="table-header">التاريخ</th>
+                  <th className="table-header">الفئة</th>
                   <th className="table-header">نوع الوجبة</th>
                   <th className="table-header">الأصناف</th>
                   <th className="table-header text-center">الإجراءات</th>
                 </tr>
               </thead>
               <tbody>
-                {pagination.pageItems.map((order, index) => (
+                {pagination.pageItems.map((order, index) => {
+                  const orderEntity: EntityType = (order.entity_type === 'companion' ? 'companion' : 'beneficiary');
+                  const entityCounts = counts[orderEntity];
+                  return (
                   <tr key={order.id} className="hover:bg-slate-50 transition-colors">
                     <td className="table-cell text-slate-400 text-xs">
                       {(pagination.page - 1) * pagination.pageSize + index + 1}
                     </td>
                     <td className="table-cell font-semibold text-slate-800">
                       {formatDate(order.date)}
+                    </td>
+                    <td className="table-cell">
+                      <span className={`badge ${ENTITY_BADGE_STYLES[orderEntity]}`}>
+                        {ENTITY_TYPE_LABELS_PLURAL[orderEntity]}
+                      </span>
                     </td>
                     <td className="table-cell">
                       <span className={`badge ${MEAL_TYPE_STYLES[order.meal_type]}`}>
@@ -175,7 +262,7 @@ export default function OrderList() {
                             // Fall back to the live calculation if no snapshot yet.
                             const snap = (order as DailyOrder & { snapshot?: { itemFinalCounts?: Record<string, number> } }).snapshot;
                             const snapCount = snap?.itemFinalCounts?.[item.meal_id];
-                            const liveBase = Math.max(0, totalBeneficiaries - (exclusionCounts[item.meal_id] ?? 0));
+                            const liveBase = Math.max(0, entityCounts.total - (entityCounts.exclusions[item.meal_id] ?? 0));
                             const finalCount = snapCount != null
                               ? snapCount
                               : liveBase * mult + extra;
@@ -226,7 +313,11 @@ export default function OrderList() {
                           PDF
                         </Link>
                         <button
-                          onClick={() => { setEditingOrder(order); setIsModalOpen(true); }}
+                          onClick={() => {
+                            setEditingOrder(order);
+                            setModalEntityType(orderEntity);
+                            setIsModalOpen(true);
+                          }}
                           className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                           title="تعديل"
                         >
@@ -247,7 +338,8 @@ export default function OrderList() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
             <Pagination
@@ -264,12 +356,56 @@ export default function OrderList() {
       {isModalOpen && (
         <OrderModal
           meals={meals}
-          totalBeneficiaries={totalBeneficiaries}
-          exclusionCounts={exclusionCounts}
+          entityType={modalEntityType}
+          totalBeneficiaries={counts[modalEntityType].total}
+          exclusionCounts={counts[modalEntityType].exclusions}
           editingOrder={editingOrder}
           onClose={() => { setIsModalOpen(false); setEditingOrder(null); }}
           onSaved={() => { setIsModalOpen(false); setEditingOrder(null); fetchData(); }}
         />
+      )}
+
+      {/* اختيار نوع الكيان قبل فتح المعالج: مستفيدين أو مرافقين */}
+      {pickEntityOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100">
+              <h3 className="font-bold text-slate-800">إنشاء أمر تشغيل لمن؟</h3>
+              <p className="text-xs text-slate-500 mt-0.5">اختَر فئة المستهدفين — يُعرض بعدها التخصيصات الخاصة بهم فقط.</p>
+            </div>
+            <div className="p-4 grid grid-cols-2 gap-3">
+              {(['beneficiary', 'companion'] as EntityType[]).map(t => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => {
+                    setModalEntityType(t);
+                    setPickEntityOpen(false);
+                    setIsModalOpen(true);
+                  }}
+                  className={`flex flex-col items-center gap-2 py-5 rounded-xl border-2 transition-all hover:shadow-md ${
+                    t === 'beneficiary'
+                      ? 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800'
+                      : 'border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800'
+                  }`}
+                >
+                  <span className="text-3xl">{t === 'beneficiary' ? '👥' : '🧑‍🤝‍🧑'}</span>
+                  <span className="font-bold text-sm">{ENTITY_TYPE_LABELS_PLURAL[t]}</span>
+                  <span className="text-[11px] opacity-70">{counts[t].total} مسجّل</span>
+                </button>
+              ))}
+            </div>
+            <div className="px-5 py-3 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setPickEntityOpen(false)}
+                className="text-xs text-slate-500 hover:text-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-100"
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <ConfirmDialog

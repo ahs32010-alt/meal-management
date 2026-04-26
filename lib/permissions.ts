@@ -8,6 +8,7 @@ export type PagePermission = {
 export type PageKey =
   | 'dashboard'
   | 'beneficiaries'
+  | 'companions'
   | 'meals'
   | 'menu'
   | 'orders'
@@ -33,6 +34,7 @@ export interface AppUser {
 export const PAGES: { key: PageKey; label: string; href: string }[] = [
   { key: 'dashboard',     label: 'لوحة التحكم',  href: '/' },
   { key: 'beneficiaries', label: 'المستفيدون',   href: '/beneficiaries' },
+  { key: 'companions',    label: 'المرافقون',    href: '/companions' },
   { key: 'meals',         label: 'الأصناف',      href: '/meals' },
   { key: 'menu',          label: 'قائمة الطعام', href: '/menu' },
   { key: 'orders',        label: 'أوامر التشغيل', href: '/orders' },

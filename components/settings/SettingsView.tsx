@@ -7,10 +7,11 @@ import { MEAL_TYPE_LABELS } from '@/lib/types';
 import { exportXLSX, parseXLSX } from '@/lib/xlsx-utils';
 import UsersManager from './UsersManager';
 import ActivityLogView from './ActivityLogView';
+import BackupRestoreView from './BackupRestoreView';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { logActivity } from '@/lib/activity-log';
 
-type Tab = 'translit' | 'users' | 'activity';
+type Tab = 'translit' | 'users' | 'activity' | 'backup';
 
 interface Row {
   mealId: string;
@@ -342,9 +343,23 @@ export default function SettingsView() {
         >
           آخر التحديثات
         </button>
+        {isAdmin && (
+          <button
+            onClick={() => setTab('backup')}
+            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${
+              tab === 'backup'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            النسخ الاحتياطي والاستعادة
+          </button>
+        )}
       </div>
 
-      {tab === 'users' && isAdmin ? <UsersManager /> : tab === 'activity' ? <ActivityLogView /> : (
+      {tab === 'users' && isAdmin ? <UsersManager />
+        : tab === 'backup' && isAdmin ? <BackupRestoreView />
+        : tab === 'activity' ? <ActivityLogView /> : (
       <div className="card overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 bg-slate-50 flex items-center gap-3">
           <div className="flex-1">

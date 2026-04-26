@@ -6,12 +6,14 @@ export type ActivityAction = 'create' | 'update' | 'delete';
 
 export type ActivityEntityType =
   | 'beneficiary'
+  | 'companion'
   | 'meal'
   | 'order'
   | 'user'
   | 'transliteration'
   | 'fixed_meal'
-  | 'exclusion';
+  | 'exclusion'
+  | 'backup';
 
 export interface LogActivityInput {
   action: ActivityAction;
@@ -71,12 +73,14 @@ export async function logActivity(input: LogActivityInput): Promise<void> {
 
 export const ENTITY_LABELS: Record<ActivityEntityType, string> = {
   beneficiary: 'مستفيد',
+  companion: 'مرافق',
   meal: 'صنف',
   order: 'أمر تشغيل',
   user: 'مستخدم',
   transliteration: 'ترجمة حرفية',
   fixed_meal: 'صنف ثابت',
   exclusion: 'محظور',
+  backup: 'نسخة احتياطية',
 };
 
 export const ACTION_LABELS_AR: Record<ActivityAction, string> = {
@@ -93,10 +97,12 @@ export const ACTION_STYLES: Record<ActivityAction, string> = {
 
 export const ENTITY_STYLES: Record<ActivityEntityType, string> = {
   beneficiary: 'bg-violet-50 text-violet-700 border-violet-200',
+  companion: 'bg-indigo-50 text-indigo-700 border-indigo-200',
   meal: 'bg-amber-50 text-amber-700 border-amber-200',
   order: 'bg-blue-50 text-blue-700 border-blue-200',
   user: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   transliteration: 'bg-slate-50 text-slate-700 border-slate-200',
   fixed_meal: 'bg-teal-50 text-teal-700 border-teal-200',
   exclusion: 'bg-rose-50 text-rose-700 border-rose-200',
+  backup: 'bg-cyan-50 text-cyan-700 border-cyan-200',
 };

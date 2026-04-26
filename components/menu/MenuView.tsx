@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { Meal, MealType, ItemCategory, MenuItem } from '@/lib/types';
+import type { Meal, MealType, ItemCategory, MenuItem, EntityType } from '@/lib/types';
+import { ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import {
   WEEK_NUMBERS,
   WEEK_TITLES,
@@ -32,6 +33,11 @@ const CATEGORY_THEME: Record<ItemCategory, { icon: string; bg: string; text: str
 
 export default function MenuView() {
   const supabase = useMemo(() => createClient(), []);
+  // الـtab بين منيو المستفيدين ومنيو المرافقين — يبقى بين الجلسات.
+  const [entityType, setEntityType] = useState<EntityType>(() => {
+    if (typeof window === 'undefined') return 'beneficiary';
+    return (window.localStorage.getItem('menuEntityType') as EntityType | null) ?? 'beneficiary';
+  });
   const [allItems, setAllItems] = useState<MenuItem[]>([]);
   const [meals, setMeals] = useState<Meal[]>([]);
   const [activeWeek, setActiveWeek] = useState<WeekNumber>(1);
@@ -41,19 +47,57 @@ export default function MenuView() {
   const [importMsg, setImportMsg] = useState('');
   const importRef = useRef<HTMLInputElement>(null);
 
+  const switchEntity = useCallback((next: EntityType) => {
+    setEntityType(next);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('menuEntityType', next);
+    }
+  }, []);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
-    const [itemsRes, mealsRes] = await Promise.all([
-      supabase
+    // نحاول الفلترة بـentity_type أولاً، ولو العمود ما موجود (الـmigration ما اتشغّل)
+    // نرجع لجميع الصفوف. للمرافقين نظهر تنبيه.
+    const tryFetchItems = async (withEntity: boolean) => {
+      const q = supabase
         .from('menu_items')
-        .select(`id, week_number, day_of_week, meal_type, meal_id, category, position, multiplier, created_at,
-                 meals(id, name, english_name, type, is_snack)`),
-      supabase.from('meals').select('id, name, english_name, type, is_snack, created_at').order('name'),
-    ]);
+        .select(`id, week_number, day_of_week, meal_type, meal_id, category, position, multiplier${withEntity ? ', entity_type' : ''}, created_at,
+                 meals(id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''})`);
+      return withEntity ? q.eq('entity_type', entityType) : q;
+    };
+    const tryFetchMeals = async (withEntity: boolean) => {
+      const q = supabase
+        .from('meals')
+        .select(`id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}, created_at`)
+        .order('name');
+      return withEntity ? q.eq('entity_type', entityType) : q;
+    };
+
+    let itemsRes = await tryFetchItems(true);
+    let mealsRes = await tryFetchMeals(true);
+
+    const entityMissing =
+      (itemsRes.error && /entity_type|column/i.test(itemsRes.error.message)) ||
+      (mealsRes.error && /entity_type|column/i.test(mealsRes.error.message));
+
+    if (entityMissing) {
+      if (entityType === 'companion') {
+        alert(
+          'صفحة قائمة المرافقين تحتاج تشغيل ملف الترقية:\n' +
+          'supabase/companions-meals-migration.sql'
+        );
+        setAllItems([]);
+        setMeals([]);
+        setLoading(false);
+        return;
+      }
+      [itemsRes, mealsRes] = await Promise.all([tryFetchItems(false), tryFetchMeals(false)]);
+    }
+
     if (itemsRes.data) setAllItems(itemsRes.data as unknown as MenuItem[]);
-    if (mealsRes.data) setMeals(mealsRes.data as Meal[]);
+    if (mealsRes.data) setMeals(mealsRes.data as unknown as Meal[]);
     setLoading(false);
-  }, [supabase]);
+  }, [supabase, entityType]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -121,7 +165,7 @@ export default function MenuView() {
 
       await supabase
         .from('menu_items')
-        .insert({ week_number: week, day_of_week: day, meal_type: mealType, meal_id: mealId, category, position });
+        .insert({ week_number: week, day_of_week: day, meal_type: mealType, meal_id: mealId, category, position, entity_type: entityType });
     }
 
     void logActivity({
@@ -173,13 +217,14 @@ export default function MenuView() {
   };
 
   const handleClearWeek = async () => {
-    if (!confirm(`حذف كل أصناف ${WEEK_TITLES[activeWeek]}؟`)) return;
-    await supabase.from('menu_items').delete().eq('week_number', activeWeek);
+    if (!confirm(`حذف كل أصناف ${WEEK_TITLES[activeWeek]} (${ENTITY_TYPE_LABELS_PLURAL[entityType]})؟`)) return;
+    // ⚠️ مهم: المسح مقيّد بـentity_type عشان ما نمسح منيو الفئة الأخرى بالخطأ.
+    await supabase.from('menu_items').delete().eq('week_number', activeWeek).eq('entity_type', entityType);
     void logActivity({
       action: 'delete',
       entity_type: 'meal',
-      entity_name: `قائمة الطعام — ${WEEK_TITLES[activeWeek]} (مسح كامل)`,
-      details: { week: activeWeek, source: 'menu_clear_week' },
+      entity_name: `قائمة الطعام — ${WEEK_TITLES[activeWeek]} — ${ENTITY_TYPE_LABELS_PLURAL[entityType]} (مسح كامل)`,
+      details: { week: activeWeek, for_entity: entityType, source: 'menu_clear_week' },
     });
     await fetchData();
   };
@@ -205,20 +250,27 @@ export default function MenuView() {
         return;
       }
 
-      // Replace data for each touched week atomically
+      // Replace data for each touched week atomically — scoped to current entity_type
+      // عشان استيراد منيو المرافقين ما يمسح منيو المستفيدين والعكس.
       if (weeks.length > 0) {
-        await supabase.from('menu_items').delete().in('week_number', weeks);
+        await supabase
+          .from('menu_items')
+          .delete()
+          .in('week_number', weeks)
+          .eq('entity_type', entityType);
       }
       if (rows.length > 0) {
-        const { error } = await supabase.from('menu_items').insert(rows);
+        // نختم كل صف بـentity_type الحالي قبل الإدراج
+        const stamped = rows.map(r => ({ ...r, entity_type: entityType }));
+        const { error } = await supabase.from('menu_items').insert(stamped);
         if (error) throw error;
       }
 
       void logActivity({
         action: 'create',
         entity_type: 'meal',
-        entity_name: `استيراد قائمة الطعام (${rows.length} صنف)`,
-        details: { count: rows.length, errors_count: errors.length, source: 'menu_xlsx_import' },
+        entity_name: `استيراد قائمة الطعام (${rows.length} صنف) — ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`,
+        details: { count: rows.length, errors_count: errors.length, for_entity: entityType, source: 'menu_xlsx_import' },
       });
 
       setImportStatus(errors.length > 0 ? 'error' : 'done');
@@ -306,11 +358,16 @@ export default function MenuView() {
     <div className="p-6 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">قائمة الطعام</h1>
-          <p className="text-slate-500 text-sm mt-0.5">
-            منيو ٤ أسابيع — ينعكس تلقائياً على أوامر التشغيل عند اختيار الأسبوع واليوم
-          </p>
+        <div className="flex items-center gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-800">قائمة الطعام</h1>
+            <p className="text-slate-500 text-sm mt-0.5">
+              منيو ٤ أسابيع — ينعكس تلقائياً على أوامر التشغيل لنفس الفئة عند اختيار الأسبوع واليوم
+            </p>
+          </div>
+          <span className={`badge ${ENTITY_BADGE_STYLES[entityType]}`}>
+            {ENTITY_TYPE_LABELS_PLURAL[entityType]}
+          </span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={handleExport} disabled={loading || allItems.length === 0} className="btn-secondary text-sm">
@@ -342,6 +399,24 @@ export default function MenuView() {
           {importMsg}
         </div>
       )}
+
+      {/* Entity tabs: مستفيدين / مرافقين — كل منيو معزول عن الآخر */}
+      <div className="flex items-center gap-1 border-b border-slate-200">
+        {(['beneficiary', 'companion'] as EntityType[]).map(t => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => switchEntity(t)}
+            className={`px-5 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${
+              entityType === t
+                ? (t === 'beneficiary' ? 'border-emerald-500 text-emerald-700' : 'border-indigo-500 text-indigo-700')
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            منيو {ENTITY_TYPE_LABELS_PLURAL[t]}
+          </button>
+        ))}
+      </div>
 
       {/* Week tabs */}
       <div className="flex items-center gap-1 border-b border-slate-200 overflow-x-auto">

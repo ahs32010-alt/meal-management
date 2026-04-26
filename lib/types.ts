@@ -41,6 +41,25 @@ export const DAY_LABELS: Record<number, string> = {
 
 export const DAYS_ORDER = [6, 0, 1, 2, 3, 4, 5]; // السبت أول
 
+// نوع الكيان: مستفيد أو مرافق. الجداول مشتركة، والتمييز عبر العمود `entity_type`.
+export type EntityType = 'beneficiary' | 'companion';
+
+export const ENTITY_TYPE_LABELS: Record<EntityType, string> = {
+  beneficiary: 'مستفيد',
+  companion: 'مرافق',
+};
+
+export const ENTITY_TYPE_LABELS_PLURAL: Record<EntityType, string> = {
+  beneficiary: 'المستفيدون',
+  companion: 'المرافقون',
+};
+
+// لون مميز لكل نوع — يُستخدم في الشارات داخل قوائم الأوامر/التقارير
+export const ENTITY_BADGE_STYLES: Record<EntityType, string> = {
+  beneficiary: 'bg-emerald-100 text-emerald-700',
+  companion: 'bg-indigo-100 text-indigo-700',
+};
+
 export interface Beneficiary {
   id: string;
   name: string;
@@ -52,6 +71,8 @@ export interface Beneficiary {
   fixed_items?: string;
   notes?: string;
   created_at: string;
+  // اختياري للحفاظ على التوافق مع البيانات القديمة قبل تشغيل الـ migration
+  entity_type?: EntityType;
   exclusions?: Exclusion[];
   fixed_meals?: BeneficiaryFixedMeal[];
 }
@@ -62,6 +83,8 @@ export interface Meal {
   english_name?: string;
   type: MealType;
   is_snack: boolean;
+  // اختياري للحفاظ على التوافق قبل تشغيل companions-meals-migration.sql
+  entity_type?: EntityType;
   created_at: string;
 }
 
@@ -93,6 +116,8 @@ export interface DailyOrder {
   day_of_week?: number | null;
   // Legacy alias retained while older orders still hold this column.
   week_of_month?: number | null;
+  // اختياري للحفاظ على التوافق مع البيانات القديمة قبل تشغيل الـ migration
+  entity_type?: EntityType;
   created_at: string;
   order_items?: OrderItem[];
 }
@@ -106,6 +131,8 @@ export interface MenuItem {
   category: ItemCategory;  // 'hot' | 'cold' | 'snack'
   position: number;
   multiplier: number;      // default 1 — copied to order_items on auto-fill
+  // اختياري للحفاظ على التوافق قبل تشغيل companions-meals-migration.sql
+  entity_type?: EntityType;
   created_at: string;
   meals?: Meal;
 }

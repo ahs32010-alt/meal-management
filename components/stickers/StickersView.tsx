@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
-import type { DailyOrder, ReportData, ItemCategory } from '@/lib/types';
-import { MEAL_TYPE_LABELS, MEAL_TYPE_EN, CATEGORY_ORDER, CATEGORY_LABELS } from '@/lib/types';
+import type { DailyOrder, ReportData, ItemCategory, EntityType } from '@/lib/types';
+import { MEAL_TYPE_LABELS, MEAL_TYPE_EN, CATEGORY_ORDER, CATEGORY_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import { formatDate, formatDateFull } from '@/lib/date-utils';
 import { transliterate } from '@/lib/transliterate';
 import {
@@ -501,8 +501,17 @@ export default function StickersView() {
   const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
-    supabase.from('daily_orders').select('id, date, meal_type, created_at').order('date', { ascending: false })
-      .then(({ data }) => { if (data) setOrders(data as unknown as DailyOrder[]); setLoadingOrders(false); });
+    const loadOrders = async () => {
+      const first = await supabase.from('daily_orders').select('id, date, meal_type, entity_type, created_at').order('date', { ascending: false });
+      let data: unknown = first.data;
+      if (first.error && /entity_type|column/i.test(first.error.message)) {
+        const fb = await supabase.from('daily_orders').select('id, date, meal_type, created_at').order('date', { ascending: false });
+        data = fb.data;
+      }
+      if (data) setOrders(data as DailyOrder[]);
+      setLoadingOrders(false);
+    };
+    loadOrders();
   }, [supabase]);
 
   useEffect(() => {
@@ -661,9 +670,15 @@ export default function StickersView() {
     <div className="p-6 space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between no-print">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">الستيكرات</h1>
-          <p className="text-slate-500 text-sm mt-0.5">طباعة ستيكر لكل مستفيد عنده استبعاد</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-800">الستيكرات</h1>
+            <p className="text-slate-500 text-sm mt-0.5">طباعة ستيكر لكل عنده استبعاد</p>
+          </div>
+          {report && (() => {
+            const e: EntityType = report.order.entity_type === 'companion' ? 'companion' : 'beneficiary';
+            return <span className={`badge ${ENTITY_BADGE_STYLES[e]}`}>{ENTITY_TYPE_LABELS_PLURAL[e]}</span>;
+          })()}
         </div>
         {report && displayDetails.length > 0 && (
           <div className="flex items-center gap-2">
@@ -689,9 +704,14 @@ export default function StickersView() {
         {loadingOrders ? <div className="input-field text-slate-400">جاري التحميل...</div> : (
           <select value={selectedOrderId} onChange={e => { setSelectedOrderId(e.target.value); loadReport(e.target.value); }} className="input-field">
             <option value="">-- اختر أمر تشغيل --</option>
-            {orders.map(o => (
-              <option key={o.id} value={o.id}>{formatDate(o.date)} — {MEAL_TYPE_LABELS[o.meal_type]}</option>
-            ))}
+            {orders.map(o => {
+              const e: EntityType = o.entity_type === 'companion' ? 'companion' : 'beneficiary';
+              return (
+                <option key={o.id} value={o.id}>
+                  {formatDate(o.date)} — {MEAL_TYPE_LABELS[o.meal_type]} — {ENTITY_TYPE_LABELS_PLURAL[e]}
+                </option>
+              );
+            })}
           </select>
         )}
       </div>

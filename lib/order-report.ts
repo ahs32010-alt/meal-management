@@ -46,10 +46,16 @@ export async function buildOrderReport(
     ? order.day_of_week
     : new Date(order.date).getDay();
 
+  // كل أمر تشغيل يخص فئة معيّنة (مستفيدين أو مرافقين). نقرأ النوع من الأمر،
+  // ولو ما كان موجود (أمر قديم قبل الـmigration) نعتبره مستفيدين.
+  const orderEntityType: 'beneficiary' | 'companion' =
+    (order as { entity_type?: string }).entity_type === 'companion' ? 'companion' : 'beneficiary';
+
   // Try with the category column on fixed_meals first; if the migration hasn't
   // been run yet, fall back to the older shape so the report still works.
-  const fetchBens = async (withFixedCategory: boolean) =>
-    supabase
+  // Same fallback strategy for the entity_type filter on beneficiaries.
+  const fetchBens = async (withFixedCategory: boolean, withEntityType: boolean) => {
+    const q = supabase
       .from('beneficiaries')
       .select(`
         *,
@@ -57,10 +63,18 @@ export async function buildOrderReport(
         fixed_meals:beneficiary_fixed_meals(id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category' : ''}, meals(id, name, english_name, type, is_snack))
       `)
       .order('name');
+    return withEntityType ? q.eq('entity_type', orderEntityType) : q;
+  };
 
-  let bensRes = await fetchBens(true);
+  let bensRes = await fetchBens(true, true);
+  if (bensRes.error && /entity_type|column/i.test(bensRes.error.message)) {
+    bensRes = await fetchBens(true, false);
+  }
   if (bensRes.error && /category|column/i.test(bensRes.error.message)) {
-    bensRes = await fetchBens(false);
+    bensRes = await fetchBens(false, true);
+    if (bensRes.error && /entity_type|column/i.test(bensRes.error.message)) {
+      bensRes = await fetchBens(false, false);
+    }
   }
   const beneficiaries = bensRes.data;
 

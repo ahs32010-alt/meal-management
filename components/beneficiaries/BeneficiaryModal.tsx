@@ -3,12 +3,13 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { Beneficiary, Meal, MealType, ItemCategory } from '@/lib/types';
-import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, CATEGORY_LABELS, CATEGORY_ORDER } from '@/lib/types';
+import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
+import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, CATEGORY_LABELS, CATEGORY_ORDER, ENTITY_TYPE_LABELS } from '@/lib/types';
 
 interface Props {
   beneficiary: Beneficiary | null;
   meals: Meal[];
+  entityType?: EntityType;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -267,7 +268,8 @@ function MealTypeSection({
 }
 
 // ─── Main component ─────────────────────────────────────────────────────────
-export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved }: Props) {
+export default function BeneficiaryModal({ beneficiary, meals, entityType = 'beneficiary', onClose, onSaved }: Props) {
+  const entitySingular = ENTITY_TYPE_LABELS[entityType];
   const [name, setName] = useState(beneficiary?.name ?? '');
   const [englishName, setEnglishName] = useState(beneficiary?.english_name ?? '');
   const [code, setCode] = useState(beneficiary?.code ?? '');
@@ -348,17 +350,23 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
     if (!name.trim() || !code.trim()) { setError('الاسم والكود مطلوبان'); return; }
     setSaving(true); setError('');
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       name: name.trim(), english_name: englishName.trim() || null,
       code: code.trim(), category: category.trim(),
       villa: villa.trim() || null, diet_type: dietType.trim() || null,
       notes: notes.trim() || null,
     };
+    // فقط نضيف entity_type عند الإنشاء — التعديل ما يغيّر النوع.
+    if (!beneficiary) payload.entity_type = entityType;
 
     const friendlyError = (msg: string) => {
       const m = msg.toLowerCase();
-      if (m.includes('beneficiaries_code_key') || (m.includes('unique') && m.includes('code'))) {
-        return `الكود "${payload.code}" مستخدم مسبقاً لمستفيد آخر — استخدم كود مختلف`;
+      if (
+        m.includes('beneficiaries_code_key') ||
+        m.includes('beneficiaries_entity_code_unique') ||
+        (m.includes('unique') && m.includes('code'))
+      ) {
+        return `الكود "${payload.code}" مستخدم مسبقاً ل${entitySingular} آخر — استخدم كود مختلف`;
       }
       if (m.includes('unique') || m.includes('duplicate key')) {
         return 'البيانات المدخلة مكررة — تحقق من الكود أو الاسم';
@@ -416,13 +424,14 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
 
       void logActivity({
         action: isEdit ? 'update' : 'create',
-        entity_type: 'beneficiary',
+        entity_type: entityType,
         entity_id: beneficiaryId,
-        entity_name: payload.name,
+        entity_name: payload.name as string,
         details: {
           code: payload.code,
           category: payload.category,
           villa: payload.villa,
+          entity_type: entityType,
           exclusions_count: exclusions.length,
           fixed_meals_count: fixedRows.length,
         },
@@ -462,7 +471,7 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
       <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[93vh] overflow-hidden shadow-2xl flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <h2 className="text-lg font-bold text-slate-800">
-            {beneficiary ? 'تعديل مستفيد' : 'إضافة مستفيد جديد'}
+            {beneficiary ? `تعديل ${entitySingular}` : `إضافة ${entitySingular} جديد`}
           </h2>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-lg">✕</button>
         </div>
@@ -744,7 +753,7 @@ export default function BeneficiaryModal({ beneficiary, meals, onClose, onSaved 
 
           <div className="flex gap-3 px-6 pb-6 pt-2">
             <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
-              {saving ? 'جاري الحفظ...' : beneficiary ? 'حفظ التعديلات' : 'إضافة المستفيد'}
+              {saving ? 'جاري الحفظ...' : beneficiary ? 'حفظ التعديلات' : `إضافة ال${entitySingular}`}
             </button>
             <button type="button" onClick={onClose} className="btn-secondary">إلغاء</button>
           </div>

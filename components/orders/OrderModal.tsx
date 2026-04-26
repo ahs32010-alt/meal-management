@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { DailyOrder, Meal, MealType, OrderItem, ItemCategory, MenuItem } from '@/lib/types';
-import { MEAL_TYPE_LABELS, CATEGORY_LABELS, CATEGORY_ORDER } from '@/lib/types';
+import type { DailyOrder, Meal, MealType, OrderItem, ItemCategory, MenuItem, EntityType } from '@/lib/types';
+import { MEAL_TYPE_LABELS, CATEGORY_LABELS, CATEGORY_ORDER, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import { MENU_DAYS, WEEK_NUMBERS, WEEK_TITLES, type WeekNumber } from '@/lib/menu-utils';
 
 interface SelectedItem {
@@ -17,8 +17,12 @@ interface SelectedItem {
 
 interface Props {
   meals: Meal[];
+  // عدد المستفيدين/المرافقين وعدد المحظورات لكل صنف — يجب أن يكونا مفلترَين
+  // مسبقاً حسب entityType من قِبَل المكوّن الأب (OrderList).
   totalBeneficiaries: number;
   exclusionCounts: Record<string, number>;
+  // نوع الكيان الذي ينتمي له هذا الأمر (مستفيدين أو مرافقين)
+  entityType?: EntityType;
   editingOrder?: DailyOrder | null;
   onClose: () => void;
   onSaved: () => void;
@@ -38,8 +42,12 @@ const CATEGORY_THEME: Record<ItemCategory, {
   snack: { icon: '🍿', bg: 'bg-amber-500',   textOn: 'text-white', bgChip: 'bg-amber-50',   border: 'border-amber-200',   badge: 'bg-amber-100 text-amber-700',   ring: 'ring-amber-400' },
 };
 
-export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts, editingOrder, onClose, onSaved }: Props) {
+export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts, entityType: entityTypeProp, editingOrder, onClose, onSaved }: Props) {
   const isEdit = !!editingOrder;
+  // النوع الفعلي للأمر: لو نحرّر أمر سابق نحترم نوعه، وإلا نأخذ النوع المُمَرَّر،
+  // وإن لم يُمرَّر شيء نفترض المستفيدين (للحفاظ على التوافق).
+  const entityType: EntityType =
+    (editingOrder?.entity_type as EntityType | undefined) ?? entityTypeProp ?? 'beneficiary';
 
   const initSelected = (): SelectedItem[] => {
     if (!editingOrder?.order_items) return [];
@@ -72,8 +80,14 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
   const [autoFilledKey, setAutoFilledKey] = useState<string | null>(null);
   const supabase = useMemo(() => createClient(), []);
 
-  const mainMeals = useMemo(() => meals.filter(m => m.type === mealType && !m.is_snack), [meals, mealType]);
-  const snackMeals = useMemo(() => meals.filter(m => m.type === mealType && m.is_snack), [meals, mealType]);
+  // نفلتر الأصناف على نوع الكيان أولاً (مستفيدين/مرافقين)، بعدها على نوع الوجبة
+  // والسناك. الأصناف القديمة بدون entity_type تُعتبر للمستفيدين.
+  const entityMeals = useMemo(
+    () => meals.filter(m => (m.entity_type ?? 'beneficiary') === entityType),
+    [meals, entityType],
+  );
+  const mainMeals = useMemo(() => entityMeals.filter(m => m.type === mealType && !m.is_snack), [entityMeals, mealType]);
+  const snackMeals = useMemo(() => entityMeals.filter(m => m.type === mealType && m.is_snack), [entityMeals, mealType]);
 
   const filterMeals = (list: Meal[]) =>
     search.trim()
@@ -98,12 +112,23 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
 
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
-        .from('menu_items')
-        .select('meal_id, category, position, multiplier, meals(id, name, is_snack)')
-        .eq('week_number', weekNumber)
-        .eq('day_of_week', dayOfWeek)
-        .eq('meal_type', mealType);
+      // المنيو منفصل لكل فئة (مستفيدين/مرافقين). نحاول الفلترة بـentity_type،
+      // ولو العمود ما موجود (الـmigration ما اتشغّل) نرجع لاستعلام عام.
+      const baseSelect = 'meal_id, category, position, multiplier, meals(id, name, is_snack)';
+      const tryFetch = async (withEntity: boolean) => {
+        const q = supabase
+          .from('menu_items')
+          .select(baseSelect)
+          .eq('week_number', weekNumber)
+          .eq('day_of_week', dayOfWeek)
+          .eq('meal_type', mealType);
+        return withEntity ? q.eq('entity_type', entityType) : q;
+      };
+      let res = await tryFetch(true);
+      if (res.error && /entity_type|column/i.test(res.error.message)) {
+        res = await tryFetch(false);
+      }
+      const { data } = res;
       if (cancelled) return;
 
       const items = (data as unknown as MenuItem[] | null) ?? [];
@@ -125,7 +150,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     })();
 
     return () => { cancelled = true; };
-  }, [isEdit, weekNumber, dayOfWeek, mealType, supabase, autoFilledKey]);
+  }, [isEdit, weekNumber, dayOfWeek, mealType, supabase, autoFilledKey, entityType]);
 
   const handleTypeChange = (t: MealType) => {
     setMealType(t);
@@ -139,12 +164,21 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       return;
     }
     if (selected.length > 0 && !confirm('سيتم استبدال الأصناف الحالية بأصناف المنيو لهذا اليوم. تأكيد؟')) return;
-    const { data } = await supabase
-      .from('menu_items')
-      .select('meal_id, category, position, meals(id, name, is_snack)')
-      .eq('week_number', weekNumber)
-      .eq('day_of_week', dayOfWeek)
-      .eq('meal_type', mealType);
+    const refillSelect = 'meal_id, category, position, meals(id, name, is_snack)';
+    const tryRefill = async (withEntity: boolean) => {
+      const q = supabase
+        .from('menu_items')
+        .select(refillSelect)
+        .eq('week_number', weekNumber)
+        .eq('day_of_week', dayOfWeek)
+        .eq('meal_type', mealType);
+      return withEntity ? q.eq('entity_type', entityType) : q;
+    };
+    let refillRes = await tryRefill(true);
+    if (refillRes.error && /entity_type|column/i.test(refillRes.error.message)) {
+      refillRes = await tryRefill(false);
+    }
+    const { data } = refillRes;
     const items = (data as unknown as MenuItem[] | null) ?? [];
     const sorted = items.sort((a, b) => {
       const r = (c: ItemCategory) => c === 'hot' ? 0 : c === 'cold' ? 1 : 2;
@@ -200,9 +234,25 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     setError('');
 
     if (!isEdit) {
-      const { data: existing } = await supabase
-        .from('daily_orders').select('id').eq('date', date).eq('meal_type', mealType).maybeSingle();
-      if (existing) { setError('يوجد أمر تشغيل لهذا التاريخ ونوع الوجبة مسبقاً'); setSaving(false); return; }
+      // التحقق من التكرار يكون لنفس النوع فقط — نقبل أن يوجد أمر للمرافقين
+      // وآخر للمستفيدين في نفس اليوم/الوجبة.
+      const dupQuery = supabase
+        .from('daily_orders')
+        .select('id, entity_type')
+        .eq('date', date)
+        .eq('meal_type', mealType);
+      const { data: dupRows, error: dupErr } = await dupQuery;
+      if (!dupErr) {
+        const conflict = (dupRows ?? []).find(
+          (r: { entity_type?: string | null }) =>
+            (r.entity_type ?? 'beneficiary') === entityType
+        );
+        if (conflict) {
+          setError(`يوجد أمر تشغيل لهذا التاريخ ونوع الوجبة (${ENTITY_TYPE_LABELS_PLURAL[entityType]}) مسبقاً`);
+          setSaving(false);
+          return;
+        }
+      }
     }
 
     const items = selected.map(s => ({
@@ -213,15 +263,47 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       multiplier: s.multiplier,
     }));
 
-    const { data: rpcData, error: rpcErr } = await supabase.rpc('replace_order_items', {
+    let rpcData: unknown = null;
+    const firstAttempt = await supabase.rpc('replace_order_items', {
       p_order_id: isEdit && editingOrder ? editingOrder.id : null,
       p_date: date,
       p_meal_type: mealType,
       p_week_number: weekNumber,
       p_day_of_week: dayOfWeek,
       p_items: items,
+      p_entity_type: entityType,
     });
-    if (rpcErr) { setError(rpcErr.message); setSaving(false); return; }
+    if (firstAttempt.error) {
+      // لو الـmigration الجديد ما اتشغّل بعد، الدالة القديمة ما تقبل p_entity_type
+      // — في هذي الحالة نعيد المحاولة بدون البارامتر (للحفاظ على المستفيدين)،
+      // أما المرافقين فنرفض لأن العمود لا يوجد أصلاً.
+      if (/p_entity_type|argument|function .* does not exist|does not exist/i.test(firstAttempt.error.message)) {
+        if (entityType === 'companion') {
+          setError(
+            'لا يمكن إنشاء أمر تشغيل للمرافقين قبل تشغيل ملف الترقية:\n' +
+            'supabase/companions-migration.sql'
+          );
+          setSaving(false);
+          return;
+        }
+        const retry = await supabase.rpc('replace_order_items', {
+          p_order_id: isEdit && editingOrder ? editingOrder.id : null,
+          p_date: date,
+          p_meal_type: mealType,
+          p_week_number: weekNumber,
+          p_day_of_week: dayOfWeek,
+          p_items: items,
+        });
+        if (retry.error) { setError(retry.error.message); setSaving(false); return; }
+        rpcData = retry.data;
+      } else {
+        setError(firstAttempt.error.message);
+        setSaving(false);
+        return;
+      }
+    } else {
+      rpcData = firstAttempt.data;
+    }
 
     const rpcOrderId = rpcData && typeof rpcData === 'object' && 'order_id' in rpcData
       ? (rpcData as { order_id: string }).order_id
@@ -252,10 +334,11 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       action: isEdit ? 'update' : 'create',
       entity_type: 'order',
       entity_id: orderId,
-      entity_name: `أمر تشغيل ${MEAL_TYPE_LABELS[mealType]} — ${date}`,
+      entity_name: `أمر تشغيل ${MEAL_TYPE_LABELS[mealType]} (${ENTITY_TYPE_LABELS_PLURAL[entityType]}) — ${date}`,
       details: {
         date,
         meal_type: mealType,
+        target_entity_type: entityType,
         week_number: weekNumber,
         day_of_week: dayOfWeek,
         items_count: items.length,
@@ -310,9 +393,14 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[92vh] overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 shrink-0">
-          <h2 className="text-lg font-bold text-slate-800">
-            {isEdit ? 'تعديل أمر التشغيل' : 'إنشاء أمر تشغيل جديد'}
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-bold text-slate-800">
+              {isEdit ? 'تعديل أمر التشغيل' : 'إنشاء أمر تشغيل جديد'}
+            </h2>
+            <span className={`badge ${ENTITY_BADGE_STYLES[entityType]}`}>
+              {ENTITY_TYPE_LABELS_PLURAL[entityType]}
+            </span>
+          </div>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-lg">✕</button>
         </div>
 

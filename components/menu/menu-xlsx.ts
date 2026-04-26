@@ -114,7 +114,16 @@ function buildWeekSheet(XLSX: typeof import('xlsx'), weekItems: MenuItem[], week
         if (item) {
           const name = item.meals?.name ?? '';
           const mult = item.multiplier ?? 1;
-          matrix[s.startRow + r][colIdx] = mult > 1 ? `${name} ×${mult}` : name;
+          // الفئة الافتراضية للقسم: "snack" في صفوف السناك، "hot" في الصفوف الرئيسية.
+          // نضيف لاحقة `@بارد` (أو `@حار/@سناك`) فقط لو الفئة تختلف عن الافتراض،
+          // عشان الملفات القديمة بدون اللاحقة تبقى صالحة.
+          const sectionDefault: ItemCategory = s.isSnack ? 'snack' : 'hot';
+          const catSuffix = item.category && item.category !== sectionDefault
+            ? ` @${item.category === 'cold' ? 'بارد' : item.category === 'hot' ? 'حار' : 'سناك'}`
+            : '';
+          let cell = mult > 1 ? `${name} ×${mult}` : name;
+          cell += catSuffix;
+          matrix[s.startRow + r][colIdx] = cell;
         }
       }
     }
@@ -236,6 +245,15 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
           let cellText = raw ? norm(String(raw)) : '';
           if (!cellText) continue;
 
+          // استخراج لاحقة الفئة `@بارد/@حار/@سناك` أينما كانت في النص.
+          // الافتراضي: "snack" في صفوف السناك، "hot" في الصفوف الرئيسية.
+          let category: ItemCategory = s.isSnack ? 'snack' : 'hot';
+          const catMatch = cellText.match(/@\s*(حار|بارد|سناك)\b/);
+          if (catMatch) {
+            category = catMatch[1] === 'حار' ? 'hot' : catMatch[1] === 'بارد' ? 'cold' : 'snack';
+            cellText = cellText.replace(catMatch[0], '').trim();
+          }
+
           // Parse optional " ×N" or " *N" suffix from the cell text
           let multiplier = 1;
           const multMatch = cellText.match(/[\s ]*[×x*]\s*(\d+)\s*$/i);
@@ -266,7 +284,7 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
             day_of_week: day,
             meal_type: s.meal_type,
             meal_id: meal.id,
-            category: s.isSnack ? 'snack' : 'hot',
+            category,
             position: (s.isSnack ? 100 : 0) + r,
             multiplier,
           });

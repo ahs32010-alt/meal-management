@@ -3,18 +3,22 @@
 import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { Meal, MealType } from '@/lib/types';
-import { MEAL_TYPE_LABELS } from '@/lib/types';
+import type { Meal, MealType, EntityType } from '@/lib/types';
+import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 
 interface Props {
   meal: Meal | null;
   defaultType?: MealType;
   defaultIsSnack?: boolean;
+  // الفئة التي ينتمي لها هذا الصنف. عند التعديل نحترم نوع الصنف الأصلي،
+  // وعند الإنشاء الجديد ناخذ القيمة من الـtab الحالي في صفحة الأصناف.
+  entityType?: EntityType;
   onClose: () => void;
   onSaved: () => void;
 }
 
-export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack = false, onClose, onSaved }: Props) {
+export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack = false, entityType: entityTypeProp = 'beneficiary', onClose, onSaved }: Props) {
+  const entityType: EntityType = (meal?.entity_type as EntityType | undefined) ?? entityTypeProp;
   const [name, setName] = useState(meal?.name ?? '');
   const [englishName, setEnglishName] = useState(meal?.english_name ?? '');
   const [type, setType] = useState<MealType>(meal?.type ?? defaultType);
@@ -29,12 +33,14 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
     setSaving(true);
     setError('');
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       name: name.trim(),
       english_name: englishName.trim() || null,
       type,
       is_snack: isSnack,
     };
+    // فقط نضيف entity_type عند الإنشاء — التعديل ما يغيّر النوع
+    if (!meal) payload.entity_type = entityType;
 
     if (meal) {
       const { error } = await supabase.from('meals').update(payload).eq('id', meal.id);
@@ -50,11 +56,12 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
         action: 'update',
         entity_type: 'meal',
         entity_id: meal.id,
-        entity_name: payload.name,
+        entity_name: payload.name as string,
         details: {
           previous_name: meal.name !== payload.name ? meal.name : undefined,
           type: payload.type,
           is_snack: payload.is_snack,
+          for_entity: entityType,
         },
       });
     } else {
@@ -64,8 +71,8 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
         action: 'create',
         entity_type: 'meal',
         entity_id: data?.id ?? null,
-        entity_name: payload.name,
-        details: { type: payload.type, is_snack: payload.is_snack },
+        entity_name: payload.name as string,
+        details: { type: payload.type, is_snack: payload.is_snack, for_entity: entityType },
       });
     }
 
@@ -76,9 +83,14 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <h2 className="text-lg font-bold text-slate-800">
-            {meal ? 'تعديل صنف' : 'إضافة صنف جديد'}
-          </h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-lg font-bold text-slate-800">
+              {meal ? 'تعديل صنف' : 'إضافة صنف جديد'}
+            </h2>
+            <span className={`badge ${ENTITY_BADGE_STYLES[entityType]}`}>
+              {ENTITY_TYPE_LABELS_PLURAL[entityType]}
+            </span>
+          </div>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-lg">✕</button>
         </div>
 

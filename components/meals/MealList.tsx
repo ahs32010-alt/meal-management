@@ -4,8 +4,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { Meal, MealType } from '@/lib/types';
-import { MEAL_TYPE_LABELS } from '@/lib/types';
+import type { Meal, MealType, EntityType } from '@/lib/types';
+import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import { exportXLSX } from '@/lib/xlsx-utils';
 
@@ -29,13 +29,15 @@ interface MealSectionProps {
   onAdd: (type: MealType, isSnack: boolean) => void;
   onBulkAdd: (type: MealType, isSnack: boolean) => void;
   onEdit: (meal: Meal) => void;
+  onDuplicate: (meal: Meal) => void;
   onDelete: (id: string) => void;
   onDeleteAll: (type: MealType, isSnack: boolean) => void;
   deleting: string | null;
+  duplicating: string | null;
   deletingAll: boolean;
 }
 
-function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDelete, onDeleteAll, deleting, deletingAll }: MealSectionProps) {
+function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, deleting, duplicating, deletingAll }: MealSectionProps) {
   return (
     <div className={`rounded-xl border ${colors.border} overflow-hidden`}>
       <div className={`flex items-center justify-between px-4 py-3 ${colors.bg}`}>
@@ -90,14 +92,29 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
                 )}
               </div>
               <div className="flex items-center gap-1">
-                <button onClick={() => onEdit(meal)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                <button onClick={() => onEdit(meal)} title="تعديل" className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                   </svg>
                 </button>
                 <button
+                  onClick={() => onDuplicate(meal)}
+                  disabled={duplicating === meal.id}
+                  title="نسخ هذا الصنف مع كل تخصيصاته"
+                  className="p-1.5 text-slate-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors disabled:opacity-40"
+                >
+                  {duplicating === meal.id ? (
+                    <div className="w-3.5 h-3.5 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  )}
+                </button>
+                <button
                   onClick={() => onDelete(meal.id)}
                   disabled={deleting === meal.id}
+                  title="حذف"
                   className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -197,6 +214,12 @@ function BulkAddModal({ title, mealType, isSnack, onSave, onClose }: BulkAddModa
 }
 
 export default function MealList() {
+  // الـtab بين أصناف المستفيدين وأصناف المرافقين — يُحفظ في localStorage
+  // عشان يبقى محدد بين الجلسات (راحة للمستخدم).
+  const [entityType, setEntityType] = useState<EntityType>(() => {
+    if (typeof window === 'undefined') return 'beneficiary';
+    return (window.localStorage.getItem('mealsEntityType') as EntityType | null) ?? 'beneficiary';
+  });
   const [meals, setMeals] = useState<Meal[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -206,21 +229,52 @@ export default function MealList() {
   const [modalDefaults, setModalDefaults] = useState<{ type: MealType; isSnack: boolean }>({ type: 'lunch', isSnack: false });
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
-  const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+  const [duplicating, setDuplicating] = useState<string | null>(null);
+  const [duplicateResult, setDuplicateResult] = useState<{ name: string; excl: number; fixed: number; menu: number } | null>(null);
+  const [dialog, setDialog] = useState<{ title: string; message: string; confirmLabel?: string; onConfirm: () => void } | null>(null);
   const supabase = useMemo(() => createClient(), []);
+
+  // كل ما تغيّر الـtab نخزن الاختيار ونعيد التحميل.
+  const switchEntity = useCallback((next: EntityType) => {
+    setEntityType(next);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('mealsEntityType', next);
+    }
+  }, []);
 
   const fetchMeals = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.from('meals').select('id, name, english_name, type, is_snack, created_at').order('type').order('is_snack').order('name');
-      if (error) throw error;
-      if (data) setMeals(data as Meal[]);
+      // نحاول الفلترة بـentity_type أولاً، ولو العمود ما موجود (الـmigration ما اتشغّل)
+      // نرجع لجميع الصفوف (و للمرافقين نظهر تنبيه).
+      const tryFetch = async (withEntity: boolean) => {
+        const q = supabase
+          .from('meals')
+          .select(`id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}, created_at`)
+          .order('type').order('is_snack').order('name');
+        return withEntity ? q.eq('entity_type', entityType) : q;
+      };
+      let res = await tryFetch(true);
+      if (res.error && /entity_type|column/i.test(res.error.message)) {
+        if (entityType === 'companion') {
+          alert(
+            'صفحة أصناف المرافقين تحتاج تشغيل ملف الترقية:\n' +
+            'supabase/companions-meals-migration.sql'
+          );
+          setMeals([]);
+          setLoading(false);
+          return;
+        }
+        res = await tryFetch(false);
+      }
+      if (res.error) throw res.error;
+      if (res.data) setMeals(res.data as unknown as Meal[]);
     } catch (err) {
       console.error('Fetch meals error:', err);
     } finally {
       setLoading(false);
     }
-  }, [supabase]);
+  }, [supabase, entityType]);
 
   useEffect(() => { fetchMeals(); }, [fetchMeals]);
 
@@ -286,6 +340,205 @@ export default function MealList() {
     setModalOpen(true);
   };
 
+  const handleDuplicate = (meal: Meal) => {
+    setDialog({
+      title: 'نسخ صنف',
+      message:
+        `سيتم إنشاء نسخة من "${meal.name}" باسم "نسخة من ${meal.name}".\n\n` +
+        `كل التخصيصات تُنقَل تلقائياً للنسخة:\n` +
+        `• المحظورات (مع نفس البديل لكل شخص)\n` +
+        `• الأصناف الثابتة (نفس الأيام والكمية والتصنيف)\n` +
+        `• بنود قائمة الطعام (نفس الأسبوع/اليوم/التصنيف)\n\n` +
+        `الأصلي يبقى كما هو دون تغيير. متابعة؟`,
+      confirmLabel: 'نسخ',
+      onConfirm: async () => {
+        setDialog(null);
+        await runDuplicate(meal);
+      },
+    });
+  };
+
+  // ينفّذ النسخ الفعلي: إنشاء صنف جديد + تكرار العلاقات (المحظورات + الثابتة + المنيو).
+  // ⚠️ ما نلمس بيانات الصنف الأصلي ولا أوامر التشغيل القديمة.
+  const runDuplicate = async (meal: Meal) => {
+    setDuplicating(meal.id);
+    setDuplicateResult(null);
+    try {
+      // 1) إنشاء النسخة — مع تجنّب تعارض الاسم لو نُسخت سابقاً
+      const baseName = `نسخة من ${meal.name}`;
+      let newId: string | null = null;
+      let finalName = baseName;
+      for (let attempt = 1; attempt <= 50 && !newId; attempt++) {
+        const candidate = attempt === 1 ? baseName : `${baseName} (${attempt})`;
+        const payload: Record<string, unknown> = {
+          name: candidate,
+          english_name: meal.english_name ? `Copy of ${meal.english_name}` : null,
+          type: meal.type,
+          is_snack: meal.is_snack,
+          entity_type: entityType,
+        };
+        const { data, error } = await supabase
+          .from('meals')
+          .insert(payload)
+          .select('id')
+          .single();
+        if (!error && data) {
+          newId = data.id;
+          finalName = candidate;
+          break;
+        }
+        if (error && /unique|duplicate|meals_entity/i.test(error.message)) {
+          continue; // try next candidate
+        }
+        if (error && /entity_type|column/i.test(error.message)) {
+          // العمود ما موجود (companions-meals-migration.sql ما اتشغّل) — نحاول بدون
+          delete payload.entity_type;
+          const retry = await supabase.from('meals').insert(payload).select('id').single();
+          if (retry.error) {
+            if (/unique|duplicate/i.test(retry.error.message)) continue;
+            throw retry.error;
+          }
+          newId = retry.data.id;
+          finalName = candidate;
+          break;
+        }
+        if (error) throw error;
+      }
+      if (!newId) throw new Error('تعذّر إيجاد اسم فريد للنسخة بعد 50 محاولة');
+
+      // 2) نسخ المحظورات — كل صف يستهدف الأصلي ندرج صفّاً جديداً للنسخة
+      const { data: excls, error: exErr } = await supabase
+        .from('exclusions')
+        .select('beneficiary_id, alternative_meal_id')
+        .eq('meal_id', meal.id);
+      if (exErr) throw exErr;
+
+      let exclCount = 0;
+      if (excls && excls.length > 0) {
+        const rows = excls.map((e: { beneficiary_id: string; alternative_meal_id: string | null }) => ({
+          beneficiary_id: e.beneficiary_id,
+          meal_id: newId,
+          alternative_meal_id: e.alternative_meal_id ?? null,
+        }));
+        const { error: insErr } = await supabase.from('exclusions').insert(rows);
+        if (insErr) throw insErr;
+        exclCount = rows.length;
+      }
+
+      // 3) نسخ الأصناف الثابتة — مع التعامل مع غياب عمود category
+      const fetchFM = async (withCategory: boolean) =>
+        supabase
+          .from('beneficiary_fixed_meals')
+          .select(`beneficiary_id, day_of_week, meal_type, quantity${withCategory ? ', category' : ''}`)
+          .eq('meal_id', meal.id);
+      let fmRes = await fetchFM(true);
+      let fmHasCategory = true;
+      if (fmRes.error && /category|column/i.test(fmRes.error.message)) {
+        fmRes = await fetchFM(false);
+        fmHasCategory = false;
+      }
+      if (fmRes.error) throw fmRes.error;
+
+      let fmCount = 0;
+      if (fmRes.data && fmRes.data.length > 0) {
+        const fmRows = (fmRes.data as unknown as Array<{
+          beneficiary_id: string; day_of_week: number; meal_type: string;
+          quantity: number; category?: string;
+        }>).map(r => {
+          const out: Record<string, unknown> = {
+            beneficiary_id: r.beneficiary_id,
+            day_of_week: r.day_of_week,
+            meal_type: r.meal_type,
+            meal_id: newId,
+            quantity: r.quantity ?? 1,
+          };
+          if (fmHasCategory && r.category) out.category = r.category;
+          return out;
+        });
+        const { error: fmInsErr } = await supabase.from('beneficiary_fixed_meals').insert(fmRows);
+        if (fmInsErr) {
+          // fallback: لو فشل بسبب category
+          if (/category|column/i.test(fmInsErr.message)) {
+            const fallback = fmRows.map(({ category: _omit, ...rest }) => rest);
+            const { error: fmInsErr2 } = await supabase.from('beneficiary_fixed_meals').insert(fallback);
+            if (fmInsErr2) throw fmInsErr2;
+          } else {
+            throw fmInsErr;
+          }
+        }
+        fmCount = fmRows.length;
+      }
+
+      // 4) نسخ بنود قائمة الطعام
+      const fetchMI = async (withEntity: boolean) =>
+        supabase
+          .from('menu_items')
+          .select(`week_number, day_of_week, meal_type, category, position, multiplier${withEntity ? ', entity_type' : ''}`)
+          .eq('meal_id', meal.id);
+      let miRes = await fetchMI(true);
+      let miHasEntity = true;
+      if (miRes.error && /entity_type|column/i.test(miRes.error.message)) {
+        miRes = await fetchMI(false);
+        miHasEntity = false;
+      }
+      if (miRes.error) throw miRes.error;
+
+      let miCount = 0;
+      if (miRes.data && miRes.data.length > 0) {
+        const miRows = (miRes.data as unknown as Array<{
+          week_number: number; day_of_week: number; meal_type: string;
+          category: string; position: number; multiplier?: number; entity_type?: string;
+        }>).map(r => {
+          const out: Record<string, unknown> = {
+            week_number: r.week_number,
+            day_of_week: r.day_of_week,
+            meal_type: r.meal_type,
+            meal_id: newId,
+            category: r.category,
+            position: r.position,
+            multiplier: r.multiplier ?? 1,
+          };
+          if (miHasEntity) out.entity_type = r.entity_type ?? entityType;
+          return out;
+        });
+        const { error: miInsErr } = await supabase.from('menu_items').insert(miRows);
+        if (miInsErr) {
+          if (/entity_type|column/i.test(miInsErr.message)) {
+            const fallback = miRows.map(({ entity_type: _omit, ...rest }) => rest);
+            const { error: miInsErr2 } = await supabase.from('menu_items').insert(fallback);
+            if (miInsErr2) throw miInsErr2;
+          } else {
+            throw miInsErr;
+          }
+        }
+        miCount = miRows.length;
+      }
+
+      void logActivity({
+        action: 'create',
+        entity_type: 'meal',
+        entity_id: newId,
+        entity_name: finalName,
+        details: {
+          source: 'duplicate',
+          original_meal_id: meal.id,
+          original_meal_name: meal.name,
+          for_entity: entityType,
+          copied_exclusions: exclCount,
+          copied_fixed_meals: fmCount,
+          copied_menu_items: miCount,
+        },
+      });
+
+      setDuplicateResult({ name: finalName, excl: exclCount, fixed: fmCount, menu: miCount });
+      await fetchMeals();
+    } catch (err) {
+      alert(`تعذّر النسخ: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDuplicating(null);
+    }
+  };
+
   const handleBulkAdd = (type: MealType, isSnack: boolean) => {
     setBulkAddTarget({ mealType: type, isSnack });
   };
@@ -294,7 +547,7 @@ export default function MealList() {
     let added = 0;
     const errors: string[] = [];
     for (const name of names) {
-      const { error } = await supabase.from('meals').insert({ name, type, is_snack: isSnack });
+      const { error } = await supabase.from('meals').insert({ name, type, is_snack: isSnack, entity_type: entityType });
       if (error) {
         errors.push(`"${name}": ${error.message}`);
       } else {
@@ -305,8 +558,8 @@ export default function MealList() {
       void logActivity({
         action: 'create',
         entity_type: 'meal',
-        entity_name: `إضافة جماعية — ${isSnack ? 'سناكات' : 'أصناف'} ${MEAL_TYPE_LABELS[type]} (${added})`,
-        details: { added, type, is_snack: isSnack, source: 'bulk_add' },
+        entity_name: `إضافة جماعية — ${isSnack ? 'سناكات' : 'أصناف'} ${MEAL_TYPE_LABELS[type]} (${added}) — ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`,
+        details: { added, type, is_snack: isSnack, for_entity: entityType, source: 'bulk_add' },
       });
     }
     await fetchMeals();
@@ -325,7 +578,8 @@ export default function MealList() {
       'نوع الوجبة': typeMap[m.type] ?? m.type,
       'سناك': m.is_snack ? 'نعم' : 'لا',
     }));
-    exportXLSX(rows, `أصناف_${new Date().toISOString().slice(0, 10)}.xlsx`, 'الأصناف');
+    const tag = entityType === 'companion' ? 'مرافقون' : 'مستفيدون';
+    exportXLSX(rows, `أصناف_${tag}_${new Date().toISOString().slice(0, 10)}.xlsx`, `أصناف ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`);
   };
 
   // ── Import ──────────────────────────────────────────────────────────────
@@ -344,8 +598,12 @@ export default function MealList() {
       const snackRaw = row['سناك']?.trim().toLowerCase();
       const is_snack = snackRaw === 'نعم' || snackRaw === 'yes' || snackRaw === 'true' || snackRaw === '1';
 
-      const payload = { name, english_name: row['الاسم الإنجليزي']?.trim() || null, type, is_snack };
-      const { error } = await supabase.from('meals').upsert(payload, { onConflict: 'name' });
+      const payload = { name, english_name: row['الاسم الإنجليزي']?.trim() || null, type, is_snack, entity_type: entityType };
+      // الـconflict على (entity_type, type, is_snack, name) عشان الاستيراد يستبدل المكرر
+      // داخل نفس الفئة + الوجبة + التصنيف فقط (وما يخلط بين فواكه فطور وفواكه عشاء مثلاً).
+      const { error } = await supabase
+        .from('meals')
+        .upsert(payload, { onConflict: 'entity_type,type,is_snack,name' });
       if (error) { errors.push(`صف ${i + 2} (${name}): ${error.message}`); continue; }
       imported++;
     }
@@ -353,8 +611,8 @@ export default function MealList() {
       void logActivity({
         action: 'create',
         entity_type: 'meal',
-        entity_name: `استيراد أصناف (${imported})`,
-        details: { imported, errors_count: errors.length, source: 'excel_import' },
+        entity_name: `استيراد أصناف (${imported}) — ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`,
+        details: { imported, errors_count: errors.length, for_entity: entityType, source: 'excel_import' },
       });
     }
     return { imported, errors };
@@ -372,10 +630,32 @@ export default function MealList() {
 
   return (
     <div className="p-6 space-y-6">
+      {/* رسالة نتيجة النسخ */}
+      {duplicateResult && (
+        <div className="bg-violet-50 border border-violet-200 text-violet-800 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+          <div className="text-sm">
+            ✓ تم إنشاء <span className="font-bold">"{duplicateResult.name}"</span> ونُسخ معها{' '}
+            <span className="font-bold">{duplicateResult.excl}</span> محظور،{' '}
+            <span className="font-bold">{duplicateResult.fixed}</span> صنف ثابت،{' '}
+            <span className="font-bold">{duplicateResult.menu}</span> بند منيو.
+          </div>
+          <button
+            onClick={() => setDuplicateResult(null)}
+            className="text-violet-500 hover:text-violet-700 text-lg leading-none"
+            title="إغلاق"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
-        <div>
+        <div className="flex items-center gap-3 flex-wrap">
           <h1 className="text-2xl font-bold text-slate-800">الأصناف</h1>
-          <p className="text-slate-500 text-sm mt-0.5">
+          <span className={`badge ${ENTITY_BADGE_STYLES[entityType]}`}>
+            {ENTITY_TYPE_LABELS_PLURAL[entityType]}
+          </span>
+          <p className="text-slate-500 text-sm">
             {meals.filter(m => !m.is_snack).length} وجبة، {meals.filter(m => m.is_snack).length} سناك
           </p>
         </div>
@@ -395,6 +675,24 @@ export default function MealList() {
         </div>
       </div>
 
+      {/* Tabs: مستفيدين / مرافقين — كل tab يعرض أصناف فئته فقط */}
+      <div className="flex items-center gap-1 border-b border-slate-200">
+        {(['beneficiary', 'companion'] as EntityType[]).map(t => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => switchEntity(t)}
+            className={`px-5 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${
+              entityType === t
+                ? (t === 'beneficiary' ? 'border-emerald-500 text-emerald-700' : 'border-indigo-500 text-indigo-700')
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            أصناف {ENTITY_TYPE_LABELS_PLURAL[t]}
+          </button>
+        ))}
+      </div>
+
       {MEAL_TYPES.map(mealType => {
         const colors = TYPE_COLORS[mealType];
         return (
@@ -412,9 +710,11 @@ export default function MealList() {
                 onAdd={handleAdd}
                 onBulkAdd={handleBulkAdd}
                 onEdit={handleEdit}
+                onDuplicate={handleDuplicate}
                 onDelete={handleDelete}
                 onDeleteAll={handleDeleteAll}
                 deleting={deleting}
+                duplicating={duplicating}
                 deletingAll={deletingAll}
               />
               <MealSection
@@ -426,9 +726,11 @@ export default function MealList() {
                 onAdd={handleAdd}
                 onBulkAdd={handleBulkAdd}
                 onEdit={handleEdit}
+                onDuplicate={handleDuplicate}
                 onDelete={handleDelete}
                 onDeleteAll={handleDeleteAll}
                 deleting={deleting}
+                duplicating={duplicating}
                 deletingAll={deletingAll}
               />
             </div>
@@ -452,6 +754,7 @@ export default function MealList() {
           meal={editingMeal}
           defaultType={modalDefaults.type}
           defaultIsSnack={modalDefaults.isSnack}
+          entityType={entityType}
           onClose={() => setModalOpen(false)}
           onSaved={() => { setModalOpen(false); fetchMeals(); }}
         />
@@ -461,6 +764,7 @@ export default function MealList() {
         isOpen={!!dialog}
         title={dialog?.title ?? ''}
         message={dialog?.message ?? ''}
+        confirmLabel={dialog?.confirmLabel}
         onConfirm={() => dialog?.onConfirm()}
         onCancel={() => setDialog(null)}
       />

@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
-import type { DailyOrder, Meal } from '@/lib/types';
-import { MEAL_TYPE_LABELS } from '@/lib/types';
+import type { DailyOrder, Meal, EntityType } from '@/lib/types';
+import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import { formatDate, formatDateFull, formatNow } from '@/lib/date-utils';
 
 const MEAL_TYPE_STYLES: Record<string, string> = {
@@ -111,8 +111,18 @@ export default function ReportView({ initialOrderId }: Props) {
   const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
-    supabase.from('daily_orders').select('id, date, meal_type, created_at').order('date', { ascending: false })
-      .then(({ data }) => { if (data) setOrders(data as unknown as DailyOrder[]); setLoadingOrders(false); });
+    // نحاول قراءة entity_type كذلك. لو الـmigration ما اتشغّل، نسقطه ونكمّل عادي.
+    const loadOrders = async () => {
+      const first = await supabase.from('daily_orders').select('id, date, meal_type, entity_type, created_at').order('date', { ascending: false });
+      let data: unknown = first.data;
+      if (first.error && /entity_type|column/i.test(first.error.message)) {
+        const fallback = await supabase.from('daily_orders').select('id, date, meal_type, created_at').order('date', { ascending: false });
+        data = fallback.data;
+      }
+      if (data) setOrders(data as DailyOrder[]);
+      setLoadingOrders(false);
+    };
+    loadOrders();
   }, [supabase]);
 
   const generateReport = useCallback(async (orderId: string) => {
@@ -157,11 +167,14 @@ export default function ReportView({ initialOrderId }: Props) {
         {loadingOrders ? <div className="input-field text-slate-400">جاري التحميل...</div> : (
           <select value={selectedOrderId} onChange={e => setSelectedOrderId(e.target.value)} className="input-field">
             <option value="">-- اختر أمر تشغيل --</option>
-            {orders.map(o => (
-              <option key={o.id} value={o.id}>
-                {formatDate(o.date)} — {MEAL_TYPE_LABELS[o.meal_type]}
-              </option>
-            ))}
+            {orders.map(o => {
+              const e: EntityType = o.entity_type === 'companion' ? 'companion' : 'beneficiary';
+              return (
+                <option key={o.id} value={o.id}>
+                  {formatDate(o.date)} — {MEAL_TYPE_LABELS[o.meal_type]} — {ENTITY_TYPE_LABELS_PLURAL[e]}
+                </option>
+              );
+            })}
           </select>
         )}
       </div>
@@ -199,6 +212,14 @@ export default function ReportView({ initialOrderId }: Props) {
             <div>
               <p className="text-xs text-slate-500">نوع الوجبة</p>
               <span className={`badge ${MEAL_TYPE_STYLES[report.order.meal_type]}`}>{MEAL_TYPE_LABELS[report.order.meal_type]}</span>
+            </div>
+            <div className="w-px h-10 bg-slate-200" />
+            <div>
+              <p className="text-xs text-slate-500">الفئة المستهدفة</p>
+              {(() => {
+                const e: EntityType = report.order.entity_type === 'companion' ? 'companion' : 'beneficiary';
+                return <span className={`badge ${ENTITY_BADGE_STYLES[e]}`}>{ENTITY_TYPE_LABELS_PLURAL[e]}</span>;
+              })()}
             </div>
             <div className="w-px h-10 bg-slate-200" />
             <div>
