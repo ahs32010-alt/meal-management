@@ -7,6 +7,8 @@ import { usePathname } from 'next/navigation';
 import Sidebar from '@/components/layout/Sidebar';
 import BottomNav from '@/components/layout/BottomNav';
 import ThemeToggle from '@/components/layout/ThemeToggle';
+import CuteThemeApplier from '@/components/layout/CuteThemeApplier';
+import Footer from '@/components/layout/Footer';
 
 const PAGE_TITLES: Record<string, string> = {
   '/':              'الرئيسية',
@@ -47,6 +49,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="min-h-screen bg-slate-50">
+      <CuteThemeApplier />
       {/* Overlay on mobile when sidebar drawer is open */}
       {mobileOpen && (
         <div
@@ -99,6 +102,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* Content — extra bottom padding on mobile to clear the bottom nav */}
         <div className="pb-24 md:pb-0">
           {children}
+          <Footer />
         </div>
       </main>
 
