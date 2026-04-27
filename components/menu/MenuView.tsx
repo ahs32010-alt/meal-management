@@ -45,6 +45,7 @@ export default function MenuView() {
   const [editing, setEditing] = useState<CellEditState | null>(null);
   const [importStatus, setImportStatus] = useState<'idle' | 'importing' | 'done' | 'error'>('idle');
   const [importMsg, setImportMsg] = useState('');
+  const [search, setSearch] = useState('');
   const importRef = useRef<HTMLInputElement>(null);
 
   const switchEntity = useCallback((next: EntityType) => {
@@ -308,8 +309,17 @@ export default function MenuView() {
 
     const theme = CATEGORY_THEME[item.category];
     const mult = item.multiplier ?? 1;
+    const q = search.trim().toLowerCase();
+    const itemName = item.meals?.name ?? '';
+    const itemEnglish = item.meals?.english_name ?? '';
+    const matches = !q || itemName.toLowerCase().includes(q) || itemEnglish.toLowerCase().includes(q);
+    const highlightCls = q
+      ? matches
+        ? 'bg-yellow-100 ring-2 ring-yellow-400'
+        : 'opacity-25'
+      : '';
     return (
-      <div className="flex items-center gap-1 px-2 py-1.5 group">
+      <div className={`flex items-center gap-1 px-2 py-1.5 group transition-all ${highlightCls}`}>
         {!isSnack && (
           <button
             type="button"
@@ -433,6 +443,33 @@ export default function MenuView() {
             {WEEK_TITLES[w]}
           </button>
         ))}
+      </div>
+
+      {/* Search */}
+      <div className="card p-3">
+        <div className="relative">
+          <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="ابحث عن صنف في المنيو…"
+            className="input-field pr-9"
+            dir="rtl"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm"
+              title="مسح"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Menu Table */}
