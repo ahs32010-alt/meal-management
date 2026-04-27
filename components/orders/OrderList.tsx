@@ -6,7 +6,7 @@ import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import type { DailyOrder, Meal, EntityType } from '@/lib/types';
-import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
+import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, DAY_LABELS } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import Pagination from '@/components/shared/Pagination';
@@ -50,9 +50,15 @@ export default function OrderList() {
       // Try with the snapshot + entity_type columns first; fall back if either
       // migration hasn't been run yet so the page still works.
       const fetchOrders = async (withSnapshot: boolean, withEntityType: boolean) => {
-        const baseCols = `id, date, meal_type, created_at`;
+        // ⚠️ نجلب week_number/day_of_week عشان OrderModal يقدر يفتح الأمر
+        //    للتعديل بقيم الأسبوع/اليوم محفوظة (وإلا يطلب اختيارهم من جديد
+        //    عند الحفظ). ما نجلب week_of_month (العمود القديم) لأن الـRPC
+        //    الحالي يخزّن في week_number فقط.
+        // ⚠️ نجلب `category` من order_items عشان لا تنقلب الفئة إلى الافتراضي
+        //    (حار) في OrderModal.initSelected ويفقد المستخدم تصنيفاته.
+        const baseCols = `id, date, meal_type, week_number, day_of_week, created_at`;
         const extra = `${withSnapshot ? ', snapshot' : ''}${withEntityType ? ', entity_type' : ''}`;
-        const sel = `${baseCols}${extra}, order_items(id, meal_id, display_name, extra_quantity, multiplier, meals(id, name, is_snack))`;
+        const sel = `${baseCols}${extra}, order_items(id, meal_id, display_name, extra_quantity, category, multiplier, meals(id, name, is_snack))`;
         return supabase.from('daily_orders').select(sel).order('date', { ascending: false });
       };
 
@@ -221,6 +227,7 @@ export default function OrderList() {
                 <tr className="bg-slate-50">
                   <th className="table-header">#</th>
                   <th className="table-header">التاريخ</th>
+                  <th className="table-header">اليوم</th>
                   <th className="table-header">الفئة</th>
                   <th className="table-header">نوع الوجبة</th>
                   <th className="table-header">الأصناف</th>
@@ -238,6 +245,9 @@ export default function OrderList() {
                     </td>
                     <td className="table-cell font-semibold text-slate-800">
                       {formatDate(order.date)}
+                    </td>
+                    <td className="table-cell text-slate-600">
+                      {DAY_LABELS[new Date(order.date).getDay()] ?? '—'}
                     </td>
                     <td className="table-cell">
                       <span className={`badge ${ENTITY_BADGE_STYLES[orderEntity]}`}>
