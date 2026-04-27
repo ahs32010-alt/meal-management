@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import type { DailyOrder, Meal, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, DAY_LABELS } from '@/lib/types';
-import { formatDate } from '@/lib/date-utils';
+import { formatDate, formatDateTime } from '@/lib/date-utils';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import Pagination from '@/components/shared/Pagination';
 import { usePagination } from '@/lib/use-pagination';
@@ -231,6 +231,7 @@ export default function OrderList() {
                   <th className="table-header">الفئة</th>
                   <th className="table-header">نوع الوجبة</th>
                   <th className="table-header">الأصناف</th>
+                  <th className="table-header">تاريخ الإنشاء</th>
                   <th className="table-header text-center">الإجراءات</th>
                 </tr>
               </thead>
@@ -299,6 +300,9 @@ export default function OrderList() {
                           })}
                         </div>
                       )}
+                    </td>
+                    <td className="table-cell text-slate-500 text-xs whitespace-nowrap">
+                      {order.created_at ? formatDateTime(order.created_at) : '—'}
                     </td>
                     <td className="table-cell">
                       <div className="flex items-center justify-center gap-2">

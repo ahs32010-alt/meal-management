@@ -12,13 +12,14 @@ export const TYPE_META: Record<string, { label: string; bar: string; badge: stri
 
 export function StatCard({ href, label, value, color, icon }: {
   href: string; label: string; value: number;
-  color: 'blue' | 'emerald' | 'violet' | 'rose'; icon: React.ReactNode;
+  color: 'blue' | 'emerald' | 'violet' | 'rose' | 'indigo'; icon: React.ReactNode;
 }) {
   const colors = {
     blue:    { card: 'bg-blue-50 border-blue-100 text-blue-700',         icon: 'bg-blue-100'    },
     emerald: { card: 'bg-emerald-50 border-emerald-100 text-emerald-700', icon: 'bg-emerald-100' },
     violet:  { card: 'bg-violet-50 border-violet-100 text-violet-700',    icon: 'bg-violet-100'  },
     rose:    { card: 'bg-rose-50 border-rose-100 text-rose-700',          icon: 'bg-rose-100'    },
+    indigo:  { card: 'bg-indigo-50 border-indigo-100 text-indigo-700',    icon: 'bg-indigo-100'  },
   }[color];
   return (
     <Link href={href}>

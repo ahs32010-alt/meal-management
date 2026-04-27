@@ -77,7 +77,7 @@ export default function DashboardHome() {
   const canView = (page: Parameters<typeof can>[1]) => can(currentUser, page, 'view');
   const canAdd  = (page: Parameters<typeof can>[1]) => can(currentUser, page, 'add');
 
-  const [stats, setStats] = useState({ beneficiaries: 0, meals: 0, orders: 0, exclusions: 0 });
+  const [stats, setStats] = useState({ beneficiaries: 0, companions: 0, meals: 0, orders: 0, exclusions: 0 });
   const [todaysOrders, setTodaysOrders] = useState<OrderSummary[]>([]);
   const [recentOrders, setRecentOrders] = useState<OrderSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,8 +95,9 @@ export default function DashboardHome() {
   // ── Fetch stats + today's orders + recent orders (with item counts) ─────
   const fetchStats = useCallback(async () => {
     const today = todayISO();
-    const [bens, meals, orders, excls, todayRes, recentRes] = await Promise.all([
-      supabase.from('beneficiaries').select('id', { count: 'exact', head: true }),
+    const [bensRes, compRes, meals, orders, excls, todayRes, recentRes] = await Promise.all([
+      supabase.from('beneficiaries').select('id', { count: 'exact', head: true }).eq('entity_type', 'beneficiary'),
+      supabase.from('beneficiaries').select('id', { count: 'exact', head: true }).eq('entity_type', 'companion'),
       supabase.from('meals').select('id', { count: 'exact', head: true }),
       supabase.from('daily_orders').select('id', { count: 'exact', head: true }),
       supabase.from('exclusions').select('id', { count: 'exact', head: true }),
@@ -104,8 +105,19 @@ export default function DashboardHome() {
       supabase.from('daily_orders').select('id, date, meal_type, order_items(id)').order('date', { ascending: false }).limit(6),
     ]);
 
+    // لو عمود entity_type ما يطلع (الـmigration ما اتشغّل)، نرجع للسلوك القديم
+    // ونعتبر الكل مستفيدين عشان ما نكسر العرض.
+    let beneficiariesCount = bensRes.count ?? 0;
+    let companionsCount = compRes.count ?? 0;
+    if (bensRes.error && /entity_type|column/i.test(bensRes.error.message)) {
+      const all = await supabase.from('beneficiaries').select('id', { count: 'exact', head: true });
+      beneficiariesCount = all.count ?? 0;
+      companionsCount = 0;
+    }
+
     setStats({
-      beneficiaries: bens.count ?? 0,
+      beneficiaries: beneficiariesCount,
+      companions: companionsCount,
       meals: meals.count ?? 0,
       orders: orders.count ?? 0,
       exclusions: excls.count ?? 0,
@@ -308,9 +320,12 @@ export default function DashboardHome() {
       </div>
 
       {/* ── Stat Cards ── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {canView('beneficiaries') && (
           <StatCard href="/beneficiaries" label="المستفيدون" value={stats.beneficiaries} color="blue" icon={<UsersIcon />} />
+        )}
+        {canView('beneficiaries') && (
+          <StatCard href="/beneficiaries?type=companion" label="المرافقون" value={stats.companions} color="indigo" icon={<UsersIcon />} />
         )}
         {canView('meals') && (
           <StatCard href="/meals" label="الأصناف" value={stats.meals} color="emerald" icon={<MealsIcon />} />
@@ -322,50 +337,6 @@ export default function DashboardHome() {
           <StatCard href="/beneficiaries" label="إجمالي المحظورات" value={stats.exclusions} color="rose" icon={<ExclIcon />} />
         )}
       </div>
-
-      {/* ── Today's Orders ── */}
-      {canView('orders') && (
-        <div className="card overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-l from-emerald-50 to-transparent">
-            <div>
-              <h3 className="font-bold text-slate-800">أوامر تشغيل اليوم</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                {todaysOrders.length === 0 ? 'لم يتم إنشاء أي أمر تشغيل لليوم بعد' : `${todaysOrders.length} أمر تشغيل اليوم`}
-              </p>
-            </div>
-            {canAdd('orders') && (
-              <Link href="/orders" className="btn-primary text-sm">+ إنشاء أمر جديد</Link>
-            )}
-          </div>
-
-          {todaysOrders.length === 0 ? (
-            <div className="py-10 text-center text-slate-400">
-              <svg className="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-              </svg>
-              <p className="text-sm">ابدأ بإنشاء أمر تشغيل لأحد الوجبات</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100" dir="rtl">
-              {todaysOrders.map(o => (
-                <Link
-                  key={o.id}
-                  href={canView('reports') ? `/reports?orderId=${o.id}` : `/orders`}
-                  className="p-5 hover:bg-slate-50 transition-colors flex items-center justify-between gap-3"
-                >
-                  <div>
-                    <MealTypeBadge type={o.meal_type} />
-                    <p className="mt-2 text-xs text-slate-500">{o.item_count} صنف محدد</p>
-                  </div>
-                  <svg className="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                  </svg>
-                </Link>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ── Analytics Card ── */}
       {canView('orders') && (
@@ -595,6 +566,50 @@ export default function DashboardHome() {
           </div>
         </div>
       </div>
+      )}
+
+      {/* ── Today's Orders ── */}
+      {canView('orders') && (
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-l from-emerald-50 to-transparent">
+            <div>
+              <h3 className="font-bold text-slate-800">أوامر تشغيل اليوم</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {todaysOrders.length === 0 ? 'لم يتم إنشاء أي أمر تشغيل لليوم بعد' : `${todaysOrders.length} أمر تشغيل اليوم`}
+              </p>
+            </div>
+            {canAdd('orders') && (
+              <Link href="/orders" className="btn-primary text-sm">+ إنشاء أمر جديد</Link>
+            )}
+          </div>
+
+          {todaysOrders.length === 0 ? (
+            <div className="py-10 text-center text-slate-400">
+              <svg className="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              <p className="text-sm">ابدأ بإنشاء أمر تشغيل لأحد الوجبات</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100" dir="rtl">
+              {todaysOrders.map(o => (
+                <Link
+                  key={o.id}
+                  href={canView('reports') ? `/reports?orderId=${o.id}` : `/orders`}
+                  className="p-5 hover:bg-slate-50 transition-colors flex items-center justify-between gap-3"
+                >
+                  <div>
+                    <MealTypeBadge type={o.meal_type} />
+                    <p className="mt-2 text-xs text-slate-500">{o.item_count} صنف محدد</p>
+                  </div>
+                  <svg className="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       {/* ── Recent Orders ── */}
