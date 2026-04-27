@@ -6,7 +6,7 @@ import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import type { DailyOrder, Meal, EntityType } from '@/lib/types';
-import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, DAY_LABELS } from '@/lib/types';
+import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, DAY_LABELS } from '@/lib/types';
 import { formatDate, formatDateTime } from '@/lib/date-utils';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import Pagination from '@/components/shared/Pagination';
@@ -42,6 +42,7 @@ export default function OrderList() {
   const [editingOrder, setEditingOrder] = useState<DailyOrder | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+  const [search, setSearch] = useState('');
   const supabase = useMemo(() => createClient(), []);
 
   const fetchData = useCallback(async () => {
@@ -174,7 +175,31 @@ export default function OrderList() {
   const itemLabel = (item: { display_name?: string | null; meals?: { name?: string } | null }) =>
     item.display_name ?? item.meals?.name ?? '';
 
-  const pagination = usePagination(orders, { pageSize: 25 });
+  // بحث شامل: يطابق التاريخ، اسم اليوم، نوع الوجبة، الفئة (مستفيدون/مرافقون)،
+  // أسماء الأصناف، وكلمة "سناك" لو الصنف سناك.
+  const filteredOrders = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return orders;
+    return orders.filter(order => {
+      const orderEntity: EntityType = order.entity_type === 'companion' ? 'companion' : 'beneficiary';
+      const dayLabel = DAY_LABELS[new Date(order.date).getDay()] ?? '';
+      const itemsText = (order.order_items ?? [])
+        .map(i => `${i.display_name ?? i.meals?.name ?? ''} ${i.meals?.is_snack ? 'سناك snack' : ''}`)
+        .join(' ');
+      const haystack = [
+        order.date,
+        formatDate(order.date),
+        dayLabel,
+        MEAL_TYPE_LABELS[order.meal_type] ?? '',
+        ENTITY_TYPE_LABELS[orderEntity],
+        ENTITY_TYPE_LABELS_PLURAL[orderEntity],
+        itemsText,
+      ].join(' ').toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [orders, search]);
+
+  const pagination = usePagination(filteredOrders, { pageSize: 25 });
 
   return (
     <div className="p-6 space-y-4">
@@ -182,7 +207,11 @@ export default function OrderList() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">أوامر التشغيل</h1>
-          <p className="text-slate-500 text-sm mt-0.5">{orders.length} أمر تشغيل</p>
+          <p className="text-slate-500 text-sm mt-0.5">
+            {search.trim()
+              ? `${filteredOrders.length} نتيجة من ${orders.length} أمر تشغيل`
+              : `${orders.length} أمر تشغيل`}
+          </p>
         </div>
         <button
           onClick={() => {
@@ -205,6 +234,33 @@ export default function OrderList() {
         </button>
       </div>
 
+      {/* Search */}
+      <div className="card p-3">
+        <div className="relative">
+          <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); pagination.setPage(1); }}
+            placeholder="ابحث عن وجبة، صنف، سناك، تاريخ، اليوم، مستفيد/مرافق…"
+            className="input-field pr-9"
+            dir="rtl"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => { setSearch(''); pagination.setPage(1); }}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm"
+              title="مسح"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Table */}
       <div className="card overflow-hidden">
         {loading ? (
@@ -219,6 +275,14 @@ export default function OrderList() {
             </svg>
             <p className="font-medium">لا توجد أوامر تشغيل</p>
             <p className="text-sm mt-1">ابدأ بإنشاء أمر تشغيل جديد</p>
+          </div>
+        ) : filteredOrders.length === 0 ? (
+          <div className="py-16 text-center text-slate-400">
+            <svg className="w-14 h-14 mx-auto mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <p className="font-medium">ما لقيت نتائج لـ &quot;{search}&quot;</p>
+            <p className="text-sm mt-1">جرب كلمة بحث ثانية أو امسح الفلتر</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
