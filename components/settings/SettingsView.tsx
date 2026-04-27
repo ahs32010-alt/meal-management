@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase-client';
 import type { MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import { exportXLSX, parseXLSX } from '@/lib/xlsx-utils';
+import { transliterate } from '@/lib/transliterate';
 import UsersManager from './UsersManager';
 import ActivityLogView from './ActivityLogView';
 import BackupRestoreView from './BackupRestoreView';
@@ -100,7 +101,9 @@ export default function SettingsView() {
 
   const startEdit = (row: Row) => {
     setEditingId(row.mealId);
-    setEditTranslit(row.customTranslit ?? '');
+    // إذا ما فيه ترجمة مخصصة، نعبّي الحقل بالترجمة الآلية عشان المستخدم
+    // يقدر يعدل عليها بدل ما يبدأ من فراغ.
+    setEditTranslit(row.customTranslit ?? transliterate(row.name));
   };
 
   const saveEdit = async (row: Row) => {
@@ -495,7 +498,13 @@ export default function SettingsView() {
                         ) : row.customTranslit ? (
                           <span className="font-mono font-bold text-emerald-700">{row.customTranslit}</span>
                         ) : (
-                          <span className="text-slate-300 text-xs">—</span>
+                          <span
+                            className="font-mono text-slate-400 italic"
+                            title="ترجمة آلية — اضغط تعديل لتخصيصها"
+                            dir="ltr"
+                          >
+                            {transliterate(row.name) || '—'}
+                          </span>
                         )}
                       </td>
 

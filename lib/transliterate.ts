@@ -11,7 +11,8 @@ const MAP: Record<string, string> = {
   ' ': ' ', 'ـ': '',
 };
 
-const TASHKEEL = /[ؐ-ًؚ-ٟ]/g;
+// التشكيل: فتحة، ضمة، كسرة، شدّة، سكون… والمدّ. النطاق U+064B–U+065F + الألف الخنجرية U+0670.
+const TASHKEEL = /[ً-ٰٟ]/g;
 
 function transliterateChars(text: string): string {
   let result = '';
