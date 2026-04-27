@@ -21,7 +21,7 @@ interface Props {
   entityType: EntityType;
 }
 
-type Mode = 'exclusion' | 'fixed';
+type Mode = 'exclusion' | 'unexclude' | 'fixed';
 
 const CATEGORY_THEME: Record<ItemCategory, { icon: string; bg: string; textOn: string }> = {
   hot:   { icon: '🔥', bg: 'bg-red-500',   textOn: 'text-white' },
@@ -169,6 +169,8 @@ export default function BulkCustomization({ entityType }: Props) {
   // Exclusion
   const [exclMealId, setExclMealId] = useState('');
   const [exclAltId, setExclAltId] = useState(''); // empty = no alternative
+  // Unexclude — حذف محظور موجود
+  const [unexclMealId, setUnexclMealId] = useState('');
   // Fixed
   const [fixMealId, setFixMealId] = useState('');
   const [fixDays, setFixDays] = useState<Set<number>>(new Set());
@@ -325,15 +327,17 @@ export default function BulkCustomization({ entityType }: Props) {
   // ── Validation ─────────────────────────────────────────────────────────────
   const canApply = useMemo(() => {
     if (selectedIds.size === 0) return false;
-    if (mode === 'exclusion') return !!exclMealId;
-    if (mode === 'fixed')     return !!fixMealId && fixDays.size > 0 && fixQty > 0;
+    if (mode === 'exclusion')  return !!exclMealId;
+    if (mode === 'unexclude')  return !!unexclMealId;
+    if (mode === 'fixed')      return !!fixMealId && fixDays.size > 0 && fixQty > 0;
     return false;
-  }, [selectedIds.size, mode, exclMealId, fixMealId, fixDays.size, fixQty]);
+  }, [selectedIds.size, mode, exclMealId, unexclMealId, fixMealId, fixDays.size, fixQty]);
 
   // Used for both confirmation message + apply log
-  const exclMeal   = useMemo(() => meals.find(m => m.id === exclMealId), [meals, exclMealId]);
-  const exclAlt    = useMemo(() => meals.find(m => m.id === exclAltId),  [meals, exclAltId]);
-  const fixMeal    = useMemo(() => meals.find(m => m.id === fixMealId),  [meals, fixMealId]);
+  const exclMeal   = useMemo(() => meals.find(m => m.id === exclMealId),   [meals, exclMealId]);
+  const exclAlt    = useMemo(() => meals.find(m => m.id === exclAltId),    [meals, exclAltId]);
+  const unexclMeal = useMemo(() => meals.find(m => m.id === unexclMealId), [meals, unexclMealId]);
+  const fixMeal    = useMemo(() => meals.find(m => m.id === fixMealId),    [meals, fixMealId]);
 
   // عند اختيار صنف ثابت، نقترح التصنيف تلقائياً:
   //   - الصنف من فئة سناك → "سناك"
@@ -353,8 +357,11 @@ export default function BulkCustomization({ entityType }: Props) {
       const altPart = exclAlt ? ` مع البديل "${exclAlt.name}"` : ' بدون بديل';
       return `سيتم استبعاد "${exclMeal?.name ?? ''}"${altPart} لـ${target}. لو الشخص عنده محظور لنفس الصنف ببديل مختلف، سيُستبدل بهذا التخصيص. متابعة؟`;
     }
+    if (mode === 'unexclude') {
+      return `سيتم إزالة استبعاد "${unexclMeal?.name ?? ''}" من ${target}. الذين ما عندهم هذا الاستبعاد أصلاً سيُتجاهلون بدون أي تغيير. متابعة؟`;
+    }
     return `سيتم تثبيت الصنف "${fixMeal?.name ?? ''}" بكمية ${fixQty} في ${fixDays.size} يوم لـ${target}. لو الشخص عنده نفس الصنف الثابت في يوم من نفس الأيام، ستُحدَّث الكمية والتصنيف فقط؛ باقي أصنافه ما تتغيّر. متابعة؟`;
-  }, [mode, selectedIds.size, entityLabel, exclMeal, exclAlt, fixMeal, fixQty, fixDays.size]);
+  }, [mode, selectedIds.size, entityLabel, exclMeal, exclAlt, unexclMeal, fixMeal, fixQty, fixDays.size]);
 
   // ── Apply ──────────────────────────────────────────────────────────────────
   const handleApply = async () => {
@@ -363,7 +370,46 @@ export default function BulkCustomization({ entityType }: Props) {
     try {
       const ids = Array.from(selectedIds);
 
-      if (mode === 'exclusion') {
+      if (mode === 'unexclude') {
+        // حذف جماعي: نشيل الاستبعاد للصنف المحدد عن الأشخاص المختارين.
+        // اللي ما عنده استبعاد لهالصنف يُتجاهل بدون خطأ.
+        const { data, error } = await supabase
+          .from('exclusions')
+          .delete()
+          .eq('meal_id', unexclMealId)
+          .in('beneficiary_id', ids)
+          .select('id, beneficiary_id');
+        if (error) throw error;
+
+        const removedRows = (data ?? []) as Array<{ id: string; beneficiary_id: string }>;
+        const affectedIds = Array.from(new Set(removedRows.map(r => r.beneficiary_id)));
+        const skipped = ids.length - affectedIds.length;
+
+        void logActivity({
+          action: 'delete',
+          entity_type: entityType,
+          entity_name: `حذف جماعي — استبعاد "${unexclMeal?.name ?? ''}" (${affectedIds.length})`,
+          details: {
+            scope: 'bulk_unexclude',
+            count: affectedIds.length,
+            skipped,
+            meal_id: unexclMealId,
+            meal_name: unexclMeal?.name,
+            for_entity: entityType,
+            beneficiary_ids: ids,
+            affected_ids: affectedIds,
+          },
+        });
+
+        setResult({
+          ok: true,
+          message: affectedIds.length === 0
+            ? `لا أحد من ${ids.length} ${entityLabel}${ids.length === 1 ? '' : 'اً'} مختار كان عنده استبعاد لـ "${unexclMeal?.name ?? ''}".`
+            : `تم إزالة الاستبعاد عن ${affectedIds.length} ${entityLabel}${affectedIds.length === 1 ? '' : 'اً'}` +
+              (skipped > 0 ? ` (تخطّي ${skipped} لأنهم ما كان عندهم).` : '.'),
+        });
+        setUnexclMealId('');
+      } else if (mode === 'exclusion') {
         // Upsert على (beneficiary_id, meal_id) — يضيف للي ما عنده،
         // ويحدّث alternative_meal_id للي عنده الصنف بالفعل.
         // بقية محظوراته وأصنافه الثابتة ما تتأثر.
@@ -719,22 +765,29 @@ export default function BulkCustomization({ entityType }: Props) {
           <h2 className="font-bold text-slate-800 text-sm">التخصيص المراد تطبيقه</h2>
 
           {/* Mode toggle */}
-          <div className="grid grid-cols-2 gap-2">
-            {(['exclusion', 'fixed'] as Mode[]).map(m => (
-              <button
-                key={m}
-                onClick={() => { setMode(m); setResult(null); }}
-                className={`py-2.5 rounded-xl border-2 font-semibold text-sm transition-all ${
-                  mode === m
-                    ? (m === 'exclusion'
-                        ? 'border-red-500 bg-red-50 text-red-700'
-                        : 'border-emerald-500 bg-emerald-50 text-emerald-700')
-                    : 'border-slate-200 text-slate-500 hover:border-slate-300'
-                }`}
-              >
-                {m === 'exclusion' ? 'إضافة محظور' : 'إضافة صنف ثابت'}
-              </button>
-            ))}
+          <div className="grid grid-cols-3 gap-2">
+            {(['exclusion', 'unexclude', 'fixed'] as Mode[]).map(m => {
+              const active = mode === m;
+              const cls = active
+                ? m === 'exclusion'
+                    ? 'border-red-500 bg-red-50 text-red-700'
+                  : m === 'unexclude'
+                    ? 'border-amber-500 bg-amber-50 text-amber-700'
+                    : 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                : 'border-slate-200 text-slate-500 hover:border-slate-300';
+              const label = m === 'exclusion' ? 'إضافة محظور'
+                          : m === 'unexclude' ? 'حذف محظور'
+                          : 'إضافة صنف ثابت';
+              return (
+                <button
+                  key={m}
+                  onClick={() => { setMode(m); setResult(null); }}
+                  className={`py-2.5 rounded-xl border-2 font-semibold text-xs sm:text-sm transition-all ${cls}`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
 
           {/* Exclusion form */}
@@ -772,6 +825,26 @@ export default function BulkCustomization({ entityType }: Props) {
               <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-600 leading-relaxed">
                 💡 سياسة عدم اللمس: لو الشخص أصلاً عنده هذا الصنف محظور بنفس البديل — يُترك كما هو.
                 لو محظور ببديل مختلف (أو بدون بديل) — يُحدَّث للبديل الجديد فقط. باقي محظوراته وأصنافه الثابتة لا تتغيّر.
+              </div>
+            </div>
+          )}
+
+          {/* Unexclude form */}
+          {mode === 'unexclude' && (
+            <div className="space-y-3">
+              <div>
+                <label className="label">الصنف المراد إزالة استبعاده <span className="text-red-500">*</span></label>
+                <MealSearchPicker
+                  meals={meals}
+                  value={unexclMealId}
+                  onChange={setUnexclMealId}
+                  placeholder="اختر الصنف المراد إزالته من المحظورات"
+                />
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800 leading-relaxed">
+                💡 سيُحذف هذا الصنف من قائمة محظورات الأشخاص المختارين.
+                لو الصنف ما كان أصلاً محظور عند بعضهم، يُتجاهلون بدون أي تغيير. باقي محظوراتهم وأصنافهم الثابتة ما تتأثر.
               </div>
             </div>
           )}
@@ -903,7 +976,7 @@ export default function BulkCustomization({ entityType }: Props) {
               ? 'جاري التطبيق...'
               : selectedIds.size === 0
                 ? 'حدد الأشخاص أولاً'
-                : !((mode === 'exclusion' && exclMealId) || (mode === 'fixed' && fixMealId && fixDays.size > 0))
+                : !((mode === 'exclusion' && exclMealId) || (mode === 'unexclude' && unexclMealId) || (mode === 'fixed' && fixMealId && fixDays.size > 0))
                   ? 'أكمل تفاصيل التخصيص'
                   : `تطبيق على ${selectedIds.size} ${entityLabel}${selectedIds.size === 1 ? '' : 'اً'}`}
           </button>
