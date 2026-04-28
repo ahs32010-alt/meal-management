@@ -43,12 +43,13 @@ interface MealSectionProps {
   canEdit: boolean;
   canDelete: boolean;
   pendingMap: { hasUpdate: (id: string) => boolean; hasDelete: (id: string) => boolean };
+  pendingCreates: Meal[];
   deleting: string | null;
   duplicating: string | null;
   deletingAll: boolean;
 }
 
-function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll, isAdmin, canAdd, canEdit, canDelete, pendingMap }: MealSectionProps) {
+function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll, isAdmin, canAdd, canEdit, canDelete, pendingMap, pendingCreates }: MealSectionProps) {
   return (
     <div className={`rounded-xl border ${colors.border} overflow-hidden`}>
       <div className={`flex items-center justify-between px-4 py-3 ${colors.bg}`}>
@@ -95,10 +96,30 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
           )}
         </div>
       </div>
-      {meals.length === 0 ? (
+      {meals.length === 0 && pendingCreates.length === 0 ? (
         <div className="py-6 text-center text-slate-400 text-sm bg-white">لا توجد أصناف</div>
       ) : (
         <div className="bg-white divide-y divide-slate-100">
+          {/* صفوف "شبح" للإضافات بانتظار الموافقة */}
+          {pendingCreates.map((meal, i) => {
+            const cat = meal.category ?? (meal.is_snack ? 'snack' : 'hot');
+            const catCls = cat === 'hot' ? 'bg-red-100 text-red-700' : cat === 'cold' ? 'bg-sky-100 text-sky-700' : 'bg-amber-100 text-amber-700';
+            const catLabel = cat === 'hot' ? '🔥 حار' : cat === 'cold' ? '❄️ بارد' : '🍿 سناك';
+            return (
+              <div key={`pending-${i}`} className="flex items-center justify-between px-4 py-2.5 pending-create">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-medium text-slate-800 text-sm">{meal.name}</span>
+                  <span className="pending-badge pending-badge-create">⏳ إضافة بانتظار الموافقة</span>
+                  <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${catCls}`}>
+                    {catLabel}
+                  </span>
+                  {meal.english_name && (
+                    <span className="text-slate-400 text-xs font-mono">({meal.english_name})</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
           {meals.map((meal) => {
             const cat = meal.category ?? (meal.is_snack ? 'snack' : 'hot');
             const catCls = cat === 'hot' ? 'bg-red-100 text-red-700 hover:bg-red-200'
@@ -697,6 +718,24 @@ export default function MealList() {
     });
   };
 
+  // أصناف "شبح" — إضافات بانتظار الموافقة. نُنشئها من الـpayload في pending_actions
+  // ونرسمها بنفس صفوف القسم عشان المستخدم يشوف ما أضافه قبل ما يقبله الأدمن.
+  const getPendingCreates = (type: MealType, isSnack: boolean): Meal[] => {
+    return myPending.getCreates()
+      .map(pa => pa.payload as Record<string, unknown> | null)
+      .filter((p): p is Record<string, unknown> => !!p && p.type === type && Boolean(p.is_snack) === isSnack)
+      .map((p, i) => ({
+        id: `pending-create-${i}-${String(p.name ?? '')}`,
+        name: String(p.name ?? '—'),
+        english_name: (p.english_name as string) ?? undefined,
+        type: p.type as MealType,
+        is_snack: Boolean(p.is_snack),
+        category: (p.category as ItemCategory | undefined),
+        entity_type: (p.entity_type as EntityType | undefined),
+        created_at: '',
+      }));
+  };
+
   // ── Export ──────────────────────────────────────────────────────────────
   const handleExport = () => {
     const typeMap: Record<string, string> = { breakfast: 'فطور', lunch: 'غداء', dinner: 'عشاء' };
@@ -881,6 +920,7 @@ export default function MealList() {
                 canEdit={canEdit}
                 canDelete={canDelete}
                 pendingMap={myPending}
+                pendingCreates={getPendingCreates(mealType, false)}
               />
               <MealSection
                 title={`سناكات ${MEAL_TYPE_LABELS[mealType]}`}
@@ -904,6 +944,7 @@ export default function MealList() {
                 canEdit={canEdit}
                 canDelete={canDelete}
                 pendingMap={myPending}
+                pendingCreates={getPendingCreates(mealType, true)}
               />
             </div>
           </div>

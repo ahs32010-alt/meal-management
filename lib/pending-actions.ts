@@ -49,8 +49,10 @@ export type EnqueueResult =
   | { ok: true }
   | { ok: false; error: string; duplicate?: boolean };
 
-// نفحص لو في طلب pending سابق بنفس المستخدم لنفس الكيان — يمنع تكرار العملية.
-async function findDuplicatePending(
+// نبحث عن طلب pending سابق بنفس المستخدم لنفس الكيان — لو وُجد نرجع id
+// عشان نقدر نحدّثه (replace) بدل ما نضيف صف جديد. هذا يسمح للمستخدم يعدّل
+// عدة مرات متتالية ويبقى آخر تعديل هو المعتمد.
+async function findExistingPendingId(
   supabase: SupabaseClient,
   user: AppUser,
   match: {
@@ -59,7 +61,7 @@ async function findDuplicatePending(
     entityId?: string;
     entityName?: string;
   },
-): Promise<boolean> {
+): Promise<string | null> {
   let q = supabase
     .from('pending_actions')
     .select('id')
@@ -69,12 +71,12 @@ async function findDuplicatePending(
     .eq('entity_type', match.entityType);
   if (match.entityId) q = q.eq('entity_id', match.entityId);
   if (match.entityName) q = q.eq('entity_name', match.entityName);
-  const { data, error } = await q.limit(1);
-  if (error) return false; // عند الخطأ نسمح بالمحاولة بدل ما نحجز المستخدم
-  return (data?.length ?? 0) > 0;
+  const { data, error } = await q.limit(1).maybeSingle();
+  if (error || !data) return null;
+  return (data as { id: string }).id;
 }
 
-// طلب إضافة
+// طلب إضافة (مستفيد/مرافق) — يستبدل أي طلب pending سابق بنفس الاسم
 export async function enqueueCreate(
   supabase: SupabaseClient,
   user: AppUser,
@@ -82,30 +84,10 @@ export async function enqueueCreate(
   entityName: string,
   payload: CreatePayload,
 ): Promise<EnqueueResult> {
-  const dup = await findDuplicatePending(supabase, user, {
-    action: 'create',
-    entityType,
-    entityName,
-  });
-  if (dup) {
-    return {
-      ok: false,
-      duplicate: true,
-      error: `عندك طلب إضافة لـ "${entityName}" بانتظار الموافقة بالفعل.`,
-    };
-  }
-  const { error } = await supabase.from('pending_actions').insert({
-    user_id: user.id,
-    user_name: user.full_name ?? user.email ?? '',
-    action: 'create',
-    entity_type: entityType,
-    entity_name: entityName,
-    payload: payload as unknown as Record<string, unknown>,
-  });
-  return error ? { ok: false, error: error.message } : { ok: true };
+  return enqueueGenericCreate(supabase, user, entityType, entityName, payload as unknown as Record<string, unknown>);
 }
 
-// طلب تعديل — يحفظ نفس الـCreatePayload بس مع entity_id للسجل المراد تعديله
+// طلب تعديل (مستفيد/مرافق) — يستبدل/يدمج أي طلب pending سابق لنفس الـid
 export async function enqueueUpdate(
   supabase: SupabaseClient,
   user: AppUser,
@@ -114,31 +96,13 @@ export async function enqueueUpdate(
   entityName: string,
   payload: CreatePayload,
 ): Promise<EnqueueResult> {
-  const dup = await findDuplicatePending(supabase, user, {
-    action: 'update',
-    entityType,
-    entityId,
-  });
-  if (dup) {
-    return {
-      ok: false,
-      duplicate: true,
-      error: `عندك طلب تعديل لـ "${entityName}" بانتظار الموافقة بالفعل.`,
-    };
-  }
-  const { error } = await supabase.from('pending_actions').insert({
-    user_id: user.id,
-    user_name: user.full_name ?? user.email ?? '',
-    action: 'update',
-    entity_type: entityType,
-    entity_id: entityId,
-    entity_name: entityName,
-    payload: payload as unknown as Record<string, unknown>,
-  });
-  return error ? { ok: false, error: error.message } : { ok: true };
+  return enqueueGenericUpdate(supabase, user, entityType, entityId, entityName, payload as unknown as Record<string, unknown>);
 }
 
 // ── helpers عامّة لأي نوع كيان (أصناف، بنود منيو، إلخ) ────────────────────
+// السلوك: لو فيه طلب pending سابق نفس النوع للمستخدم، نحدّث الـpayload (آخر
+// تعديل يُعتمد). عدا الحذف — لو موجود يبقى كما هو (idempotent).
+
 export async function enqueueGenericCreate(
   supabase: SupabaseClient,
   user: AppUser,
@@ -146,8 +110,14 @@ export async function enqueueGenericCreate(
   entityName: string,
   payload: Record<string, unknown>,
 ): Promise<EnqueueResult> {
-  const dup = await findDuplicatePending(supabase, user, { action: 'create', entityType, entityName });
-  if (dup) return { ok: false, duplicate: true, error: `عندك طلب إضافة لـ "${entityName}" بانتظار الموافقة بالفعل.` };
+  const existingId = await findExistingPendingId(supabase, user, { action: 'create', entityType, entityName });
+  if (existingId) {
+    const { error } = await supabase
+      .from('pending_actions')
+      .update({ payload, created_at: new Date().toISOString() })
+      .eq('id', existingId);
+    return error ? { ok: false, error: error.message } : { ok: true };
+  }
   const { error } = await supabase.from('pending_actions').insert({
     user_id: user.id,
     user_name: user.full_name ?? user.email ?? '',
@@ -167,8 +137,21 @@ export async function enqueueGenericUpdate(
   entityName: string,
   payload: Record<string, unknown>,
 ): Promise<EnqueueResult> {
-  const dup = await findDuplicatePending(supabase, user, { action: 'update', entityType, entityId });
-  if (dup) return { ok: false, duplicate: true, error: `عندك طلب تعديل لـ "${entityName}" بانتظار الموافقة بالفعل.` };
+  const existingId = await findExistingPendingId(supabase, user, { action: 'update', entityType, entityId });
+  if (existingId) {
+    // نسمح بتعديلات متتالية — ندمج الـpayload القديم مع الجديد (الجديد يفوز عند التعارض)
+    const { data: oldRow } = await supabase
+      .from('pending_actions')
+      .select('payload')
+      .eq('id', existingId)
+      .maybeSingle();
+    const merged = { ...((oldRow?.payload as Record<string, unknown>) ?? {}), ...payload };
+    const { error } = await supabase
+      .from('pending_actions')
+      .update({ payload: merged, entity_name: entityName, created_at: new Date().toISOString() })
+      .eq('id', existingId);
+    return error ? { ok: false, error: error.message } : { ok: true };
+  }
   const { error } = await supabase.from('pending_actions').insert({
     user_id: user.id,
     user_name: user.full_name ?? user.email ?? '',
@@ -188,8 +171,8 @@ export async function enqueueGenericDelete(
   entityId: string,
   entityName: string | null,
 ): Promise<EnqueueResult> {
-  const dup = await findDuplicatePending(supabase, user, { action: 'delete', entityType, entityId });
-  if (dup) return { ok: false, duplicate: true, error: `عندك طلب حذف لهذا العنصر بانتظار الموافقة بالفعل.` };
+  const existingId = await findExistingPendingId(supabase, user, { action: 'delete', entityType, entityId });
+  if (existingId) return { ok: true }; // idempotent — موجود مسبقاً
   const { error } = await supabase.from('pending_actions').insert({
     user_id: user.id,
     user_name: user.full_name ?? user.email ?? '',
@@ -201,7 +184,7 @@ export async function enqueueGenericDelete(
   return error ? { ok: false, error: error.message } : { ok: true };
 }
 
-// طلب حذف (مستفيد/مرافق فقط — للتوافق الرجعي)
+// طلب حذف (مستفيد/مرافق) — idempotent عبر enqueueGenericDelete
 export async function enqueueDelete(
   supabase: SupabaseClient,
   user: AppUser,
@@ -209,27 +192,7 @@ export async function enqueueDelete(
   entityId: string,
   entityName: string | null,
 ): Promise<EnqueueResult> {
-  const dup = await findDuplicatePending(supabase, user, {
-    action: 'delete',
-    entityType,
-    entityId,
-  });
-  if (dup) {
-    return {
-      ok: false,
-      duplicate: true,
-      error: `عندك طلب حذف لهذا ${entityType === 'companion' ? 'المرافق' : 'المستفيد'} بانتظار الموافقة بالفعل.`,
-    };
-  }
-  const { error } = await supabase.from('pending_actions').insert({
-    user_id: user.id,
-    user_name: user.full_name ?? user.email ?? '',
-    action: 'delete',
-    entity_type: entityType,
-    entity_id: entityId,
-    entity_name: entityName,
-  });
-  return error ? { ok: false, error: error.message } : { ok: true };
+  return enqueueGenericDelete(supabase, user, entityType, entityId, entityName);
 }
 
 // خريطة من entity_type → جدول DB

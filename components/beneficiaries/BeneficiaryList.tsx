@@ -554,6 +554,31 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               </tr>
             </thead>
             <tbody>
+              {/* صفوف "شبح" لطلبات الإضافة pending — يقرأها الـpayload ويعرضها قبل الموافقة */}
+              {myPending.getCreates().map((pa, i) => {
+                const cp = pa.payload as { beneficiary?: Record<string, unknown> } | null;
+                const b = cp?.beneficiary ?? {};
+                return (
+                  <tr key={`pending-create-${i}`} className="pending-create border-t border-slate-100">
+                    <td className="table-cell text-slate-400 text-xs">⏳</td>
+                    <td className="table-cell">
+                      <div className="font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
+                        {String(b.name ?? '—')}
+                        <span className="pending-badge pending-badge-create">⏳ إضافة بانتظار الموافقة</span>
+                      </div>
+                      {b.english_name ? <div className="text-xs text-slate-400">{String(b.english_name)}</div> : null}
+                    </td>
+                    <td className="table-cell text-slate-500 text-xs">{String(b.code ?? '—')}</td>
+                    <td className="table-cell text-slate-500 text-xs">{String(b.category ?? '—')}</td>
+                    <td className="table-cell text-slate-500 text-xs">{String(b.villa ?? '—')}</td>
+                    <td className="table-cell text-slate-500 text-xs">{String(b.diet_type ?? '—')}</td>
+                    <td className="table-cell text-slate-400 text-xs">—</td>
+                    <td className="table-cell text-slate-400 text-xs">—</td>
+                    <td className="table-cell text-slate-500 text-sm">{String(b.notes ?? '—')}</td>
+                    <td className="table-cell text-slate-400 text-xs text-center">—</td>
+                  </tr>
+                );
+              })}
               {pagination.pageItems.map((b, idx) => {
                 const pendingCls = myPending.hasDelete(b.id)
                   ? 'pending-delete'
