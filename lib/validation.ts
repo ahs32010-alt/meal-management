@@ -29,6 +29,15 @@ export const permissionsMapSchema = z
     { message: 'Invalid permission action key' }
   );
 
+// خريطة "يحتاج موافقة" — view ما تدخل هنا (قراءة فقط)
+const approvalActionSchema = z.object({
+  add: z.boolean().optional(),
+  edit: z.boolean().optional(),
+  delete: z.boolean().optional(),
+});
+export const approvalRequiredMapSchema = z
+  .record(z.enum(PAGE_KEYS as unknown as [PageKey, ...PageKey[]]), approvalActionSchema);
+
 const trimmedString = (min: number, max: number) =>
   z.string().trim().min(min).max(max);
 
@@ -38,6 +47,7 @@ export const createUserSchema = z.object({
   full_name: trimmedString(1, 120).optional().nullable(),
   is_admin: z.boolean().optional().default(false),
   permissions: permissionsMapSchema.optional().default({}),
+  approval_required: approvalRequiredMapSchema.optional().default({}),
 });
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 
@@ -47,6 +57,7 @@ export const updateUserSchema = z.object({
   full_name: trimmedString(1, 120).optional().nullable(),
   is_admin: z.boolean().optional(),
   permissions: permissionsMapSchema.optional(),
+  approval_required: approvalRequiredMapSchema.optional(),
 });
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 

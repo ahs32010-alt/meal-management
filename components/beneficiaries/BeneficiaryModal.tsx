@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { can } from '@/lib/permissions';
+import { needsApproval } from '@/lib/permissions';
 import { enqueueCreate, enqueueUpdate, type CreatePayload } from '@/lib/pending-actions';
 import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS } from '@/lib/types';
@@ -307,11 +307,11 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const [activeTab, setActiveTab] = useState<Tab>('info');
   const supabase = useMemo(() => createClient(), []);
   const { user: currentUser } = useCurrentUser();
-  // الصلاحيات حسب الصفحة (مستفيدون أو مرافقون). لو ما عنده الصلاحية لإجراء معيّن
-  // يدخل نظام الموافقات تلقائياً.
+  // المسار: الزر يظهر/يخفى من القسم الأول (canAdd/canEdit)، ولو يظهر،
+  // نسأل القسم الثاني: هل هذا الإجراء يحتاج موافقة لهذا المستخدم؟
   const permPage = entityType === 'companion' ? 'companions' : 'beneficiaries';
-  const canAdd  = can(currentUser, permPage, 'add');
-  const canEdit = can(currentUser, permPage, 'edit');
+  const addNeedsApproval  = needsApproval(currentUser, permPage, 'add');
+  const editNeedsApproval = needsApproval(currentUser, permPage, 'edit');
 
   const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner'];
 
@@ -408,7 +408,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
         ),
       });
 
-      if (!isEdit && !canAdd && currentUser) {
+      if (!isEdit && addNeedsApproval && currentUser) {
         const r = await enqueueCreate(supabase, currentUser, entityType, payload.name as string, buildPayload());
         if (!r.ok) {
           setError(r.duplicate ? r.error : friendlyError(r.error));
@@ -421,7 +421,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
         return;
       }
 
-      if (isEdit && !canEdit && currentUser && beneficiary) {
+      if (isEdit && editNeedsApproval && currentUser && beneficiary) {
         const r = await enqueueUpdate(supabase, currentUser, entityType, beneficiary.id, payload.name as string, buildPayload());
         if (!r.ok) {
           setError(r.duplicate ? r.error : friendlyError(r.error));

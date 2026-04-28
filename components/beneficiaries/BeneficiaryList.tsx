@@ -6,7 +6,7 @@ import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { can } from '@/lib/permissions';
+import { can, needsApproval } from '@/lib/permissions';
 import { enqueueDelete } from '@/lib/pending-actions';
 import type { Beneficiary, Meal, EntityType, ItemCategory } from '@/lib/types';
 import { DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
@@ -93,7 +93,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   // الصلاحيات على هذي الصفحة (page) للمستخدم الحالي:
   // - لو يقدر يحذف → الحذف فوري
   // - لو ما يقدر → يدخل نظام الموافقات
-  const canDelete = can(currentUser, entityType === 'companion' ? 'companions' : 'beneficiaries', 'delete');
+  const permPage = entityType === 'companion' ? 'companions' : 'beneficiaries';
+  const canDelete = can(currentUser, permPage, 'delete');
+  const deleteNeedsApproval = needsApproval(currentUser, permPage, 'delete');
   const isAdmin = currentUser?.is_admin === true;
 
   const supabase = useMemo(() => createClient(), []);
@@ -198,13 +200,13 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     const targetName = ben?.name ?? `هذا ال${entitySingular}`;
     setDialog({
       title: `حذف ${entitySingular}`,
-      message: canDelete
-        ? `هل أنت متأكد من حذف "${targetName}"؟ لا يمكن التراجع عن هذه العملية.`
-        : `سيُرسَل طلب حذف "${targetName}" إلى الأدمن للموافقة. يحدث الحذف فعلياً بعد قبول الأدمن. متابعة؟`,
+      message: deleteNeedsApproval
+        ? `سيُرسَل طلب حذف "${targetName}" إلى الأدمن للموافقة. يحدث الحذف فعلياً بعد قبول الأدمن. متابعة؟`
+        : `هل أنت متأكد من حذف "${targetName}"؟ لا يمكن التراجع عن هذه العملية.`,
       onConfirm: async () => {
         setDialog(null);
         setDeleting(id);
-        if (!canDelete && currentUser) {
+        if (deleteNeedsApproval && currentUser) {
           const r = await enqueueDelete(supabase, currentUser, entityType, id, ben?.name ?? null);
           if (!r.ok) {
             setNotice(r.duplicate ? `⚠ ${r.error}` : `⚠ تعذّر إرسال طلب الحذف: ${r.error}`);
@@ -458,7 +460,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               </button>
             </>
           )}
-          <button onClick={handleAdd} className="btn-primary text-sm">+ إضافة {entitySingular}</button>
+          {can(currentUser, permPage, 'add') && (
+            <button onClick={handleAdd} className="btn-primary text-sm">+ إضافة {entitySingular}</button>
+          )}
         </div>
       </div>
 
@@ -606,25 +610,29 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                   <td className="table-cell text-slate-500 text-sm">{b.notes ?? '—'}</td>
                   <td className="table-cell">
                     <div className="flex items-center justify-center gap-2">
-                      <button
-                        onClick={() => handleEdit(b)}
-                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                        title="تعديل"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={() => handleDelete(b.id)}
-                        disabled={deleting === b.id}
-                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
-                        title="حذف"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
+                      {can(currentUser, permPage, 'edit') && (
+                        <button
+                          onClick={() => handleEdit(b)}
+                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          title="تعديل"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          onClick={() => handleDelete(b.id)}
+                          disabled={deleting === b.id}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
+                          title="حذف"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

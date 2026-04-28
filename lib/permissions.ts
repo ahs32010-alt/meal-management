@@ -20,12 +20,22 @@ export type PermissionAction = 'view' | 'add' | 'edit' | 'delete';
 
 export type PermissionsMap = Partial<Record<PageKey, PagePermission>>;
 
+// خريطة "يحتاج موافقة" — لكل صفحة، أي إجراءات تحتاج موافقة الأدمن قبل التنفيذ.
+// view ما تظهر هنا لأنها قراءة فقط بلا أثر يستحق موافقة.
+export type ApprovalActionMap = {
+  add?: boolean;
+  edit?: boolean;
+  delete?: boolean;
+};
+export type ApprovalRequiredMap = Partial<Record<PageKey, ApprovalActionMap>>;
+
 export interface AppUser {
   id: string;
   email: string;
   full_name: string | null;
   is_admin: boolean;
   permissions: PermissionsMap;
+  approval_required?: ApprovalRequiredMap;
   avatar_url: string | null;
   created_at: string;
   updated_at: string;
@@ -83,4 +93,18 @@ export function can(user: AppUser | null, page: PageKey, action: PermissionActio
   if (!user) return false;
   if (user.is_admin) return true;
   return Boolean(user.permissions?.[page]?.[action]);
+}
+
+// هل هذا الإجراء يحتاج موافقة الأدمن قبل التنفيذ؟
+// منطق: الأدمن لا يحتاج موافقة. لو ما عنده الصلاحية أصلاً، الزر مخفي
+// فالسؤال غير منطبق. لو عنده الصلاحية، نفحص خريطة approval_required.
+export function needsApproval(
+  user: AppUser | null,
+  page: PageKey,
+  action: 'add' | 'edit' | 'delete',
+): boolean {
+  if (!user) return false;
+  if (user.is_admin) return false;
+  if (!can(user, page, action)) return false;
+  return Boolean(user.approval_required?.[page]?.[action]);
 }
