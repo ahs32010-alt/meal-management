@@ -9,7 +9,6 @@ import BottomNav from '@/components/layout/BottomNav';
 import ThemeToggle from '@/components/layout/ThemeToggle';
 import CuteThemeApplier from '@/components/layout/CuteThemeApplier';
 import Footer from '@/components/layout/Footer';
-import PendingActionsBell from '@/components/layout/PendingActionsBell';
 
 const PAGE_TITLES: Record<string, string> = {
   '/':              'الرئيسية',
@@ -18,6 +17,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/orders':        'أوامر التشغيل',
   '/reports':       'التقارير',
   '/stickers':      'الستيكرات',
+  '/approvals':     'الموافقات',
   '/settings':      'الإعدادات',
 };
 
@@ -80,7 +80,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <img src="/logo.png" alt="مركز خطوة أمل" className="w-full h-full object-contain" />
           </div>
           <h1 className="flex-1 font-bold text-slate-800 text-base truncate">{title}</h1>
-          <PendingActionsBell />
           <ThemeToggle variant="compact" />
         </div>
 
@@ -97,10 +96,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </svg>
               القائمة
             </button>
-            <div className="flex items-center gap-2">
-              <PendingActionsBell />
-              <ThemeToggle variant="topbar" />
-            </div>
+            <ThemeToggle variant="topbar" />
           </div>
         )}
 

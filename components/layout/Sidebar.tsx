@@ -8,7 +8,6 @@ import { createClient } from '@/lib/supabase-client';
 import { useCurrentUser, clearCurrentUserCache } from '@/lib/use-current-user';
 import { can, type PageKey } from '@/lib/permissions';
 import ThemeToggle from '@/components/layout/ThemeToggle';
-import PendingActionsBell from '@/components/layout/PendingActionsBell';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 
 const AvatarUploadModal = dynamic(() => import('./AvatarUploadModal'), { ssr: false });
@@ -95,6 +94,17 @@ const navItems: { href: string; label: string; page: PageKey; icon: React.ReactN
     ),
   },
   {
+    href: '/approvals',
+    label: 'الموافقات',
+    // متاح للجميع — اليوزر يشوف طلباته، الأدمن يشوف الكل
+    page: '__public__' as PageKey,
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+      </svg>
+    ),
+  },
+  {
     href: '/settings',
     label: 'الإعدادات',
     page: 'settings',
@@ -122,9 +132,14 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   // While loading, show nothing (avoid flashing restricted links). Admins see everything.
+  // الـpage='__public__' متاح للجميع المسجّلين دخول، فنتجاوز فحص الصلاحيات.
   const visibleItems = userLoading
     ? []
-    : navItems.filter(item => can(currentUser, item.page, 'view'));
+    : navItems.filter(item =>
+        (item.page as string) === '__public__'
+          ? !!currentUser
+          : can(currentUser, item.page, 'view')
+      );
 
   useEffect(() => { onClose?.(); }, [pathname]);
 
@@ -158,9 +173,6 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
           <div className="flex-1 min-w-0">
             <h1 className="text-white font-bold text-sm leading-tight truncate">مركز خطوة أمل</h1>
           </div>
-
-          {/* Pending actions bell (admin only) */}
-          <PendingActionsBell />
 
           {/* Theme toggle (icon) */}
           <ThemeToggle variant="sidebarIcon" />

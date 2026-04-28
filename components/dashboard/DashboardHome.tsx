@@ -2,6 +2,9 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
+
+const ApprovalsList = dynamic(() => import('@/components/approvals/ApprovalsList'), { ssr: false });
 import { createClient } from '@/lib/supabase-client';
 import type { MealType } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
@@ -295,6 +298,34 @@ export default function DashboardHome() {
 
   return (
     <div className="p-6 space-y-6">
+      {/* ── الموافقات ── (فوق لوحة التحكم بفاصل) */}
+      <div className="card p-5 border-r-4 border-r-amber-400">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div>
+            <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <svg className="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+              الموافقات
+            </h2>
+            <p className="text-slate-500 text-xs mt-0.5">
+              {currentUser?.is_admin
+                ? 'طلبات إضافة/حذف بحاجة لمراجعتك'
+                : 'طلباتك السابقة وحالتها'}
+            </p>
+          </div>
+          <Link
+            href="/approvals"
+            className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 px-3 py-1.5 rounded-lg hover:bg-emerald-50 transition-colors"
+          >
+            عرض السجل الكامل ←
+          </Link>
+        </div>
+        <ApprovalsList limit={5} statusFilter={currentUser?.is_admin ? 'pending' : 'all'} hideFilters />
+      </div>
+
+      <hr className="border-slate-200" />
+
       {/* ── Header ── */}
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
