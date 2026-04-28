@@ -143,15 +143,16 @@ export default function ApprovalsList({ limit, statusFilter = 'all', hideFilters
       ) : (
         <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl bg-white overflow-hidden">
           {items.map(pa => {
-            const isCreate = pa.action === 'create';
             const status = STATUS_THEME[pa.status];
             return (
               <div key={pa.id} className="px-4 py-3 hover:bg-slate-50">
                 <div className="flex items-start gap-2 mb-2 flex-wrap">
                   <span className={`text-xs font-bold px-2 py-0.5 rounded-md shrink-0 ${
-                    isCreate ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                    pa.action === 'create' ? 'bg-emerald-100 text-emerald-700'
+                  : pa.action === 'update' ? 'bg-blue-100 text-blue-700'
+                                            : 'bg-red-100 text-red-700'
                   }`}>
-                    {isCreate ? '+ إضافة' : '✕ حذف'}
+                    {pa.action === 'create' ? '+ إضافة' : pa.action === 'update' ? '✎ تعديل' : '✕ حذف'}
                   </span>
                   <span className={`text-xs font-semibold px-2 py-0.5 rounded-md border shrink-0 ${status.cls}`}>
                     {status.label}

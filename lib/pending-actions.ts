@@ -12,7 +12,7 @@ export interface PendingAction {
   id: string;
   user_id: string | null;
   user_name: string | null;
-  action: 'create' | 'delete';
+  action: 'create' | 'update' | 'delete';
   entity_type: EntityType;
   entity_id: string | null;
   entity_name: string | null;
@@ -50,7 +50,7 @@ async function findDuplicatePending(
   supabase: SupabaseClient,
   user: AppUser,
   match: {
-    action: 'create' | 'delete';
+    action: 'create' | 'update' | 'delete';
     entityType: EntityType;
     entityId?: string;
     entityName?: string;
@@ -95,6 +95,39 @@ export async function enqueueCreate(
     user_name: user.full_name ?? user.email ?? '',
     action: 'create',
     entity_type: entityType,
+    entity_name: entityName,
+    payload: payload as unknown as Record<string, unknown>,
+  });
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+// طلب تعديل — يحفظ نفس الـCreatePayload بس مع entity_id للسجل المراد تعديله
+export async function enqueueUpdate(
+  supabase: SupabaseClient,
+  user: AppUser,
+  entityType: EntityType,
+  entityId: string,
+  entityName: string,
+  payload: CreatePayload,
+): Promise<EnqueueResult> {
+  const dup = await findDuplicatePending(supabase, user, {
+    action: 'update',
+    entityType,
+    entityId,
+  });
+  if (dup) {
+    return {
+      ok: false,
+      duplicate: true,
+      error: `عندك طلب تعديل لـ "${entityName}" بانتظار الموافقة بالفعل.`,
+    };
+  }
+  const { error } = await supabase.from('pending_actions').insert({
+    user_id: user.id,
+    user_name: user.full_name ?? user.email ?? '',
+    action: 'update',
+    entity_type: entityType,
+    entity_id: entityId,
     entity_name: entityName,
     payload: payload as unknown as Record<string, unknown>,
   });
@@ -164,6 +197,36 @@ export async function approveAction(
           ({ error: fmErr } = await supabase.from('beneficiary_fixed_meals').insert(fallback));
         }
         if (fmErr) return { ok: false, error: `تم إنشاء المستفيد لكن الأصناف الثابتة فشلت: ${fmErr.message}` };
+      }
+    } else if (pa.action === 'update') {
+      const cp = pa.payload as unknown as CreatePayload | null;
+      if (!pa.entity_id || !cp?.beneficiary) return { ok: false, error: 'payload أو entity_id مفقود' };
+      const id = pa.entity_id;
+
+      // تحديث البيانات الأساسية للمستفيد
+      const { error: updErr } = await supabase.from('beneficiaries').update(cp.beneficiary).eq('id', id);
+      if (updErr) return { ok: false, error: updErr.message };
+
+      // استبدال المحظورات (نحذف ثم نضيف لتطابق الـbehavior في BeneficiaryModal)
+      const { error: delExErr } = await supabase.from('exclusions').delete().eq('beneficiary_id', id);
+      if (delExErr) return { ok: false, error: `تم تحديث الأساس لكن مسح المحظورات فشل: ${delExErr.message}` };
+      if (cp.exclusions?.length) {
+        const rows = cp.exclusions.map(ex => ({ ...ex, beneficiary_id: id }));
+        const { error: exErr } = await supabase.from('exclusions').insert(rows);
+        if (exErr) return { ok: false, error: `إضافة المحظورات الجديدة فشلت: ${exErr.message}` };
+      }
+
+      // استبدال الأصناف الثابتة
+      const { error: delFmErr } = await supabase.from('beneficiary_fixed_meals').delete().eq('beneficiary_id', id);
+      if (delFmErr) return { ok: false, error: `تم تحديث الأساس لكن مسح الأصناف الثابتة فشل: ${delFmErr.message}` };
+      if (cp.fixed_meals?.length) {
+        const rows = cp.fixed_meals.map(fm => ({ ...fm, beneficiary_id: id }));
+        let { error: fmErr } = await supabase.from('beneficiary_fixed_meals').insert(rows);
+        if (fmErr && /category|column/i.test(fmErr.message)) {
+          const fallback = rows.map(({ category: _c, ...rest }) => rest);
+          ({ error: fmErr } = await supabase.from('beneficiary_fixed_meals').insert(fallback));
+        }
+        if (fmErr) return { ok: false, error: `إضافة الأصناف الثابتة فشلت: ${fmErr.message}` };
       }
     }
 

@@ -4,7 +4,8 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { enqueueCreate, type CreatePayload } from '@/lib/pending-actions';
+import { can } from '@/lib/permissions';
+import { enqueueCreate, enqueueUpdate, type CreatePayload } from '@/lib/pending-actions';
 import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS } from '@/lib/types';
 
@@ -306,7 +307,11 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const [activeTab, setActiveTab] = useState<Tab>('info');
   const supabase = useMemo(() => createClient(), []);
   const { user: currentUser } = useCurrentUser();
-  const isAdmin = currentUser?.is_admin === true;
+  // الصلاحيات حسب الصفحة (مستفيدون أو مرافقون). لو ما عنده الصلاحية لإجراء معيّن
+  // يدخل نظام الموافقات تلقائياً.
+  const permPage = entityType === 'companion' ? 'companions' : 'beneficiaries';
+  const canAdd  = can(currentUser, permPage, 'add');
+  const canEdit = can(currentUser, permPage, 'edit');
 
   const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner'];
 
@@ -384,32 +389,46 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
     try {
       const isEdit = !!beneficiary;
 
-      // مستخدم غير أدمن + إنشاء جديد → نرسل طلباً للأدمن بدل الإدخال المباشر.
-      // التعديل ما يمر بنظام الموافقة (للحين)، تماشياً مع طلب المستخدم.
-      if (!isEdit && !isAdmin && currentUser) {
-        const cp: CreatePayload = {
-          beneficiary: payload,
-          exclusions: exclusions.map(ex => ({
-            meal_id: ex.meal_id,
-            alternative_meal_id: ex.alternative_meal_id || null,
-          })),
-          fixed_meals: fixedEntries.flatMap(fe =>
-            Array.from(fe.days).map(day => ({
-              day_of_week: day,
-              meal_type: fe.meal_type,
-              meal_id: fe.meal_id,
-              quantity: fe.quantity,
-              category: fe.category,
-            }))
-          ),
-        };
-        const r = await enqueueCreate(supabase, currentUser, entityType, payload.name as string, cp);
+      // إذا ما عند المستخدم صلاحية الإجراء المطلوب، نحوّله لنظام الموافقات.
+      // البيانات المرسَلة (المحظورات والأصناف الثابتة) تتخزّن في payload وتُطبَّق عند القبول.
+      const buildPayload = (): CreatePayload => ({
+        beneficiary: payload,
+        exclusions: exclusions.map(ex => ({
+          meal_id: ex.meal_id,
+          alternative_meal_id: ex.alternative_meal_id || null,
+        })),
+        fixed_meals: fixedEntries.flatMap(fe =>
+          Array.from(fe.days).map(day => ({
+            day_of_week: day,
+            meal_type: fe.meal_type,
+            meal_id: fe.meal_id,
+            quantity: fe.quantity,
+            category: fe.category,
+          }))
+        ),
+      });
+
+      if (!isEdit && !canAdd && currentUser) {
+        const r = await enqueueCreate(supabase, currentUser, entityType, payload.name as string, buildPayload());
         if (!r.ok) {
           setError(r.duplicate ? r.error : friendlyError(r.error));
           setSaving(false);
           return;
         }
         alert(`✓ تم إرسال طلب إضافة "${payload.name}" إلى الأدمن. ستظهر في القائمة بعد الموافقة.`);
+        setSaving(false);
+        onSaved();
+        return;
+      }
+
+      if (isEdit && !canEdit && currentUser && beneficiary) {
+        const r = await enqueueUpdate(supabase, currentUser, entityType, beneficiary.id, payload.name as string, buildPayload());
+        if (!r.ok) {
+          setError(r.duplicate ? r.error : friendlyError(r.error));
+          setSaving(false);
+          return;
+        }
+        alert(`✓ تم إرسال طلب تعديل "${payload.name}" إلى الأدمن. التعديل يُطبَّق بعد الموافقة.`);
         setSaving(false);
         onSaved();
         return;

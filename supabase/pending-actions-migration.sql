@@ -6,17 +6,22 @@ create table if not exists pending_actions (
   id            uuid default gen_random_uuid() primary key,
   user_id       uuid references auth.users(id) on delete cascade,
   user_name     text,
-  action        text not null check (action in ('create', 'delete')),
+  action        text not null,
   entity_type   text not null check (entity_type in ('beneficiary', 'companion')),
-  entity_id     uuid,             -- لطلبات الحذف
+  entity_id     uuid,             -- لطلبات الحذف/التعديل
   entity_name   text,             -- عنوان للعرض في لوحة الإشعارات
-  payload       jsonb,            -- لطلبات الإنشاء: كل بيانات النموذج
+  payload       jsonb,            -- لطلبات الإنشاء/التعديل: كل بيانات النموذج
   status        text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
   reviewed_by   uuid references auth.users(id),
   reviewed_at   timestamptz,
   reject_reason text,
   created_at    timestamptz default timezone('utc', now()) not null
 );
+
+-- نضمن قيد action يقبل 'create' و'update' و'delete' (idempotent)
+alter table pending_actions drop constraint if exists pending_actions_action_check;
+alter table pending_actions add constraint pending_actions_action_check
+  check (action in ('create', 'update', 'delete'));
 
 alter table pending_actions enable row level security;
 

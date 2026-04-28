@@ -6,6 +6,7 @@ import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
+import { can } from '@/lib/permissions';
 import { enqueueDelete } from '@/lib/pending-actions';
 import type { Beneficiary, Meal, EntityType, ItemCategory } from '@/lib/types';
 import { DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
@@ -89,7 +90,10 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   const [deletingAll, setDeletingAll] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const { user: currentUser } = useCurrentUser();
-  const isAdmin = currentUser?.is_admin === true;
+  // الصلاحيات على هذي الصفحة (page) للمستخدم الحالي:
+  // - لو يقدر يحذف → الحذف فوري
+  // - لو ما يقدر → يدخل نظام الموافقات
+  const canDelete = can(currentUser, entityType === 'companion' ? 'companions' : 'beneficiaries', 'delete');
 
   const supabase = useMemo(() => createClient(), []);
 
@@ -193,13 +197,13 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     const targetName = ben?.name ?? `هذا ال${entitySingular}`;
     setDialog({
       title: `حذف ${entitySingular}`,
-      message: isAdmin
+      message: canDelete
         ? `هل أنت متأكد من حذف "${targetName}"؟ لا يمكن التراجع عن هذه العملية.`
         : `سيُرسَل طلب حذف "${targetName}" إلى الأدمن للموافقة. يحدث الحذف فعلياً بعد قبول الأدمن. متابعة؟`,
       onConfirm: async () => {
         setDialog(null);
         setDeleting(id);
-        if (!isAdmin && currentUser) {
+        if (!canDelete && currentUser) {
           const r = await enqueueDelete(supabase, currentUser, entityType, id, ben?.name ?? null);
           if (!r.ok) {
             setNotice(r.duplicate ? `⚠ ${r.error}` : `⚠ تعذّر إرسال طلب الحذف: ${r.error}`);
