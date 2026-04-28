@@ -45,7 +45,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const parsed = parseJson(updateUserSchema, body);
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: parsed.status });
 
-  const { email, password, full_name, is_admin, permissions } = parsed.data;
+  const { email, password, full_name, is_admin, permissions, approval_required } = parsed.data;
 
   const admin = createAdminClient();
 
@@ -62,6 +62,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (full_name !== undefined) profileUpdate.full_name = sanitizeOptional(full_name, 120);
   if (is_admin !== undefined) profileUpdate.is_admin = Boolean(is_admin);
   if (permissions !== undefined) profileUpdate.permissions = permissions;
+  if (approval_required !== undefined) profileUpdate.approval_required = approval_required;
 
   if (Object.keys(profileUpdate).length > 0) {
     const { error: updErr } = await admin.from('app_users').update(profileUpdate).eq('id', params.id);
@@ -82,6 +83,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       full_name_changed: full_name !== undefined,
       is_admin_changed: is_admin !== undefined,
       permissions_changed: permissions !== undefined,
+      approval_required_changed: approval_required !== undefined,
     },
   });
 

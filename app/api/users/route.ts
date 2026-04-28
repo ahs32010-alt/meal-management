@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   const parsed = parseJson(createUserSchema, body);
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: parsed.status });
 
-  const { email, password, full_name, is_admin, permissions } = parsed.data;
+  const { email, password, full_name, is_admin, permissions, approval_required } = parsed.data;
   const cleanFullName = sanitizeOptional(full_name, 120);
 
   const admin = createAdminClient();
@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
       full_name: cleanFullName,
       is_admin: Boolean(is_admin),
       permissions: permissions ?? {},
+      approval_required: approval_required ?? {},
     })
     .select()
     .single();
