@@ -89,10 +89,16 @@ export async function buildOrderReport(
   if (bensRes.error && /entity_type|column/i.test(bensRes.error.message)) {
     bensRes = await fetchBens(false, false, false);
   }
-  // الـquery select ديناميكي فما يقدر TypeScript يستنتج النوع — نقصّه إلى any[]
-  // لأن كل forEach/map داخله مضبوط على inline type.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const beneficiaries = bensRes.data as any[] | null;
+  // الـquery select ديناميكي فما يقدر TypeScript يستنتج النوع — نعرّف نوع
+  // محلّي يطابق شكل الصف ونقصّ النتيجة إليه.
+  type BenRow = {
+    id: string; name: string; english_name?: string; code: string;
+    category: string; villa?: string; diet_type?: string;
+    fixed_items?: string; notes?: string; created_at: string;
+    exclusions: { id: string; meal_id: string; alternative_meal_id: string | null }[];
+    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; category?: string }[];
+  };
+  const beneficiaries = bensRes.data as unknown as BenRow[] | null;
 
   if (!beneficiaries || beneficiaries.length === 0) return null;
 

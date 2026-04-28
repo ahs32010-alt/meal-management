@@ -189,7 +189,7 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
             </div>
             {!isSnack && (
               <p className="text-[11px] text-slate-400 mt-1.5">
-                اختر "حار" أو "بارد" — راح ينعكس تلقائياً في كل أوامر التشغيل والمنيو والستيكرات.
+                اختر &quot;حار&quot; أو &quot;بارد&quot; — راح ينعكس تلقائياً في كل أوامر التشغيل والمنيو والستيكرات.
               </p>
             )}
           </div>

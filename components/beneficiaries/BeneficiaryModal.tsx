@@ -294,9 +294,10 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
     buildFixedEntries(beneficiary?.fixed_meals, meals)
   );
 
-  // For adding new fixed meal
+  // For adding new fixed meal — صار اختيار وجبة + اختيار صنف/سناك بشكل مستقل
   const [addingFixed, setAddingFixed] = useState(false);
   const [newFixedMealType, setNewFixedMealType] = useState<MealType>('breakfast');
+  const [newFixedIsSnack, setNewFixedIsSnack] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -625,18 +626,39 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                 {/* Add button */}
                 <div className="flex items-center gap-2">
                   {addingFixed ? (
-                    <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+                    <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 flex-wrap">
+                      {/* اختيار الوجبة */}
                       <select
                         value={newFixedMealType}
                         onChange={e => setNewFixedMealType(e.target.value as MealType)}
                         className="text-xs border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-400"
                       >
                         {MEAL_TYPES.map(t => <option key={t} value={t}>{MEAL_TYPE_LABELS[t]}</option>)}
-                        <option value="snack">سناك</option>
                       </select>
+                      {/* صنف ولا سناك */}
+                      <div className="flex items-center gap-0.5 bg-white border border-slate-200 rounded-lg p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setNewFixedIsSnack(false)}
+                          className={`text-xs font-semibold px-2.5 py-1 rounded-md transition-colors ${
+                            !newFixedIsSnack ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          صنف
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewFixedIsSnack(true)}
+                          className={`text-xs font-semibold px-2.5 py-1 rounded-md transition-colors ${
+                            newFixedIsSnack ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          سناك
+                        </button>
+                      </div>
                       <MealPicker
-                        meals={meals.filter(m => newFixedMealType === ('snack' as string) ? m.is_snack : (m.type === newFixedMealType && !m.is_snack))}
-                        placeholder="اختر صنف"
+                        meals={meals.filter(m => m.type === newFixedMealType && m.is_snack === newFixedIsSnack)}
+                        placeholder={newFixedIsSnack ? 'اختر سناك' : 'اختر صنف'}
                         onSelect={addFixedMeal}
                         excludeIds={fixedEntries.filter(fe => fe.meal_type === newFixedMealType).map(fe => fe.meal_id)}
                       />
