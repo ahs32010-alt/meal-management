@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
+import { can } from '@/lib/permissions';
 import type { Meal, MealType, ItemCategory, MenuItem, EntityType } from '@/lib/types';
 import { ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import {
@@ -36,6 +37,7 @@ export default function MenuView() {
   const supabase = useMemo(() => createClient(), []);
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.is_admin === true;
+  const canEdit = can(currentUser, 'menu', 'edit');
   // الـtab بين منيو المستفيدين ومنيو المرافقين — يبقى بين الجلسات.
   const [entityType, setEntityType] = useState<EntityType>(() => {
     if (typeof window === 'undefined') return 'beneficiary';
@@ -297,6 +299,10 @@ export default function MenuView() {
     const item = list[rowIndex] ?? null;
 
     if (!item) {
+      // خلية فاضية: لو ما عند المستخدم صلاحية تعديل المنيو، تظهر فاضية ساكتة
+      if (!canEdit) {
+        return <div className="w-full h-full min-h-[34px]" />;
+      }
       return (
         <button
           type="button"
@@ -332,36 +338,53 @@ export default function MenuView() {
             {theme.icon}
           </span>
         )}
-        <button
-          type="button"
-          onClick={() => setEditing({ week, day, meal_type: mealType, isSnack, rowIndex })}
-          className="flex-1 text-right text-sm font-medium text-slate-800 hover:text-emerald-700 truncate"
-          title="اضغط للتغيير"
-        >
-          {item.meals?.name ?? '—'}
-        </button>
-        <input
-          type="number"
-          min={1}
-          max={100}
-          value={mult}
-          onChange={e => handleSetMultiplier(item, parseInt(e.target.value) || 1)}
-          onClick={e => e.stopPropagation()}
-          title="مضاعف الكمية (×N)"
-          className={`shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 focus:outline-none focus:ring-1 ${
-            mult > 1
-              ? 'text-violet-700 bg-violet-50 border border-violet-300 focus:ring-violet-300'
-              : 'text-slate-400 bg-transparent border border-transparent hover:border-slate-200 focus:ring-slate-300'
-          }`}
-        />
-        <button
-          type="button"
-          onClick={() => handleSetCell(week, day, mealType, rowIndex, isSnack, null)}
-          className="shrink-0 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 text-xs transition-opacity"
-          title="حذف"
-        >
-          ✕
-        </button>
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => setEditing({ week, day, meal_type: mealType, isSnack, rowIndex })}
+            className="flex-1 text-right text-sm font-medium text-slate-800 hover:text-emerald-700 truncate"
+            title="اضغط للتغيير"
+          >
+            {item.meals?.name ?? '—'}
+          </button>
+        ) : (
+          <span
+            className="flex-1 text-right text-sm font-medium text-slate-800 truncate"
+            title="ما عندك صلاحية تعديل قائمة الطعام"
+          >
+            {item.meals?.name ?? '—'}
+          </span>
+        )}
+        {canEdit ? (
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={mult}
+            onChange={e => handleSetMultiplier(item, parseInt(e.target.value) || 1)}
+            onClick={e => e.stopPropagation()}
+            title="مضاعف الكمية (×N)"
+            className={`shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 focus:outline-none focus:ring-1 ${
+              mult > 1
+                ? 'text-violet-700 bg-violet-50 border border-violet-300 focus:ring-violet-300'
+                : 'text-slate-400 bg-transparent border border-transparent hover:border-slate-200 focus:ring-slate-300'
+            }`}
+          />
+        ) : mult > 1 ? (
+          <span className="shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 text-violet-700 bg-violet-50 border border-violet-300">
+            ×{mult}
+          </span>
+        ) : null}
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => handleSetCell(week, day, mealType, rowIndex, isSnack, null)}
+            className="shrink-0 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 text-xs transition-opacity"
+            title="حذف"
+          >
+            ✕
+          </button>
+        )}
       </div>
     );
   };

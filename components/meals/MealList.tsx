@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
+import { can } from '@/lib/permissions';
 import type { Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -36,12 +37,15 @@ interface MealSectionProps {
   onSetCategory: (meal: Meal, category: ItemCategory) => void;
   categoryUpdating: string | null;
   isAdmin: boolean;
+  canAdd: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
   deleting: string | null;
   duplicating: string | null;
   deletingAll: boolean;
 }
 
-function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll, isAdmin }: MealSectionProps) {
+function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll, isAdmin, canAdd, canEdit, canDelete }: MealSectionProps) {
   return (
     <div className={`rounded-xl border ${colors.border} overflow-hidden`}>
       <div className={`flex items-center justify-between px-4 py-3 ${colors.bg}`}>
@@ -75,15 +79,17 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
               إضافة جماعية
             </button>
           )}
-          <button
-            onClick={() => onAdd(mealType, isSnack)}
-            className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border ${colors.border} ${colors.text} hover:opacity-80 transition-opacity`}
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            إضافة
-          </button>
+          {canAdd && (
+            <button
+              onClick={() => onAdd(mealType, isSnack)}
+              className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border ${colors.border} ${colors.text} hover:opacity-80 transition-opacity`}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              إضافة
+            </button>
+          )}
         </div>
       </div>
       {meals.length === 0 ? (
@@ -108,7 +114,7 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
                   >
                     🍿 سناك
                   </span>
-                ) : (
+                ) : canEdit ? (
                   <button
                     type="button"
                     onClick={() => onSetCategory(meal, cat === 'cold' ? 'hot' : 'cold')}
@@ -118,31 +124,43 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
                   >
                     {isUpdating ? '...' : catLabel}
                   </button>
+                ) : (
+                  <span
+                    className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${catCls}`}
+                    title="ما عندك صلاحية تعديل الفئة"
+                  >
+                    {catLabel}
+                  </span>
                 )}
                 {meal.english_name && (
                   <span className="text-slate-400 text-xs font-mono">({meal.english_name})</span>
                 )}
               </div>
               <div className="flex items-center gap-1">
-                <button onClick={() => onEdit(meal)} title="تعديل" className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => onDuplicate(meal)}
-                  disabled={duplicating === meal.id}
-                  title="نسخ هذا الصنف مع كل تخصيصاته"
-                  className="p-1.5 text-slate-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors disabled:opacity-40"
-                >
-                  {duplicating === meal.id ? (
-                    <div className="w-3.5 h-3.5 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-                  ) : (
+                {canEdit && (
+                  <button onClick={() => onEdit(meal)} title="تعديل" className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                     </svg>
-                  )}
-                </button>
+                  </button>
+                )}
+                {canAdd && (
+                  <button
+                    onClick={() => onDuplicate(meal)}
+                    disabled={duplicating === meal.id}
+                    title="نسخ هذا الصنف مع كل تخصيصاته"
+                    className="p-1.5 text-slate-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors disabled:opacity-40"
+                  >
+                    {duplicating === meal.id ? (
+                      <div className="w-3.5 h-3.5 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                    )}
+                  </button>
+                )}
+                {canDelete && (
                 <button
                   onClick={() => onDelete(meal.id)}
                   disabled={deleting === meal.id}
@@ -153,6 +171,7 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                   </svg>
                 </button>
+                )}
               </div>
             </div>
             );
@@ -269,6 +288,9 @@ export default function MealList() {
   const [search, setSearch] = useState('');
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.is_admin === true;
+  const canAdd    = can(currentUser, 'meals', 'add');
+  const canEdit   = can(currentUser, 'meals', 'edit');
+  const canDelete = can(currentUser, 'meals', 'delete');
   const supabase = useMemo(() => createClient(), []);
 
   // كل ما تغيّر الـtab نخزن الاختيار ونعيد التحميل.
@@ -827,6 +849,9 @@ export default function MealList() {
                 duplicating={duplicating}
                 deletingAll={deletingAll}
                 isAdmin={isAdmin}
+                canAdd={canAdd}
+                canEdit={canEdit}
+                canDelete={canDelete}
               />
               <MealSection
                 title={`سناكات ${MEAL_TYPE_LABELS[mealType]}`}
@@ -846,6 +871,9 @@ export default function MealList() {
                 duplicating={duplicating}
                 deletingAll={deletingAll}
                 isAdmin={isAdmin}
+                canAdd={canAdd}
+                canEdit={canEdit}
+                canDelete={canDelete}
               />
             </div>
           </div>
