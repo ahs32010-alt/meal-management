@@ -6,6 +6,7 @@ import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
 import { enqueueGenericCreate, enqueueGenericUpdate, enqueueGenericDelete } from '@/lib/pending-actions';
+import { useMyPending } from '@/lib/use-my-pending';
 import type { Meal, MealType, ItemCategory, MenuItem, EntityType } from '@/lib/types';
 import { ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import {
@@ -40,6 +41,7 @@ export default function MenuView() {
   const isAdmin = currentUser?.is_admin === true;
   const canEdit = can(currentUser, 'menu', 'edit');
   const editNeedsApproval = needsApproval(currentUser, 'menu', 'edit');
+  const myPending = useMyPending('menu_item');
   // الـtab بين منيو المستفيدين ومنيو المرافقين — يبقى بين الجلسات.
   const [entityType, setEntityType] = useState<EntityType>(() => {
     if (typeof window === 'undefined') return 'beneficiary';
@@ -363,7 +365,10 @@ export default function MenuView() {
         : 'opacity-25'
       : '';
     return (
-      <div className={`flex items-center gap-1 px-2 py-1.5 group transition-all ${highlightCls}`}>
+      <div className={`flex items-center gap-1 px-2 py-1.5 group transition-all ${highlightCls} ${
+        myPending.hasDelete(item.id) ? 'pending-delete'
+        : myPending.hasUpdate(item.id) ? 'pending-update' : ''
+      }`}>
         {!isSnack && (
           <span
             title="الفئة تُؤخذ من الصنف نفسه — لتعديلها روح صفحة الأصناف"

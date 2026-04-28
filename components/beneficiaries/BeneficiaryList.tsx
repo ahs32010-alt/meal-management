@@ -8,6 +8,7 @@ import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
 import { enqueueDelete } from '@/lib/pending-actions';
+import { useMyPending } from '@/lib/use-my-pending';
 import type { Beneficiary, Meal, EntityType, ItemCategory } from '@/lib/types';
 import { DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -97,6 +98,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   const canDelete = can(currentUser, permPage, 'delete');
   const deleteNeedsApproval = needsApproval(currentUser, permPage, 'delete');
   const isAdmin = currentUser?.is_admin === true;
+  const myPending = useMyPending(entityType);
 
   const supabase = useMemo(() => createClient(), []);
 
@@ -552,13 +554,25 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               </tr>
             </thead>
             <tbody>
-              {pagination.pageItems.map((b, idx) => (
-                <tr key={b.id} className="hover:bg-slate-50 transition-colors border-t border-slate-100">
+              {pagination.pageItems.map((b, idx) => {
+                const pendingCls = myPending.hasDelete(b.id)
+                  ? 'pending-delete'
+                  : myPending.hasUpdate(b.id) ? 'pending-update' : '';
+                const pendingBadge = myPending.hasDelete(b.id)
+                  ? { cls: 'pending-badge-delete', label: '⏳ حذف بانتظار الموافقة' }
+                  : myPending.hasUpdate(b.id)
+                  ? { cls: 'pending-badge-update', label: '⏳ تعديل بانتظار الموافقة' }
+                  : null;
+                return (
+                <tr key={b.id} className={`hover:bg-slate-50 transition-colors border-t border-slate-100 ${pendingCls}`}>
                   <td className="table-cell text-slate-400 text-xs">
                     {(pagination.page - 1) * pagination.pageSize + idx + 1}
                   </td>
                   <td className="table-cell">
-                    <div className="font-semibold text-slate-800">{b.name}</div>
+                    <div className="font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
+                      {b.name}
+                      {pendingBadge && <span className={`pending-badge ${pendingBadge.cls}`}>{pendingBadge.label}</span>}
+                    </div>
                     {b.english_name && <div className="text-xs text-slate-400">{b.english_name}</div>}
                   </td>
                   <td className="table-cell">
@@ -636,7 +650,8 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
           <Pagination

@@ -7,6 +7,7 @@ import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
 import { enqueueGenericDelete, enqueueGenericUpdate } from '@/lib/pending-actions';
+import { useMyPending } from '@/lib/use-my-pending';
 import type { Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -41,12 +42,13 @@ interface MealSectionProps {
   canAdd: boolean;
   canEdit: boolean;
   canDelete: boolean;
+  pendingMap: { hasUpdate: (id: string) => boolean; hasDelete: (id: string) => boolean };
   deleting: string | null;
   duplicating: string | null;
   deletingAll: boolean;
 }
 
-function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll, isAdmin, canAdd, canEdit, canDelete }: MealSectionProps) {
+function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll, isAdmin, canAdd, canEdit, canDelete, pendingMap }: MealSectionProps) {
   return (
     <div className={`rounded-xl border ${colors.border} overflow-hidden`}>
       <div className={`flex items-center justify-between px-4 py-3 ${colors.bg}`}>
@@ -104,10 +106,16 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
                                           : 'bg-amber-100 text-amber-700';
             const catLabel = cat === 'hot' ? '🔥 حار' : cat === 'cold' ? '❄️ بارد' : '🍿 سناك';
             const isUpdating = categoryUpdating === meal.id;
+            const pendingCls = pendingMap.hasDelete(meal.id) ? 'pending-delete'
+                             : pendingMap.hasUpdate(meal.id) ? 'pending-update' : '';
+            const pendingBadge = pendingMap.hasDelete(meal.id) ? { cls: 'pending-badge-delete', label: '⏳ حذف' }
+                               : pendingMap.hasUpdate(meal.id) ? { cls: 'pending-badge-update', label: '⏳ تعديل' }
+                               : null;
             return (
-            <div key={meal.id} className="flex items-center justify-between px-4 py-2.5 hover:bg-slate-50">
+            <div key={meal.id} className={`flex items-center justify-between px-4 py-2.5 hover:bg-slate-50 ${pendingCls}`}>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-medium text-slate-800 text-sm">{meal.name}</span>
+                {pendingBadge && <span className={`pending-badge ${pendingBadge.cls}`}>{pendingBadge.label}</span>}
                 {meal.is_snack ? (
                   <span
                     className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700"
@@ -294,6 +302,7 @@ export default function MealList() {
   const canDelete = can(currentUser, 'meals', 'delete');
   const editNeedsApproval   = needsApproval(currentUser, 'meals', 'edit');
   const deleteNeedsApproval = needsApproval(currentUser, 'meals', 'delete');
+  const myPending = useMyPending('meal');
   const supabase = useMemo(() => createClient(), []);
 
   // كل ما تغيّر الـtab نخزن الاختيار ونعيد التحميل.
@@ -871,6 +880,7 @@ export default function MealList() {
                 canAdd={canAdd}
                 canEdit={canEdit}
                 canDelete={canDelete}
+                pendingMap={myPending}
               />
               <MealSection
                 title={`سناكات ${MEAL_TYPE_LABELS[mealType]}`}
@@ -893,6 +903,7 @@ export default function MealList() {
                 canAdd={canAdd}
                 canEdit={canEdit}
                 canDelete={canDelete}
+                pendingMap={myPending}
               />
             </div>
           </div>
