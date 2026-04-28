@@ -4,7 +4,9 @@ import type { PageKey, PermissionAction } from '@/lib/permissions';
 const PAGE_KEYS: readonly PageKey[] = [
   'dashboard',
   'beneficiaries',
+  'companions',
   'meals',
+  'menu',
   'orders',
   'reports',
   'stickers',
