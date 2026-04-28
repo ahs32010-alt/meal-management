@@ -5,7 +5,8 @@ import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { can } from '@/lib/permissions';
+import { can, needsApproval } from '@/lib/permissions';
+import { enqueueGenericDelete, enqueueGenericUpdate } from '@/lib/pending-actions';
 import type { Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -291,6 +292,8 @@ export default function MealList() {
   const canAdd    = can(currentUser, 'meals', 'add');
   const canEdit   = can(currentUser, 'meals', 'edit');
   const canDelete = can(currentUser, 'meals', 'delete');
+  const editNeedsApproval   = needsApproval(currentUser, 'meals', 'edit');
+  const deleteNeedsApproval = needsApproval(currentUser, 'meals', 'delete');
   const supabase = useMemo(() => createClient(), []);
 
   // كل ما تغيّر الـtab نخزن الاختيار ونعيد التحميل.
@@ -345,10 +348,19 @@ export default function MealList() {
     const meal = meals.find(m => m.id === id);
     setDialog({
       title: 'حذف صنف',
-      message: `هل أنت متأكد من حذف "${meal?.name ?? 'هذا الصنف'}"؟ لا يمكن التراجع عن هذه العملية.`,
+      message: deleteNeedsApproval
+        ? `سيُرسَل طلب حذف "${meal?.name ?? 'هذا الصنف'}" للأدمن. يحدث الحذف بعد الموافقة. متابعة؟`
+        : `هل أنت متأكد من حذف "${meal?.name ?? 'هذا الصنف'}"؟ لا يمكن التراجع عن هذه العملية.`,
       onConfirm: async () => {
         setDialog(null);
         setDeleting(id);
+        if (deleteNeedsApproval && currentUser) {
+          const r = await enqueueGenericDelete(supabase, currentUser, 'meal', id, meal?.name ?? null);
+          if (!r.ok) alert(`⚠ ${r.error}`);
+          else alert('✓ تم إرسال طلب الحذف للأدمن.');
+          setDeleting(null);
+          return;
+        }
         await supabase.from('meals').delete().eq('id', id);
         if (meal) await supabase.from('custom_transliterations').delete().eq('word', meal.name);
         void logActivity({
@@ -408,6 +420,13 @@ export default function MealList() {
   const handleSetCategory = async (meal: Meal, next: ItemCategory) => {
     if (meal.is_snack) return; // السناك دائماً snack
     if (meal.category === next) return;
+    // لو يحتاج موافقة، أرسل طلب update للصنف بالفئة الجديدة
+    if (editNeedsApproval && currentUser) {
+      const r = await enqueueGenericUpdate(supabase, currentUser, 'meal', meal.id, meal.name, { category: next });
+      if (!r.ok) alert(`⚠ ${r.error}`);
+      else alert(`✓ تم إرسال طلب تغيير فئة "${meal.name}" للأدمن.`);
+      return;
+    }
     const prev = meal.category;
     setCategoryUpdating(meal.id);
     setMeals(curr => curr.map(m => m.id === meal.id ? { ...m, category: next } : m));

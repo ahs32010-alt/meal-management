@@ -3,6 +3,9 @@
 import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { useCurrentUser } from '@/lib/use-current-user';
+import { needsApproval } from '@/lib/permissions';
+import { enqueueGenericCreate, enqueueGenericUpdate } from '@/lib/pending-actions';
 import type { Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, CATEGORY_LABELS } from '@/lib/types';
 
@@ -36,6 +39,9 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const supabase = useMemo(() => createClient(), []);
+  const { user: currentUser } = useCurrentUser();
+  const addNeedsApproval  = needsApproval(currentUser, 'meals', 'add');
+  const editNeedsApproval = needsApproval(currentUser, 'meals', 'edit');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,6 +58,20 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
     };
     // فقط نضيف entity_type عند الإنشاء — التعديل ما يغيّر النوع
     if (!meal) payload.entity_type = entityType;
+
+    // لو يحتاج موافقة → نُرسل طلباً ونوقف
+    if (meal && editNeedsApproval && currentUser) {
+      const r = await enqueueGenericUpdate(supabase, currentUser, 'meal', meal.id, payload.name as string, payload);
+      if (!r.ok) { setError(r.error); setSaving(false); return; }
+      alert(`✓ تم إرسال طلب تعديل الصنف "${payload.name}" للأدمن. ينطبق بعد الموافقة.`);
+      setSaving(false); onSaved(); return;
+    }
+    if (!meal && addNeedsApproval && currentUser) {
+      const r = await enqueueGenericCreate(supabase, currentUser, 'meal', payload.name as string, payload);
+      if (!r.ok) { setError(r.error); setSaving(false); return; }
+      alert(`✓ تم إرسال طلب إضافة الصنف "${payload.name}" للأدمن. يُنشأ بعد الموافقة.`);
+      setSaving(false); onSaved(); return;
+    }
 
     if (meal) {
       let r = await supabase.from('meals').update(payload).eq('id', meal.id);

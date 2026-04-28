@@ -23,6 +23,11 @@ alter table pending_actions drop constraint if exists pending_actions_action_che
 alter table pending_actions add constraint pending_actions_action_check
   check (action in ('create', 'update', 'delete'));
 
+-- entity_type يقبل: مستفيد، مرافق، صنف، بند منيو (idempotent)
+alter table pending_actions drop constraint if exists pending_actions_entity_type_check;
+alter table pending_actions add constraint pending_actions_entity_type_check
+  check (entity_type in ('beneficiary', 'companion', 'meal', 'menu_item'));
+
 alter table pending_actions enable row level security;
 
 do $$

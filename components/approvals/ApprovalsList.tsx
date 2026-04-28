@@ -32,6 +32,14 @@ function formatExact(iso: string): string {
 
 const CAT_LABELS: Record<string, string> = { hot: '🔥 حار', cold: '❄️ بارد', snack: '🍿 سناك' };
 
+// تسميات أنواع الكيانات للعرض في الموافقات
+const PENDING_ENTITY_LABELS: Record<string, string> = {
+  beneficiary: 'مستفيد',
+  companion: 'مرافق',
+  meal: 'صنف',
+  menu_item: 'بند منيو',
+};
+
 // تسميات حقول المستفيد الأساسية للعرض في فروقات التعديل
 const FIELD_LABELS: Record<string, string> = {
   name: 'الاسم',
@@ -361,7 +369,7 @@ export default function ApprovalsList({ limit, statusFilter = 'all', hideFilters
                     <p className="text-sm font-semibold text-slate-800 truncate">{pa.entity_name ?? '—'}</p>
                     <p className="text-[11px] text-slate-500 mt-0.5">
                       <span title={formatExact(pa.created_at)}>
-                        {ENTITY_TYPE_LABELS[pa.entity_type]} · {pa.user_name ?? 'مستخدم'} · {timeAgo(pa.created_at)}
+                        {PENDING_ENTITY_LABELS[pa.entity_type] ?? pa.entity_type} · {pa.user_name ?? 'مستخدم'} · {timeAgo(pa.created_at)}
                       </span>
                     </p>
                     {pa.status === 'rejected' && pa.reject_reason && (

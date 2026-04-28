@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { can } from '@/lib/permissions';
+import { can, needsApproval } from '@/lib/permissions';
+import { enqueueGenericCreate, enqueueGenericUpdate, enqueueGenericDelete } from '@/lib/pending-actions';
 import type { Meal, MealType, ItemCategory, MenuItem, EntityType } from '@/lib/types';
 import { ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import {
@@ -38,6 +39,7 @@ export default function MenuView() {
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.is_admin === true;
   const canEdit = can(currentUser, 'menu', 'edit');
+  const editNeedsApproval = needsApproval(currentUser, 'menu', 'edit');
   // الـtab بين منيو المستفيدين ومنيو المرافقين — يبقى بين الجلسات.
   const [entityType, setEntityType] = useState<EntityType>(() => {
     if (typeof window === 'undefined') return 'beneficiary';
@@ -137,10 +139,17 @@ export default function MenuView() {
     const { mains, snacks } = slotMainsAndSnacks(week, day, mealType);
     const list = isSnack ? snacks : mains;
     const existing = list[rowIndex] ?? null;
+    const slotLabel = `${WEEK_TITLES[week]} - ${MENU_DAYS.find(d => d.value === day)?.label} - ${mealType}${isSnack ? ' (سناك)' : ''}`;
 
     if (mealId === null) {
       // Clear this position
       if (existing) {
+        if (editNeedsApproval && currentUser) {
+          const r = await enqueueGenericDelete(supabase, currentUser, 'menu_item', existing.id, slotLabel);
+          if (!r.ok) alert(`⚠ ${r.error}`);
+          else alert('✓ تم إرسال طلب الحذف للأدمن.');
+          return;
+        }
         await supabase.from('menu_items').delete().eq('id', existing.id);
         void logActivity({
           action: 'delete',
@@ -151,6 +160,24 @@ export default function MenuView() {
         });
       }
       await fetchData();
+      return;
+    }
+
+    // إرسال طلب موافقة بدل التطبيق المباشر
+    if (editNeedsApproval && currentUser) {
+      if (existing) {
+        const r = await enqueueGenericUpdate(supabase, currentUser, 'menu_item', existing.id, slotLabel, { meal_id: mealId });
+        if (!r.ok) { alert(`⚠ ${r.error}`); return; }
+      } else {
+        const category: ItemCategory = isSnack ? 'snack' : 'hot';
+        const allInSlot = slotMap.get(slotKey(week, day, mealType)) ?? [];
+        const baseOffset = isSnack ? 100 : 0;
+        const position = baseOffset + rowIndex;
+        const payload = { week_number: week, day_of_week: day, meal_type: mealType, meal_id: mealId, category, position, entity_type: entityType, multiplier: 1 };
+        const r = await enqueueGenericCreate(supabase, currentUser, 'menu_item', slotLabel, payload);
+        if (!r.ok) { alert(`⚠ ${r.error}`); return; }
+      }
+      alert('✓ تم إرسال الطلب للأدمن.');
       return;
     }
 
@@ -199,6 +226,13 @@ export default function MenuView() {
   const handleSetMultiplier = async (item: MenuItem, value: number) => {
     const v = Math.max(1, Math.min(100, Math.floor(value) || 1));
     if (v === item.multiplier) return;
+    // إرسال طلب موافقة بدل التطبيق المباشر
+    if (editNeedsApproval && currentUser) {
+      const r = await enqueueGenericUpdate(supabase, currentUser, 'menu_item', item.id, `مضاعف "${item.meals?.name ?? ''}"`, { multiplier: v });
+      if (!r.ok) alert(`⚠ ${r.error}`);
+      else alert(`✓ تم إرسال طلب تغيير المضاعف للأدمن.`);
+      return;
+    }
     // Optimistic update so the input stays responsive
     setAllItems(prev => prev.map(i => i.id === item.id ? { ...i, multiplier: v } : i));
     const { error } = await supabase.from('menu_items').update({ multiplier: v }).eq('id', item.id);

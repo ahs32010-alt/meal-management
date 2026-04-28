@@ -8,12 +8,16 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AppUser } from './permissions';
 import type { EntityType } from './types';
 
+// نوع الكيان في طلبات الموافقة — أوسع من EntityType الأصلي عشان نغطي
+// المستفيدين والمرافقين والأصناف وبنود قائمة الطعام
+export type PendingEntityType = EntityType | 'meal' | 'menu_item';
+
 export interface PendingAction {
   id: string;
   user_id: string | null;
   user_name: string | null;
   action: 'create' | 'update' | 'delete';
-  entity_type: EntityType;
+  entity_type: PendingEntityType;
   entity_id: string | null;
   entity_name: string | null;
   payload: Record<string, unknown> | null;
@@ -51,7 +55,7 @@ async function findDuplicatePending(
   user: AppUser,
   match: {
     action: 'create' | 'update' | 'delete';
-    entityType: EntityType;
+    entityType: PendingEntityType;
     entityId?: string;
     entityName?: string;
   },
@@ -134,7 +138,70 @@ export async function enqueueUpdate(
   return error ? { ok: false, error: error.message } : { ok: true };
 }
 
-// طلب حذف
+// ── helpers عامّة لأي نوع كيان (أصناف، بنود منيو، إلخ) ────────────────────
+export async function enqueueGenericCreate(
+  supabase: SupabaseClient,
+  user: AppUser,
+  entityType: PendingEntityType,
+  entityName: string,
+  payload: Record<string, unknown>,
+): Promise<EnqueueResult> {
+  const dup = await findDuplicatePending(supabase, user, { action: 'create', entityType, entityName });
+  if (dup) return { ok: false, duplicate: true, error: `عندك طلب إضافة لـ "${entityName}" بانتظار الموافقة بالفعل.` };
+  const { error } = await supabase.from('pending_actions').insert({
+    user_id: user.id,
+    user_name: user.full_name ?? user.email ?? '',
+    action: 'create',
+    entity_type: entityType,
+    entity_name: entityName,
+    payload,
+  });
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+export async function enqueueGenericUpdate(
+  supabase: SupabaseClient,
+  user: AppUser,
+  entityType: PendingEntityType,
+  entityId: string,
+  entityName: string,
+  payload: Record<string, unknown>,
+): Promise<EnqueueResult> {
+  const dup = await findDuplicatePending(supabase, user, { action: 'update', entityType, entityId });
+  if (dup) return { ok: false, duplicate: true, error: `عندك طلب تعديل لـ "${entityName}" بانتظار الموافقة بالفعل.` };
+  const { error } = await supabase.from('pending_actions').insert({
+    user_id: user.id,
+    user_name: user.full_name ?? user.email ?? '',
+    action: 'update',
+    entity_type: entityType,
+    entity_id: entityId,
+    entity_name: entityName,
+    payload,
+  });
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+export async function enqueueGenericDelete(
+  supabase: SupabaseClient,
+  user: AppUser,
+  entityType: PendingEntityType,
+  entityId: string,
+  entityName: string | null,
+): Promise<EnqueueResult> {
+  const dup = await findDuplicatePending(supabase, user, { action: 'delete', entityType, entityId });
+  if (dup) return { ok: false, duplicate: true, error: `عندك طلب حذف لهذا العنصر بانتظار الموافقة بالفعل.` };
+  const { error } = await supabase.from('pending_actions').insert({
+    user_id: user.id,
+    user_name: user.full_name ?? user.email ?? '',
+    action: 'delete',
+    entity_type: entityType,
+    entity_id: entityId,
+    entity_name: entityName,
+  });
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+// طلب حذف (مستفيد/مرافق فقط — للتوافق الرجعي)
 export async function enqueueDelete(
   supabase: SupabaseClient,
   user: AppUser,
@@ -165,6 +232,16 @@ export async function enqueueDelete(
   return error ? { ok: false, error: error.message } : { ok: true };
 }
 
+// خريطة من entity_type → جدول DB
+function tableFor(entityType: PendingEntityType): string {
+  switch (entityType) {
+    case 'beneficiary':
+    case 'companion': return 'beneficiaries';
+    case 'meal':      return 'meals';
+    case 'menu_item': return 'menu_items';
+  }
+}
+
 // قبول الطلب: ننفّذ العملية الفعلية ثم نضع الحالة approved
 export async function approveAction(
   supabase: SupabaseClient,
@@ -172,6 +249,32 @@ export async function approveAction(
   pa: PendingAction,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
+    // مسار الأصناف وبنود المنيو — payload عادي على الجدول مباشرة
+    if (pa.entity_type === 'meal' || pa.entity_type === 'menu_item') {
+      const table = tableFor(pa.entity_type);
+      if (pa.action === 'create') {
+        if (!pa.payload) return { ok: false, error: 'payload مفقود' };
+        const { error } = await supabase.from(table).insert(pa.payload);
+        if (error) return { ok: false, error: error.message };
+      } else if (pa.action === 'update') {
+        if (!pa.entity_id || !pa.payload) return { ok: false, error: 'payload أو entity_id مفقود' };
+        const { error } = await supabase.from(table).update(pa.payload).eq('id', pa.entity_id);
+        if (error) return { ok: false, error: error.message };
+      } else if (pa.action === 'delete') {
+        if (!pa.entity_id) return { ok: false, error: 'entity_id مفقود' };
+        const { error } = await supabase.from(table).delete().eq('id', pa.entity_id);
+        if (error) return { ok: false, error: error.message };
+      }
+      // علم الطلب كـapproved
+      const { error: upErr } = await supabase
+        .from('pending_actions')
+        .update({ status: 'approved', reviewed_by: admin.id, reviewed_at: new Date().toISOString() })
+        .eq('id', pa.id);
+      if (upErr) return { ok: false, error: upErr.message };
+      return { ok: true };
+    }
+
+    // مسار المستفيدين/المرافقين (الموجود سابقاً)
     if (pa.action === 'delete') {
       if (!pa.entity_id) return { ok: false, error: 'entity_id مفقود' };
       const { error } = await supabase.from('beneficiaries').delete().eq('id', pa.entity_id);

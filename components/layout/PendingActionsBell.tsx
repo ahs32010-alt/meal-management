@@ -152,7 +152,7 @@ export default function PendingActionsBell() {
                           {pa.entity_name ?? '—'}
                         </p>
                         <p className="text-[11px] text-slate-500 mt-0.5">
-                          {ENTITY_TYPE_LABELS[pa.entity_type]} · {pa.user_name ?? 'مستخدم'} · {timeAgo(pa.created_at)}
+                          {(ENTITY_TYPE_LABELS as Record<string, string>)[pa.entity_type] ?? pa.entity_type} · {pa.user_name ?? 'مستخدم'} · {timeAgo(pa.created_at)}
                         </p>
                       </div>
                     </div>
