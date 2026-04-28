@@ -94,6 +94,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   // - لو يقدر يحذف → الحذف فوري
   // - لو ما يقدر → يدخل نظام الموافقات
   const canDelete = can(currentUser, entityType === 'companion' ? 'companions' : 'beneficiaries', 'delete');
+  const isAdmin = currentUser?.is_admin === true;
 
   const supabase = useMemo(() => createClient(), []);
 
@@ -433,25 +434,30 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-2xl font-bold text-slate-800">{entityPlural}</h1>
         <div className="flex items-center gap-2 flex-wrap">
-          <Link
-            href={entityType === 'companion' ? '/companions/bulk' : '/beneficiaries/bulk'}
-            className="btn-secondary text-sm flex items-center gap-1.5"
-            title="تطبيق محظور أو صنف ثابت على مجموعة كبيرة دفعة واحدة"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-            </svg>
-            تخصيص جماعي
-          </Link>
-          <button onClick={() => setImportOpen(true)} className="btn-secondary text-sm">استيراد Excel</button>
-          <button onClick={handleExport} disabled={beneficiaries.length === 0} className="btn-secondary text-sm">تصدير Excel</button>
-          <button
-            onClick={handleDeleteAll}
-            disabled={deletingAll || beneficiaries.length === 0}
-            className="btn-secondary text-sm text-red-600 hover:bg-red-50 border-red-200"
-          >
-            {deletingAll ? 'جاري الحذف...' : 'حذف الكل'}
-          </button>
+          {/* العمليات الجماعية والاستيراد/التصدير — للأدمن فقط */}
+          {isAdmin && (
+            <>
+              <Link
+                href={entityType === 'companion' ? '/companions/bulk' : '/beneficiaries/bulk'}
+                className="btn-secondary text-sm flex items-center gap-1.5"
+                title="تطبيق محظور أو صنف ثابت على مجموعة كبيرة دفعة واحدة"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+                تخصيص جماعي
+              </Link>
+              <button onClick={() => setImportOpen(true)} className="btn-secondary text-sm">استيراد Excel</button>
+              <button onClick={handleExport} disabled={beneficiaries.length === 0} className="btn-secondary text-sm">تصدير Excel</button>
+              <button
+                onClick={handleDeleteAll}
+                disabled={deletingAll || beneficiaries.length === 0}
+                className="btn-secondary text-sm text-red-600 hover:bg-red-50 border-red-200"
+              >
+                {deletingAll ? 'جاري الحذف...' : 'حذف الكل'}
+              </button>
+            </>
+          )}
           <button onClick={handleAdd} className="btn-primary text-sm">+ إضافة {entitySingular}</button>
         </div>
       </div>

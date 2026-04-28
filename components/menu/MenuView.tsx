@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { useCurrentUser } from '@/lib/use-current-user';
 import type { Meal, MealType, ItemCategory, MenuItem, EntityType } from '@/lib/types';
 import { ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import {
@@ -33,6 +34,8 @@ const CATEGORY_THEME: Record<ItemCategory, { icon: string; bg: string; text: str
 
 export default function MenuView() {
   const supabase = useMemo(() => createClient(), []);
+  const { user: currentUser } = useCurrentUser();
+  const isAdmin = currentUser?.is_admin === true;
   // الـtab بين منيو المستفيدين ومنيو المرافقين — يبقى بين الجلسات.
   const [entityType, setEntityType] = useState<EntityType>(() => {
     if (typeof window === 'undefined') return 'beneficiary';
@@ -379,26 +382,31 @@ export default function MenuView() {
           </span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={handleExport} disabled={loading || allItems.length === 0} className="btn-secondary text-sm">
-            تصدير Excel
-          </button>
-          <button
-            onClick={() => importRef.current?.click()}
-            disabled={importStatus === 'importing'}
-            className="btn-secondary text-sm"
-          >
-            {importStatus === 'importing' ? 'جاري الاستيراد...' : 'استيراد Excel'}
-          </button>
-          <input
-            ref={importRef}
-            type="file"
-            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            className="hidden"
-            onChange={handleImport}
-          />
-          <button onClick={handleClearWeek} className="btn-secondary text-sm text-red-600 hover:bg-red-50 border-red-200">
-            مسح أصناف هذا الأسبوع
-          </button>
+          {/* الاستيراد والتصدير ومسح الأسبوع — للأدمن فقط */}
+          {isAdmin && (
+            <>
+              <button onClick={handleExport} disabled={loading || allItems.length === 0} className="btn-secondary text-sm">
+                تصدير Excel
+              </button>
+              <button
+                onClick={() => importRef.current?.click()}
+                disabled={importStatus === 'importing'}
+                className="btn-secondary text-sm"
+              >
+                {importStatus === 'importing' ? 'جاري الاستيراد...' : 'استيراد Excel'}
+              </button>
+              <input
+                ref={importRef}
+                type="file"
+                accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                className="hidden"
+                onChange={handleImport}
+              />
+              <button onClick={handleClearWeek} className="btn-secondary text-sm text-red-600 hover:bg-red-50 border-red-200">
+                مسح أصناف هذا الأسبوع
+              </button>
+            </>
+          )}
         </div>
       </div>
 

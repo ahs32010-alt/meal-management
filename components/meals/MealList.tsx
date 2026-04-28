@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { useCurrentUser } from '@/lib/use-current-user';
 import type { Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -34,12 +35,13 @@ interface MealSectionProps {
   onDeleteAll: (type: MealType, isSnack: boolean) => void;
   onSetCategory: (meal: Meal, category: ItemCategory) => void;
   categoryUpdating: string | null;
+  isAdmin: boolean;
   deleting: string | null;
   duplicating: string | null;
   deletingAll: boolean;
 }
 
-function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll }: MealSectionProps) {
+function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll, isAdmin }: MealSectionProps) {
   return (
     <div className={`rounded-xl border ${colors.border} overflow-hidden`}>
       <div className={`flex items-center justify-between px-4 py-3 ${colors.bg}`}>
@@ -48,7 +50,8 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
           <span className={`badge text-xs ${colors.bg} ${colors.text} border ${colors.border}`}>{meals.length} صنف</span>
         </div>
         <div className="flex items-center gap-1">
-          {meals.length > 0 && (
+          {/* الحذف الجماعي والإضافة الجماعية — للأدمن فقط */}
+          {isAdmin && meals.length > 0 && (
             <button
               onClick={() => onDeleteAll(mealType, isSnack)}
               disabled={deletingAll}
@@ -61,15 +64,17 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
               حذف الكل
             </button>
           )}
-          <button
-            onClick={() => onBulkAdd(mealType, isSnack)}
-            className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border ${colors.border} ${colors.text} hover:opacity-80 transition-opacity`}
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h8" />
-            </svg>
-            إضافة جماعية
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => onBulkAdd(mealType, isSnack)}
+              className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border ${colors.border} ${colors.text} hover:opacity-80 transition-opacity`}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h8" />
+              </svg>
+              إضافة جماعية
+            </button>
+          )}
           <button
             onClick={() => onAdd(mealType, isSnack)}
             className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border ${colors.border} ${colors.text} hover:opacity-80 transition-opacity`}
@@ -262,6 +267,8 @@ export default function MealList() {
   const [duplicateResult, setDuplicateResult] = useState<{ name: string; excl: number; fixed: number; menu: number } | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; confirmLabel?: string; onConfirm: () => void } | null>(null);
   const [search, setSearch] = useState('');
+  const { user: currentUser } = useCurrentUser();
+  const isAdmin = currentUser?.is_admin === true;
   const supabase = useMemo(() => createClient(), []);
 
   // كل ما تغيّر الـtab نخزن الاختيار ونعيد التحميل.
@@ -730,20 +737,23 @@ export default function MealList() {
             {meals.filter(m => !m.is_snack).length} وجبة، {meals.filter(m => m.is_snack).length} سناك
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setImportOpen(true)} className="btn-secondary text-sm">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-            </svg>
-            استيراد
-          </button>
-          <button onClick={handleExport} disabled={meals.length === 0} className="btn-secondary text-sm">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            تصدير
-          </button>
-        </div>
+        {/* الاستيراد والتصدير — للأدمن فقط */}
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            <button onClick={() => setImportOpen(true)} className="btn-secondary text-sm">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              استيراد
+            </button>
+            <button onClick={handleExport} disabled={meals.length === 0} className="btn-secondary text-sm">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              تصدير
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Tabs: مستفيدين / مرافقين — كل tab يعرض أصناف فئته فقط */}
@@ -816,6 +826,7 @@ export default function MealList() {
                 deleting={deleting}
                 duplicating={duplicating}
                 deletingAll={deletingAll}
+                isAdmin={isAdmin}
               />
               <MealSection
                 title={`سناكات ${MEAL_TYPE_LABELS[mealType]}`}
@@ -834,6 +845,7 @@ export default function MealList() {
                 deleting={deleting}
                 duplicating={duplicating}
                 deletingAll={deletingAll}
+                isAdmin={isAdmin}
               />
             </div>
           </div>

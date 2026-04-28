@@ -8,8 +8,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { ENTITY_TYPE_LABELS } from '@/lib/types';
-import { type PendingAction, approveAction, rejectAction } from '@/lib/pending-actions';
+import { ENTITY_TYPE_LABELS, MEAL_TYPE_LABELS, DAY_LABELS } from '@/lib/types';
+import type { Meal } from '@/lib/types';
+import { type PendingAction, type CreatePayload, approveAction, rejectAction } from '@/lib/pending-actions';
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -21,6 +22,15 @@ function timeAgo(iso: string): string {
   const d = Math.floor(hr / 24);
   return `قبل ${d} يوم`;
 }
+
+// تنسيق التوقيت بالكامل (تاريخ + ساعة + دقيقة + ثانية + ميلي)
+function formatExact(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number, w = 2) => String(n).padStart(w, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
+const CAT_LABELS: Record<string, string> = { hot: '🔥 حار', cold: '❄️ بارد', snack: '🍿 سناك' };
 
 const STATUS_THEME: Record<PendingAction['status'], { label: string; cls: string }> = {
   pending:  { label: 'بانتظار الموافقة', cls: 'bg-amber-100 text-amber-700 border-amber-200' },
@@ -50,6 +60,10 @@ export default function ApprovalsList({ limit, statusFilter = 'all', hideFilters
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | PendingAction['status']>(statusFilter);
+  // الأصناف لتحويل meal_id → اسم في تفاصيل الطلب
+  const [mealsById, setMealsById] = useState<Record<string, Meal>>({});
+  // الطلب المفتوح (تفاصيله ظاهرة)
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => { setFilter(statusFilter); }, [statusFilter]);
 
@@ -75,6 +89,19 @@ export default function ApprovalsList({ limit, statusFilter = 'all', hideFilters
   }, [supabase, user, isAdmin, filter, limit]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // جلب الأصناف مرة واحدة لاستخدامها في عرض تفاصيل الطلب (meal_id → name)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.from('meals').select('id, name, type, is_snack');
+      if (cancelled) return;
+      const map: Record<string, Meal> = {};
+      for (const m of (data ?? []) as Meal[]) map[m.id] = m;
+      setMealsById(map);
+    })();
+    return () => { cancelled = true; };
+  }, [supabase]);
 
   // realtime
   const fetchRef = useRef(fetchData);
@@ -144,6 +171,9 @@ export default function ApprovalsList({ limit, statusFilter = 'all', hideFilters
         <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl bg-white overflow-hidden">
           {items.map(pa => {
             const status = STATUS_THEME[pa.status];
+            const isExpanded = expandedId === pa.id;
+            const cp = pa.payload as unknown as CreatePayload | null;
+            const hasDetails = pa.action !== 'delete' && !!cp;
             return (
               <div key={pa.id} className="px-4 py-3 hover:bg-slate-50">
                 <div className="flex items-start gap-2 mb-2 flex-wrap">
@@ -160,18 +190,107 @@ export default function ApprovalsList({ limit, statusFilter = 'all', hideFilters
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-slate-800 truncate">{pa.entity_name ?? '—'}</p>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      {ENTITY_TYPE_LABELS[pa.entity_type]} · {pa.user_name ?? 'مستخدم'} · {timeAgo(pa.created_at)}
+                      <span title={formatExact(pa.created_at)}>
+                        {ENTITY_TYPE_LABELS[pa.entity_type]} · {pa.user_name ?? 'مستخدم'} · {timeAgo(pa.created_at)}
+                      </span>
                     </p>
                     {pa.status === 'rejected' && pa.reject_reason && (
                       <p className="text-[11px] text-red-600 mt-1">سبب الرفض: {pa.reject_reason}</p>
                     )}
                     {pa.status !== 'pending' && pa.reviewed_at && (
-                      <p className="text-[11px] text-slate-400 mt-0.5">
+                      <p className="text-[11px] text-slate-400 mt-0.5" title={formatExact(pa.reviewed_at)}>
                         روجِع {timeAgo(pa.reviewed_at)}
                       </p>
                     )}
                   </div>
+                  {hasDetails && (
+                    <button
+                      type="button"
+                      onClick={() => setExpandedId(isExpanded ? null : pa.id)}
+                      className="text-xs font-semibold text-slate-500 hover:text-slate-700 px-2 py-1 rounded-md hover:bg-slate-100 shrink-0"
+                    >
+                      {isExpanded ? 'إخفاء التفاصيل ▲' : 'عرض التفاصيل ▼'}
+                    </button>
+                  )}
                 </div>
+
+                {/* لوحة التفاصيل — تظهر عند الضغط */}
+                {isExpanded && hasDetails && cp && (
+                  <div className="mt-3 mb-2 p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-3">
+                    {/* البيانات الأساسية */}
+                    <div>
+                      <p className="font-bold text-slate-700 mb-1.5">البيانات الأساسية</p>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                        {Object.entries(cp.beneficiary).map(([k, v]) => {
+                          const skip = ['entity_type'];
+                          if (skip.includes(k) || v == null || v === '') return null;
+                          const labels: Record<string, string> = {
+                            name: 'الاسم', english_name: 'الاسم بالإنجليزي', code: 'الكود',
+                            category: 'الفئة', villa: 'الفيلا', diet_type: 'النظام الغذائي',
+                            notes: 'ملاحظات',
+                          };
+                          return (
+                            <div key={k} className="flex gap-1">
+                              <span className="text-slate-500 shrink-0">{labels[k] ?? k}:</span>
+                              <span className="font-medium text-slate-800 truncate">{String(v)}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* المحظورات */}
+                    {cp.exclusions && cp.exclusions.length > 0 && (
+                      <div>
+                        <p className="font-bold text-slate-700 mb-1.5">
+                          المحظورات ({cp.exclusions.length})
+                        </p>
+                        <div className="flex flex-wrap gap-1">
+                          {cp.exclusions.map((ex, i) => {
+                            const meal = mealsById[ex.meal_id];
+                            const alt = ex.alternative_meal_id ? mealsById[ex.alternative_meal_id] : null;
+                            return (
+                              <span key={i} className="inline-flex items-center gap-1 bg-red-50 border border-red-200 text-red-700 px-2 py-0.5 rounded">
+                                {meal?.name ?? ex.meal_id.slice(0, 8)}
+                                {alt && <span className="text-red-400">→ {alt.name}</span>}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* الأصناف الثابتة */}
+                    {cp.fixed_meals && cp.fixed_meals.length > 0 && (
+                      <div>
+                        <p className="font-bold text-slate-700 mb-1.5">
+                          الأصناف الثابتة ({cp.fixed_meals.length} سطر)
+                        </p>
+                        <div className="space-y-1">
+                          {cp.fixed_meals.map((fm, i) => {
+                            const meal = mealsById[fm.meal_id];
+                            return (
+                              <div key={i} className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded">
+                                <span className="font-bold text-emerald-700 truncate flex-1">{meal?.name ?? fm.meal_id.slice(0, 8)}</span>
+                                <span className="text-emerald-600 text-[10px]">{MEAL_TYPE_LABELS[fm.meal_type as 'breakfast' | 'lunch' | 'dinner']}</span>
+                                <span className="text-emerald-600 text-[10px]">{DAY_LABELS[fm.day_of_week]}</span>
+                                <span className="text-emerald-600 text-[10px]">×{fm.quantity}</span>
+                                {fm.category && <span className="text-emerald-600 text-[10px]">{CAT_LABELS[fm.category] ?? fm.category}</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* التوقيت الدقيق */}
+                    <div className="text-[10px] text-slate-400 font-mono pt-2 border-t border-slate-200">
+                      أُرسل: {formatExact(pa.created_at)}
+                      {pa.reviewed_at && <> · روجِع: {formatExact(pa.reviewed_at)}</>}
+                    </div>
+                  </div>
+                )}
+
                 {isAdmin && pa.status === 'pending' && (
                   <div className="flex gap-2 mt-2">
                     <button
