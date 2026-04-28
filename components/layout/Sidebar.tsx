@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase-client';
 import { useCurrentUser, clearCurrentUserCache } from '@/lib/use-current-user';
 import { can, type PageKey } from '@/lib/permissions';
 import ThemeToggle from '@/components/layout/ThemeToggle';
+import { usePendingCount } from '@/lib/use-pending-count';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 
 const AvatarUploadModal = dynamic(() => import('./AvatarUploadModal'), { ssr: false });
@@ -20,6 +21,17 @@ const navItems: { href: string; label: string; page: PageKey; icon: React.ReactN
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+      </svg>
+    ),
+  },
+  {
+    href: '/approvals',
+    label: 'الموافقات',
+    // متاح للجميع — اليوزر يشوف طلباته، الأدمن يشوف الكل
+    page: '__public__' as PageKey,
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
       </svg>
     ),
   },
@@ -94,17 +106,6 @@ const navItems: { href: string; label: string; page: PageKey; icon: React.ReactN
     ),
   },
   {
-    href: '/approvals',
-    label: 'الموافقات',
-    // متاح للجميع — اليوزر يشوف طلباته، الأدمن يشوف الكل
-    page: '__public__' as PageKey,
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-      </svg>
-    ),
-  },
-  {
     href: '/settings',
     label: 'الإعدادات',
     page: 'settings',
@@ -129,6 +130,7 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
   const { user: currentUser, loading: userLoading, refresh: refreshUser } = useCurrentUser();
+  const pendingCount = usePendingCount();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   // While loading, show nothing (avoid flashing restricted links). Admins see everything.
@@ -212,7 +214,17 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
                 {item.icon}
               </span>
               <span className="font-medium text-sm">{item.label}</span>
-              {isActive && (
+              {item.href === '/approvals' && pendingCount > 0 && (
+                <span
+                  className={`mr-auto min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center ${
+                    isActive ? 'bg-white text-emerald-700' : 'bg-red-500 text-white'
+                  }`}
+                  title={`${pendingCount} ${currentUser?.is_admin ? 'طلب بانتظار المراجعة' : 'طلب pending'}`}
+                >
+                  {pendingCount > 99 ? '99+' : pendingCount}
+                </span>
+              )}
+              {isActive && item.href !== '/approvals' && (
                 <div className="mr-auto w-1.5 h-1.5 bg-emerald-300 rounded-full" />
               )}
             </Link>

@@ -403,8 +403,12 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
             }))
           ),
         };
-        const { error: enqErr } = await enqueueCreate(supabase, currentUser, entityType, payload.name as string, cp);
-        if (enqErr) { setError(friendlyError(enqErr.message)); setSaving(false); return; }
+        const r = await enqueueCreate(supabase, currentUser, entityType, payload.name as string, cp);
+        if (!r.ok) {
+          setError(r.duplicate ? r.error : friendlyError(r.error));
+          setSaving(false);
+          return;
+        }
         alert(`✓ تم إرسال طلب إضافة "${payload.name}" إلى الأدمن. ستظهر في القائمة بعد الموافقة.`);
         setSaving(false);
         onSaved();

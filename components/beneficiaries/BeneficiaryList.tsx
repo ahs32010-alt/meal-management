@@ -200,9 +200,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         setDialog(null);
         setDeleting(id);
         if (!isAdmin && currentUser) {
-          const { error } = await enqueueDelete(supabase, currentUser, entityType, id, ben?.name ?? null);
-          if (error) {
-            setNotice(`⚠ تعذّر إرسال طلب الحذف: ${error.message}`);
+          const r = await enqueueDelete(supabase, currentUser, entityType, id, ben?.name ?? null);
+          if (!r.ok) {
+            setNotice(r.duplicate ? `⚠ ${r.error}` : `⚠ تعذّر إرسال طلب الحذف: ${r.error}`);
           } else {
             setNotice('✓ تم إرسال طلب الحذف للأدمن بانتظار الموافقة.');
           }

@@ -39,6 +39,37 @@ export interface CreatePayload {
   }>;
 }
 
+// نوع موحّد لنتيجة enqueue: ok=true عند النجاح، ok=false مع سبب الفشل،
+// و duplicate=true لما يكون عند المستخدم طلب pending سابق لنفس العملية.
+export type EnqueueResult =
+  | { ok: true }
+  | { ok: false; error: string; duplicate?: boolean };
+
+// نفحص لو في طلب pending سابق بنفس المستخدم لنفس الكيان — يمنع تكرار العملية.
+async function findDuplicatePending(
+  supabase: SupabaseClient,
+  user: AppUser,
+  match: {
+    action: 'create' | 'delete';
+    entityType: EntityType;
+    entityId?: string;
+    entityName?: string;
+  },
+): Promise<boolean> {
+  let q = supabase
+    .from('pending_actions')
+    .select('id')
+    .eq('status', 'pending')
+    .eq('user_id', user.id)
+    .eq('action', match.action)
+    .eq('entity_type', match.entityType);
+  if (match.entityId) q = q.eq('entity_id', match.entityId);
+  if (match.entityName) q = q.eq('entity_name', match.entityName);
+  const { data, error } = await q.limit(1);
+  if (error) return false; // عند الخطأ نسمح بالمحاولة بدل ما نحجز المستخدم
+  return (data?.length ?? 0) > 0;
+}
+
 // طلب إضافة
 export async function enqueueCreate(
   supabase: SupabaseClient,
@@ -46,8 +77,20 @@ export async function enqueueCreate(
   entityType: EntityType,
   entityName: string,
   payload: CreatePayload,
-) {
-  return supabase.from('pending_actions').insert({
+): Promise<EnqueueResult> {
+  const dup = await findDuplicatePending(supabase, user, {
+    action: 'create',
+    entityType,
+    entityName,
+  });
+  if (dup) {
+    return {
+      ok: false,
+      duplicate: true,
+      error: `عندك طلب إضافة لـ "${entityName}" بانتظار الموافقة بالفعل.`,
+    };
+  }
+  const { error } = await supabase.from('pending_actions').insert({
     user_id: user.id,
     user_name: user.full_name ?? user.email ?? '',
     action: 'create',
@@ -55,6 +98,7 @@ export async function enqueueCreate(
     entity_name: entityName,
     payload: payload as unknown as Record<string, unknown>,
   });
+  return error ? { ok: false, error: error.message } : { ok: true };
 }
 
 // طلب حذف
@@ -64,8 +108,20 @@ export async function enqueueDelete(
   entityType: EntityType,
   entityId: string,
   entityName: string | null,
-) {
-  return supabase.from('pending_actions').insert({
+): Promise<EnqueueResult> {
+  const dup = await findDuplicatePending(supabase, user, {
+    action: 'delete',
+    entityType,
+    entityId,
+  });
+  if (dup) {
+    return {
+      ok: false,
+      duplicate: true,
+      error: `عندك طلب حذف لهذا ${entityType === 'companion' ? 'المرافق' : 'المستفيد'} بانتظار الموافقة بالفعل.`,
+    };
+  }
+  const { error } = await supabase.from('pending_actions').insert({
     user_id: user.id,
     user_name: user.full_name ?? user.email ?? '',
     action: 'delete',
@@ -73,6 +129,7 @@ export async function enqueueDelete(
     entity_id: entityId,
     entity_name: entityName,
   });
+  return error ? { ok: false, error: error.message } : { ok: true };
 }
 
 // قبول الطلب: ننفّذ العملية الفعلية ثم نضع الحالة approved
