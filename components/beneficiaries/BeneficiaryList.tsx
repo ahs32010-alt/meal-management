@@ -144,20 +144,23 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         }
       }
 
-      // الأصناف المعروضة في معالج التخصيصات لازم تكون من نفس فئة المستفيد
-      // (لو الـmigration ما اتشغّل، ما نفلتر — نرجع للسلوك القديم).
-      const fetchMeals = (withEntity: boolean) => {
-        const q = supabase
-          .from('meals')
-          .select(`id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}, created_at`)
-          .order('type')
-          .order('is_snack')
-          .order('name');
+      // الأصناف المعروضة في معالج التخصيصات لازم تكون من نفس فئة المستفيد،
+      // ونجلب category كذلك عشان BeneficiaryModal يقرأ الفئة من الصنف نفسه
+      // (المصدر الموحد). أي عمود ناقص (entity_type / category) نسقطه ونعيد المحاولة.
+      const fetchMeals = (withEntity: boolean, withCategory: boolean) => {
+        const cols = `id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}${withCategory ? ', category' : ''}, created_at`;
+        const q = supabase.from('meals').select(cols).order('type').order('is_snack').order('name');
         return withEntity ? q.eq('entity_type', entityType) : q;
       };
-      let mealsResult = await fetchMeals(true);
+      let mealsResult = await fetchMeals(true, true);
+      if (mealsResult.error && /category|column/i.test(mealsResult.error.message)) {
+        mealsResult = await fetchMeals(true, false);
+      }
       if (mealsResult.error && /entity_type|column/i.test(mealsResult.error.message)) {
-        mealsResult = await fetchMeals(false);
+        mealsResult = await fetchMeals(false, true);
+        if (mealsResult.error && /category|column/i.test(mealsResult.error.message)) {
+          mealsResult = await fetchMeals(false, false);
+        }
       }
 
       // ✅ FIX 1: لازم نحفظ المستفيدين فعلياً
