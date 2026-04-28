@@ -83,6 +83,9 @@ export interface Meal {
   english_name?: string;
   type: MealType;
   is_snack: boolean;
+  // التصنيف يُحدَّد على الصنف ويُستخدم في كل مكان (الستيكرات/التقارير/الأوامر)
+  // اختياري للحفاظ على التوافق قبل تشغيل meals-category-migration.sql
+  category?: ItemCategory;
   // اختياري للحفاظ على التوافق قبل تشغيل companions-meals-migration.sql
   entity_type?: EntityType;
   created_at: string;

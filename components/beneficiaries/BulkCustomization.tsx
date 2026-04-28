@@ -10,7 +10,6 @@ import {
   DAY_LABELS,
   DAYS_ORDER,
   CATEGORY_LABELS,
-  CATEGORY_ORDER,
   ENTITY_TYPE_LABELS,
   ENTITY_TYPE_LABELS_PLURAL,
   ENTITY_BADGE_STYLES,
@@ -208,16 +207,20 @@ export default function BulkCustomization({ entityType }: Props) {
       if (bensRes.error) throw bensRes.error;
 
       // Meals — scoped to entity for both pickers (excluded item, alternative, fixed item)
-      const fetchMeals = async (withEntity: boolean) => {
-        const q = supabase
-          .from('meals')
-          .select('id, name, english_name, type, is_snack, created_at')
-          .order('type').order('is_snack').order('name');
+      const fetchMeals = async (withEntity: boolean, withCategory: boolean) => {
+        const cols = `id, name, english_name, type, is_snack${withCategory ? ', category' : ''}, created_at`;
+        const q = supabase.from('meals').select(cols).order('type').order('is_snack').order('name');
         return withEntity ? q.eq('entity_type', entityType) : q;
       };
-      let mealsRes = await fetchMeals(true);
+      let mealsRes = await fetchMeals(true, true);
+      if (mealsRes.error && /category|column/i.test(mealsRes.error.message)) {
+        mealsRes = await fetchMeals(true, false);
+      }
       if (mealsRes.error && /entity_type|column/i.test(mealsRes.error.message)) {
-        mealsRes = await fetchMeals(false);
+        mealsRes = await fetchMeals(false, true);
+        if (mealsRes.error && /category|column/i.test(mealsRes.error.message)) {
+          mealsRes = await fetchMeals(false, false);
+        }
       }
       if (mealsRes.error) throw mealsRes.error;
 
@@ -339,16 +342,15 @@ export default function BulkCustomization({ entityType }: Props) {
   const unexclMeal = useMemo(() => meals.find(m => m.id === unexclMealId), [meals, unexclMealId]);
   const fixMeal    = useMemo(() => meals.find(m => m.id === fixMealId),    [meals, fixMealId]);
 
-  // عند اختيار صنف ثابت، نقترح التصنيف تلقائياً:
-  //   - الصنف من فئة سناك → "سناك"
-  //   - عدا ذلك → "حار" (المستخدم ممكن يغيّره يدوياً لـ"بارد")
+  // عند اختيار صنف ثابت، نأخذ التصنيف من meals.category مباشرة (المصدر الموحد)
+  // ولو ما كان محدّد على الصنف نرجع للسلوك القديم (سناك → snack، وإلا hot).
   // المستخدم يقدر يعدّل الاختيار يدوياً بعد الاقتراح.
   const lastAutoMealRef = useRef<string | null>(null);
   useEffect(() => {
     if (!fixMeal) { lastAutoMealRef.current = null; return; }
     if (lastAutoMealRef.current === fixMeal.id) return;
     lastAutoMealRef.current = fixMeal.id;
-    setFixCategory(fixMeal.is_snack ? 'snack' : 'hot');
+    setFixCategory(fixMeal.category ?? (fixMeal.is_snack ? 'snack' : 'hot'));
   }, [fixMeal]);
 
   const confirmMessage = useMemo(() => {
@@ -862,40 +864,20 @@ export default function BulkCustomization({ entityType }: Props) {
                 />
               </div>
 
-              {/* Category — صف مستقل وبارز عشان المستخدم يضبطه قبل ما يطبّق */}
-              <div>
-                <label className="label flex items-center gap-2">
-                  التصنيف <span className="text-red-500">*</span>
-                  <span className="text-[11px] font-normal text-slate-400">— يحدّد الكيس في الستيكرات</span>
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {CATEGORY_ORDER.map(cat => {
-                    const t = CATEGORY_THEME[cat];
-                    const active = fixCategory === cat;
-                    return (
-                      <button
-                        key={cat}
-                        type="button"
-                        onClick={() => setFixCategory(cat)}
-                        className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 font-bold text-sm transition-all ${
-                          active
-                            ? `${t.bg} ${t.textOn} border-transparent shadow-md scale-[1.02]`
-                            : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50'
-                        }`}
-                      >
-                        <span className="text-lg leading-none">{t.icon}</span>
-                        <span>{CATEGORY_LABELS[cat]}</span>
-                      </button>
-                    );
-                  })}
+              {/* الفئة تنحدر من meals.category تلقائياً — تعديلها من صفحة الأصناف */}
+              {fixMeal && (
+                <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                  <span>الفئة:</span>
+                  <span className={`inline-flex items-center gap-1 font-bold px-1.5 py-0.5 rounded ${
+                    fixCategory === 'hot' ? 'bg-red-100 text-red-700'
+                  : fixCategory === 'cold' ? 'bg-sky-100 text-sky-700'
+                                           : 'bg-amber-100 text-amber-700'
+                  }`}>
+                    {CATEGORY_THEME[fixCategory].icon} {CATEGORY_LABELS[fixCategory]}
+                  </span>
+                  <span className="text-slate-400">— تُؤخذ من الصنف. لتعديلها روح صفحة الأصناف.</span>
                 </div>
-                {fixMeal && (
-                  <p className="text-[11px] text-slate-400 mt-1.5">
-                    💡 اقتُرح <span className="font-semibold text-slate-600">{CATEGORY_LABELS[fixMeal.is_snack ? 'snack' : 'hot']}</span>{' '}
-                    تلقائياً بناءً على نوع الصنف. غيّره لو تبي.
-                  </p>
-                )}
-              </div>
+              )}
 
               {/* Quantity */}
               <div>

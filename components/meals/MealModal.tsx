@@ -3,8 +3,14 @@
 import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { Meal, MealType, EntityType } from '@/lib/types';
-import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
+import type { Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
+import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, CATEGORY_LABELS } from '@/lib/types';
+
+const CATEGORY_THEME: Record<ItemCategory, { icon: string; bg: string; textOn: string }> = {
+  hot:   { icon: '🔥', bg: 'bg-red-500',   textOn: 'text-white' },
+  cold:  { icon: '❄️', bg: 'bg-sky-500',   textOn: 'text-white' },
+  snack: { icon: '🍿', bg: 'bg-amber-500', textOn: 'text-white' },
+};
 
 interface Props {
   meal: Meal | null;
@@ -23,6 +29,10 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
   const [englishName, setEnglishName] = useState(meal?.english_name ?? '');
   const [type, setType] = useState<MealType>(meal?.type ?? defaultType);
   const [isSnack, setIsSnack] = useState(meal?.is_snack ?? defaultIsSnack);
+  // التصنيف الافتراضي: لو سناك → snack، وإلا hot. المستخدم يقدر يبدّل لـ cold.
+  const [category, setCategory] = useState<ItemCategory>(
+    meal?.category ?? (meal?.is_snack ?? defaultIsSnack ? 'snack' : 'hot')
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const supabase = useMemo(() => createClient(), []);
@@ -38,12 +48,18 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
       english_name: englishName.trim() || null,
       type,
       is_snack: isSnack,
+      category,
     };
     // فقط نضيف entity_type عند الإنشاء — التعديل ما يغيّر النوع
     if (!meal) payload.entity_type = entityType;
 
     if (meal) {
-      const { error } = await supabase.from('meals').update(payload).eq('id', meal.id);
+      let r = await supabase.from('meals').update(payload).eq('id', meal.id);
+      if (r.error && /category|column/i.test(r.error.message)) {
+        delete payload.category;
+        r = await supabase.from('meals').update(payload).eq('id', meal.id);
+      }
+      const { error } = r;
       if (error) { setError(error.message); setSaving(false); return; }
       // إذا تغير الاسم → حدّث الكلمة في الترجمة
       if (meal.name !== payload.name) {
@@ -65,7 +81,12 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
         },
       });
     } else {
-      const { data, error } = await supabase.from('meals').insert(payload).select('id').single();
+      let r = await supabase.from('meals').insert(payload).select('id').single();
+      if (r.error && /category|column/i.test(r.error.message)) {
+        delete payload.category;
+        r = await supabase.from('meals').insert(payload).select('id').single();
+      }
+      const { data, error } = r;
       if (error) { setError(error.message); setSaving(false); return; }
       void logActivity({
         action: 'create',
@@ -115,17 +136,62 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
           </div>
 
           <div>
-            <label className="label">التصنيف *</label>
+            <label className="label">نوع الصنف *</label>
             <div className="grid grid-cols-2 gap-3">
-              <button type="button" onClick={() => setIsSnack(false)}
+              <button type="button" onClick={() => {
+                setIsSnack(false);
+                if (category === 'snack') setCategory('hot');
+              }}
                 className={`py-3 rounded-xl border-2 font-semibold text-sm transition-all ${!isSnack ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
                 صنف وجبة
               </button>
-              <button type="button" onClick={() => setIsSnack(true)}
+              <button type="button" onClick={() => {
+                setIsSnack(true);
+                setCategory('snack');
+              }}
                 className={`py-3 rounded-xl border-2 font-semibold text-sm transition-all ${isSnack ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}>
                 سناك
               </button>
             </div>
+          </div>
+
+          {/* الفئة (حار/بارد/سناك) — تنعكس على الستيكرات والتقارير في كل مكان */}
+          <div>
+            <label className="label flex items-center gap-2">
+              الفئة <span className="text-red-500">*</span>
+              <span className="text-[11px] font-normal text-slate-400">— يحدّد الكيس في الستيكرات</span>
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {(['hot', 'cold', 'snack'] as ItemCategory[]).map(c => {
+                const t = CATEGORY_THEME[c];
+                const active = category === c;
+                // لو الصنف "سناك"، نقفل اختيار حار/بارد ونثبّته على snack
+                const disabled = isSnack && c !== 'snack';
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => !disabled && setCategory(c)}
+                    disabled={disabled}
+                    className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 font-bold text-sm transition-all ${
+                      active
+                        ? `${t.bg} ${t.textOn} border-transparent shadow-md`
+                        : disabled
+                          ? 'bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed'
+                          : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
+                    }`}
+                  >
+                    <span className="text-lg leading-none">{t.icon}</span>
+                    <span>{CATEGORY_LABELS[c]}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {!isSnack && (
+              <p className="text-[11px] text-slate-400 mt-1.5">
+                اختر "حار" أو "بارد" — راح ينعكس تلقائياً في كل أوامر التشغيل والمنيو والستيكرات.
+              </p>
+            )}
           </div>
 
           {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>}

@@ -12,11 +12,19 @@ export async function buildOrderReport(
   supabase: SupabaseClient,
   orderId: string,
 ): Promise<Record<string, unknown> | null> {
-  const { data: order, error: orderError } = await supabase
-    .from('daily_orders')
-    .select(`*, order_items(id, meal_id, display_name, extra_quantity, category, multiplier, meals(id, name, english_name, type, is_snack))`)
-    .eq('id', orderId)
-    .single();
+  // نحاول جلب meals.category أولاً (المصدر الأساسي للتصنيف). لو الـmigration
+  // ما اتشغّل، نرجع للسلوك القديم بدون العمود.
+  const fetchOrder = async (withMealCategory: boolean) =>
+    supabase
+      .from('daily_orders')
+      .select(`*, order_items(id, meal_id, display_name, extra_quantity, category, multiplier, meals(id, name, english_name, type, is_snack${withMealCategory ? ', category' : ''}))`)
+      .eq('id', orderId)
+      .single();
+
+  let { data: order, error: orderError } = await fetchOrder(true);
+  if (orderError && /category|column/i.test(orderError.message)) {
+    ({ data: order, error: orderError } = await fetchOrder(false));
+  }
 
   if (orderError || !order) return null;
 
@@ -33,7 +41,12 @@ export async function buildOrderReport(
     mealMap[item.meal_id] = item.meals;
     extraQtyMap[item.meal_id] = item.extra_quantity ?? 0;
     multiplierMap[item.meal_id] = Math.max(1, item.multiplier ?? 1);
-    categoryMap[item.meal_id] = (item.category as ItemCategory) ?? (item.meals.is_snack ? 'snack' : 'hot');
+    // أولوية التصنيف: (1) meals.category — المصدر الموحد، (2) order_items.category
+    // — توافق رجعي، (3) المشتق من is_snack. هذا يضمن الستيكرات تتبع نفس التصنيف
+    // أينما ظهر الصنف.
+    const mealCat = (item.meals as { category?: ItemCategory }).category;
+    categoryMap[item.meal_id] =
+      mealCat ?? (item.category as ItemCategory) ?? (item.meals.is_snack ? 'snack' : 'hot');
     displayMealMap[item.meal_id] = item.display_name
       ? { ...item.meals, name: item.display_name }
       : item.meals;
@@ -54,29 +67,32 @@ export async function buildOrderReport(
   // Try with the category column on fixed_meals first; if the migration hasn't
   // been run yet, fall back to the older shape so the report still works.
   // Same fallback strategy for the entity_type filter on beneficiaries.
-  const fetchBens = async (withFixedCategory: boolean, withEntityType: boolean) => {
-    const q = supabase
-      .from('beneficiaries')
-      .select(`
-        *,
-        exclusions(id, meal_id, alternative_meal_id, meals:meals!exclusions_meal_id_fkey(id, name, english_name, type, is_snack)),
-        fixed_meals:beneficiary_fixed_meals(id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category' : ''}, meals(id, name, english_name, type, is_snack))
-      `)
-      .order('name');
+  const fetchBens = async (withFixedCategory: boolean, withEntityType: boolean, withMealCategory: boolean) => {
+    const mealCols = `id, name, english_name, type, is_snack${withMealCategory ? ', category' : ''}`;
+    const sel = `*, exclusions(id, meal_id, alternative_meal_id, meals:meals!exclusions_meal_id_fkey(${mealCols})), fixed_meals:beneficiary_fixed_meals(id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category' : ''}, meals(${mealCols}))`;
+    const q = supabase.from('beneficiaries').select(sel).order('name');
     return withEntityType ? q.eq('entity_type', orderEntityType) : q;
   };
 
-  let bensRes = await fetchBens(true, true);
-  if (bensRes.error && /entity_type|column/i.test(bensRes.error.message)) {
-    bensRes = await fetchBens(true, false);
-  }
+  // نحاول كل الأعمدة، ثم نسقط واحدة بواحدة عند ظهور أخطاء العمود/الترقية
+  let bensRes = await fetchBens(true, true, true);
   if (bensRes.error && /category|column/i.test(bensRes.error.message)) {
-    bensRes = await fetchBens(false, true);
-    if (bensRes.error && /entity_type|column/i.test(bensRes.error.message)) {
-      bensRes = await fetchBens(false, false);
+    // إما fixed_meals.category أو meals.category — جرّب الإسقاط بالترتيب
+    bensRes = await fetchBens(false, true, true);
+    if (bensRes.error && /category|column/i.test(bensRes.error.message)) {
+      bensRes = await fetchBens(true, true, false);
+      if (bensRes.error && /category|column/i.test(bensRes.error.message)) {
+        bensRes = await fetchBens(false, true, false);
+      }
     }
   }
-  const beneficiaries = bensRes.data;
+  if (bensRes.error && /entity_type|column/i.test(bensRes.error.message)) {
+    bensRes = await fetchBens(false, false, false);
+  }
+  // الـquery select ديناميكي فما يقدر TypeScript يستنتج النوع — نقصّه إلى any[]
+  // لأن كل forEach/map داخله مضبوط على inline type.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const beneficiaries = bensRes.data as any[] | null;
 
   if (!beneficiaries || beneficiaries.length === 0) return null;
 
@@ -126,15 +142,17 @@ export async function buildOrderReport(
     const todayFixed: { meal: Meal; quantity: number; category: ItemCategory }[] = (ben.fixed_meals || [])
       .filter(fm => fm.day_of_week === orderDayOfWeek && fm.meal_type === order.meal_type && fm.meals)
       .map(fm => {
-        // Priority for fixed-meal category:
-        //   1) Explicit value stored on the fixed meal row (set by the user)
-        //   2) Category of the same meal in this order, if any
-        //   3) Fallback derived from is_snack
+        // أولوية تصنيف الصنف الثابت:
+        //   1) meals.category — المصدر الموحد (يضمن نفس الصنف نفس الفئة في كل مكان)
+        //   2) قيمة محفوظة على صف fixed_meals (للتوافق الرجعي)
+        //   3) تصنيف الصنف داخل أمر التشغيل
+        //   4) المشتق من is_snack
+        const mealCat = (fm.meals as { category?: ItemCategory }).category;
         const stored = (fm as { category?: ItemCategory }).category;
         return {
           meal: fm.meals,
           quantity: fm.quantity ?? 1,
-          category: stored ?? categoryMap[fm.meal_id] ?? (fm.meals.is_snack ? 'snack' : 'hot'),
+          category: mealCat ?? stored ?? categoryMap[fm.meal_id] ?? (fm.meals.is_snack ? 'snack' : 'hot'),
         };
       });
 

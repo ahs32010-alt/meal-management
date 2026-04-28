@@ -59,23 +59,29 @@ export default function MenuView() {
     setLoading(true);
     // نحاول الفلترة بـentity_type أولاً، ولو العمود ما موجود (الـmigration ما اتشغّل)
     // نرجع لجميع الصفوف. للمرافقين نظهر تنبيه.
-    const tryFetchItems = async (withEntity: boolean) => {
+    const tryFetchItems = async (withEntity: boolean, withMealCategory: boolean) => {
+      const mealCols = `id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}${withMealCategory ? ', category' : ''}`;
       const q = supabase
         .from('menu_items')
-        .select(`id, week_number, day_of_week, meal_type, meal_id, category, position, multiplier${withEntity ? ', entity_type' : ''}, created_at,
-                 meals(id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''})`);
+        .select(`id, week_number, day_of_week, meal_type, meal_id, category, position, multiplier${withEntity ? ', entity_type' : ''}, created_at, meals(${mealCols})`);
       return withEntity ? q.eq('entity_type', entityType) : q;
     };
-    const tryFetchMeals = async (withEntity: boolean) => {
-      const q = supabase
-        .from('meals')
-        .select(`id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}, created_at`)
-        .order('name');
+    const tryFetchMeals = async (withEntity: boolean, withCategory: boolean) => {
+      const cols = `id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}${withCategory ? ', category' : ''}, created_at`;
+      const q = supabase.from('meals').select(cols).order('name');
       return withEntity ? q.eq('entity_type', entityType) : q;
     };
 
-    let itemsRes = await tryFetchItems(true);
-    let mealsRes = await tryFetchMeals(true);
+    let itemsRes = await tryFetchItems(true, true);
+    let mealsRes = await tryFetchMeals(true, true);
+
+    // إذا meals.category ما موجود (الـmigration ما اتشغّل) أعد المحاولة بدونه
+    if (itemsRes.error && /category|column/i.test(itemsRes.error.message)) {
+      itemsRes = await tryFetchItems(true, false);
+    }
+    if (mealsRes.error && /category|column/i.test(mealsRes.error.message)) {
+      mealsRes = await tryFetchMeals(true, false);
+    }
 
     const entityMissing =
       (itemsRes.error && /entity_type|column/i.test(itemsRes.error.message)) ||
@@ -92,7 +98,13 @@ export default function MenuView() {
         setLoading(false);
         return;
       }
-      [itemsRes, mealsRes] = await Promise.all([tryFetchItems(false), tryFetchMeals(false)]);
+      [itemsRes, mealsRes] = await Promise.all([tryFetchItems(false, true), tryFetchMeals(false, true)]);
+      if (itemsRes.error && /category|column/i.test(itemsRes.error.message)) {
+        itemsRes = await tryFetchItems(false, false);
+      }
+      if (mealsRes.error && /category|column/i.test(mealsRes.error.message)) {
+        mealsRes = await tryFetchMeals(false, false);
+      }
     }
 
     if (itemsRes.data) setAllItems(itemsRes.data as unknown as MenuItem[]);
@@ -176,20 +188,6 @@ export default function MenuView() {
       details: { week, day, meal_type: mealType, source: 'menu_edit' },
     });
 
-    await fetchData();
-  };
-
-  const handleToggleCategory = async (item: MenuItem) => {
-    if (item.category === 'snack') return; // snack rows fixed
-    const next: ItemCategory = item.category === 'hot' ? 'cold' : 'hot';
-    await supabase.from('menu_items').update({ category: next }).eq('id', item.id);
-    void logActivity({
-      action: 'update',
-      entity_type: 'meal',
-      entity_id: item.id,
-      entity_name: `قائمة الطعام — ${WEEK_TITLES[item.week_number as WeekNumber]}`,
-      details: { from: item.category, to: next, source: 'menu_category_toggle' },
-    });
     await fetchData();
   };
 
@@ -307,7 +305,10 @@ export default function MenuView() {
       );
     }
 
-    const theme = CATEGORY_THEME[item.category];
+    // الفئة من meals.category (المصدر الوحيد). للسناك تُعرض بدون تبديل.
+    const mealCat = (item.meals as { category?: ItemCategory } | null)?.category;
+    const effectiveCat: ItemCategory = mealCat ?? item.category ?? (item.meals?.is_snack ? 'snack' : 'hot');
+    const theme = CATEGORY_THEME[effectiveCat];
     const mult = item.multiplier ?? 1;
     const q = search.trim().toLowerCase();
     const itemName = item.meals?.name ?? '';
@@ -321,14 +322,12 @@ export default function MenuView() {
     return (
       <div className={`flex items-center gap-1 px-2 py-1.5 group transition-all ${highlightCls}`}>
         {!isSnack && (
-          <button
-            type="button"
-            onClick={() => handleToggleCategory(item)}
-            title={item.category === 'hot' ? 'حار — اضغط للتبديل لبارد' : 'بارد — اضغط للتبديل لحار'}
+          <span
+            title="الفئة تُؤخذ من الصنف نفسه — لتعديلها روح صفحة الأصناف"
             className={`shrink-0 text-sm leading-none w-5 h-5 flex items-center justify-center rounded ${theme.bg} ${theme.text}`}
           >
             {theme.icon}
-          </button>
+          </span>
         )}
         <button
           type="button"

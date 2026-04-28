@@ -49,13 +49,20 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
   const entityType: EntityType =
     (editingOrder?.entity_type as EntityType | undefined) ?? entityTypeProp ?? 'beneficiary';
 
+  // الفئة من meals.category (المصدر الموحد). نسقط للـorder_items.category كتوافق
+  // رجعي، ثم لـ is_snack. لازم نمرّر `meals` كـ prop عشان نقدر نقرأ category منها.
+  const mealCategoryFor = (mealId: string, fallbackIsSnack?: boolean, storedCat?: ItemCategory): ItemCategory => {
+    const m = meals.find(x => x.id === mealId);
+    return (m?.category as ItemCategory | undefined) ?? storedCat ?? (fallbackIsSnack || m?.is_snack ? 'snack' : 'hot');
+  };
+
   const initSelected = (): SelectedItem[] => {
     if (!editingOrder?.order_items) return [];
     return (editingOrder.order_items as OrderItem[]).map(item => ({
       meal_id: item.meal_id,
       display_name: item.display_name ?? item.meals?.name ?? '',
       extra_quantity: item.extra_quantity ?? 0,
-      category: item.category ?? (item.meals?.is_snack ? 'snack' : 'hot'),
+      category: mealCategoryFor(item.meal_id, item.meals?.is_snack, item.category as ItemCategory | undefined),
       multiplier: item.multiplier ?? 1,
     }));
   };
@@ -70,7 +77,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
   );
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<SelectedItem[]>(initSelected);
-  const [activeCategory, setActiveCategory] = useState<ItemCategory>('hot');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -198,13 +204,12 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     setSelected(prev => {
       const existing = prev.find(s => s.meal_id === meal.id);
       if (existing) {
-        if (existing.category === activeCategory) {
-          if (editingId === meal.id) setEditingId(null);
-          return prev.filter(s => s.meal_id !== meal.id);
-        }
-        return prev.map(s => s.meal_id === meal.id ? { ...s, category: activeCategory } : s);
+        if (editingId === meal.id) setEditingId(null);
+        return prev.filter(s => s.meal_id !== meal.id);
       }
-      return [...prev, { meal_id: meal.id, display_name: meal.name, extra_quantity: 0, category: activeCategory, multiplier: 1 }];
+      // الفئة تُؤخذ من meals.category مباشرة — لا اختيار يدوي هنا.
+      const cat = (meal.category as ItemCategory | undefined) ?? (meal.is_snack ? 'snack' : 'hot');
+      return [...prev, { meal_id: meal.id, display_name: meal.name, extra_quantity: 0, category: cat, multiplier: 1 }];
     });
   };
 
@@ -215,9 +220,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
 
   const updateDisplayName = (meal_id: string, value: string) =>
     setSelected(prev => prev.map(s => s.meal_id === meal_id ? { ...s, display_name: value } : s));
-
-  const setItemCategory = (meal_id: string, category: ItemCategory) =>
-    setSelected(prev => prev.map(s => s.meal_id === meal_id ? { ...s, category } : s));
 
   const setItemMultiplier = (meal_id: string, multiplier: number) =>
     setSelected(prev => prev.map(s => s.meal_id === meal_id ? { ...s, multiplier: Math.max(1, Math.min(100, multiplier || 1)) } : s));
@@ -355,34 +357,26 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
 
   const MealChip = ({ meal }: { meal: Meal }) => {
     const sel = selectedByMealId.get(meal.id);
-    const inActive = sel?.category === activeCategory;
-    const inOther = sel && sel.category !== activeCategory;
-    const activeTheme = CATEGORY_THEME[activeCategory];
-    const otherTheme = inOther ? CATEGORY_THEME[sel.category] : null;
+    const isSelected = !!sel;
+    const cat = (meal.category as ItemCategory | undefined) ?? (meal.is_snack ? 'snack' : 'hot');
+    const theme = CATEGORY_THEME[cat];
 
-    let cls = '';
-    if (inActive) {
-      cls = `${activeTheme.bg} ${activeTheme.textOn} border-transparent shadow-sm`;
-    } else if (inOther && otherTheme) {
-      cls = `bg-white border-2 ${otherTheme.border} text-slate-700`;
-    } else {
-      cls = 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50';
-    }
+    const cls = isSelected
+      ? `${theme.bg} ${theme.textOn} border-transparent shadow-sm`
+      : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50';
 
     return (
       <button
         type="button"
         onClick={() => toggleMeal(meal)}
-        title={inOther && otherTheme ? `حالياً في ${CATEGORY_LABELS[sel.category]} — اضغط للنقل إلى ${CATEGORY_LABELS[activeCategory]}` : undefined}
         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${cls}`}
       >
-        {inActive && (
+        {isSelected ? (
           <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
           </svg>
-        )}
-        {inOther && otherTheme && (
-          <span className="text-base leading-none" title={CATEGORY_LABELS[sel.category]}>{otherTheme.icon}</span>
+        ) : (
+          <span className="text-base leading-none" title={CATEGORY_LABELS[cat]}>{theme.icon}</span>
         )}
         {meal.name}
       </button>
@@ -440,40 +434,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                 ↺ إعادة تعبئة من المنيو
               </button>
             )}
-
-            {/* Active category picker */}
-            <div className="space-y-2">
-              <label className="label mb-0">القسم النشط للاختيار</label>
-              <div className="grid grid-cols-3 gap-2">
-                {CATEGORY_ORDER.map(cat => {
-                  const t = CATEGORY_THEME[cat];
-                  const count = itemsByCategory(cat).length;
-                  const active = cat === activeCategory;
-                  return (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => setActiveCategory(cat)}
-                      className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 font-bold text-sm transition-all ${
-                        active
-                          ? `${t.bg} ${t.textOn} border-transparent shadow-md`
-                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      <span className="text-lg leading-none">{t.icon}</span>
-                      <span>{CATEGORY_LABELS[cat]}</span>
-                      {count > 0 && (
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                          active ? 'bg-white/20 text-white' : t.badge
-                        }`}>
-                          {count}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
 
             {/* Meal picker */}
             <div className="space-y-3">
@@ -567,26 +527,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                               </button>
                             </div>
                           )}
-                        </div>
-
-                        <div className="hidden md:flex items-center gap-0.5 shrink-0">
-                          {CATEGORY_ORDER.map(cat => {
-                            const tt = CATEGORY_THEME[cat];
-                            const active = item.category === cat;
-                            return (
-                              <button
-                                key={cat}
-                                type="button"
-                                onClick={() => setItemCategory(item.meal_id, cat)}
-                                title={CATEGORY_LABELS[cat]}
-                                className={`w-7 h-7 text-base rounded-md transition-all ${
-                                  active ? `${tt.bg} ${tt.textOn} shadow-sm` : 'bg-white text-slate-400 hover:bg-slate-100'
-                                }`}
-                              >
-                                {tt.icon}
-                              </button>
-                            );
-                          })}
                         </div>
 
                         <div className="shrink-0 text-center" title="مضاعف الكمية لكل مستفيد (مثلاً ٢ للخبز)">

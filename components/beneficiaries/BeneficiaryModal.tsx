@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
-import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, CATEGORY_LABELS, CATEGORY_ORDER, ENTITY_TYPE_LABELS } from '@/lib/types';
+import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS } from '@/lib/types';
 
 interface Props {
   beneficiary: Beneficiary | null;
@@ -23,19 +23,24 @@ interface ExclusionEntry {
 
 type FixedEntry = { meal_id: string; meal_type: MealType; days: Set<number>; quantity: number; category: ItemCategory };
 
-function buildFixedEntries(fixedMeals: Beneficiary['fixed_meals']): FixedEntry[] {
+function buildFixedEntries(fixedMeals: Beneficiary['fixed_meals'], allMeals?: Meal[]): FixedEntry[] {
+  const mealById = new Map((allMeals ?? []).map(m => [m.id, m]));
   const map: Record<string, FixedEntry> = {};
   for (const fm of fixedMeals ?? []) {
     const key = `${fm.meal_id}_${fm.meal_type}`;
     if (!map[key]) {
-      const meal = (fm as unknown as { meals?: { is_snack?: boolean } }).meals;
-      const inferred: ItemCategory = meal?.is_snack ? 'snack' : 'hot';
+      // الأولوية: meals.category (المصدر الموحد) → الـcategory المخزّن على fixed_meal
+      // (للتوافق الرجعي) → اشتقاق من is_snack.
+      const masterMeal = mealById.get(fm.meal_id);
+      const masterCat = masterMeal?.category as ItemCategory | undefined;
+      const joinedMeal = (fm as unknown as { meals?: { is_snack?: boolean } }).meals;
+      const inferred: ItemCategory = (masterMeal?.is_snack || joinedMeal?.is_snack) ? 'snack' : 'hot';
       map[key] = {
         meal_id: fm.meal_id,
         meal_type: fm.meal_type as MealType,
         days: new Set(),
         quantity: fm.quantity ?? 1,
-        category: (fm.category as ItemCategory) ?? inferred,
+        category: masterCat ?? (fm.category as ItemCategory) ?? inferred,
       };
     }
     map[key].days.add(fm.day_of_week);
@@ -286,7 +291,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   );
 
   const [fixedEntries, setFixedEntries] = useState<FixedEntry[]>(
-    buildFixedEntries(beneficiary?.fixed_meals)
+    buildFixedEntries(beneficiary?.fixed_meals, meals)
   );
 
   // For adding new fixed meal
@@ -313,7 +318,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const addFixedMeal = (meal: Meal) => {
     const exists = fixedEntries.find(fe => fe.meal_id === meal.id && fe.meal_type === newFixedMealType);
     if (!exists) {
-      const category: ItemCategory = meal.is_snack ? 'snack' : 'hot';
+      // الفئة من meals.category (المصدر الموحد)، ولو ما محدّدة → اشتقاق من is_snack.
+      const category: ItemCategory = (meal.category as ItemCategory | undefined) ?? (meal.is_snack ? 'snack' : 'hot');
       setFixedEntries(prev => [...prev, { meal_id: meal.id, meal_type: newFixedMealType, days: new Set(), quantity: 1, category }]);
     }
     setAddingFixed(false);
@@ -323,10 +329,6 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const setFixedEntryQty = (meal_id: string, meal_type: MealType, quantity: number) =>
     setFixedEntries(prev => prev.map(fe =>
       fe.meal_id === meal_id && fe.meal_type === meal_type ? { ...fe, quantity } : fe
-    ));
-  const setFixedEntryCategory = (meal_id: string, meal_type: MealType, category: ItemCategory) =>
-    setFixedEntries(prev => prev.map(fe =>
-      fe.meal_id === meal_id && fe.meal_type === meal_type ? { ...fe, category } : fe
     ));
   const toggleDay = (meal_id: string, meal_type: MealType, day: number) =>
     setFixedEntries(prev => prev.map(fe => {
@@ -680,26 +682,13 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-slate-400">{fe.days.size} يوم</span>
-                            {/* Category toggle (3 buttons) — splits stickers when categories differ */}
-                            <div className="flex items-center gap-0.5 bg-white border border-slate-200 rounded-lg p-0.5" title="نوع الكيس — يحدد ستيكر منفصل">
-                              {CATEGORY_ORDER.map(cat => {
-                                const t = CATEGORY_THEME_FIXED[cat];
-                                const active = fe.category === cat;
-                                return (
-                                  <button
-                                    key={cat}
-                                    type="button"
-                                    onClick={() => setFixedEntryCategory(fe.meal_id, fe.meal_type, cat)}
-                                    title={CATEGORY_LABELS[cat]}
-                                    className={`w-6 h-6 text-sm rounded transition-all ${
-                                      active ? `${t.bg} ${t.textOn} shadow-sm` : 'text-slate-400 hover:bg-slate-100'
-                                    }`}
-                                  >
-                                    {t.icon}
-                                  </button>
-                                );
-                              })}
-                            </div>
+                            {/* الفئة من meals.category — للعرض فقط، تعديلها من صفحة الأصناف */}
+                            <span
+                              title="الفئة تُؤخذ من الصنف نفسه — لتعديلها روح صفحة الأصناف"
+                              className={`inline-flex items-center justify-center w-6 h-6 text-sm rounded ${CATEGORY_THEME_FIXED[fe.category].bg} ${CATEGORY_THEME_FIXED[fe.category].textOn}`}
+                            >
+                              {CATEGORY_THEME_FIXED[fe.category].icon}
+                            </span>
                             {/* Quantity control */}
                             <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-1.5 py-0.5">
                               <button type="button"

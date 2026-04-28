@@ -86,18 +86,18 @@ export default function OrderList() {
         ? 'meal_id, beneficiaries!inner(entity_type)'
         : 'meal_id';
 
-      // الأصناف نجلبها كاملة مع عمود entity_type عشان OrderModal يفلتر
-      // حسب نوع الأمر (مستفيدين/مرافقين). لو العمود ما موجود نرجع للسلوك القديم.
+      // الأصناف نجلبها كاملة مع عمود entity_type/category عشان OrderModal يفلتر
+      // حسب النوع ويعرف الفئة. لو أي عمود ما موجود نرجع للسلوك القديم.
       const fetchMealsList = async () => {
-        const r = await supabase
-          .from('meals')
-          .select('id, name, english_name, type, is_snack, entity_type, created_at')
-          .order('type').order('is_snack').order('name');
+        const tryFetch = async (withEntity: boolean, withCategory: boolean) => {
+          const cols = `id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}${withCategory ? ', category' : ''}, created_at`;
+          return supabase.from('meals').select(cols).order('type').order('is_snack').order('name');
+        };
+        let r = await tryFetch(true, true);
+        if (r.error && /category|column/i.test(r.error.message)) r = await tryFetch(true, false);
         if (r.error && /entity_type|column/i.test(r.error.message)) {
-          return supabase
-            .from('meals')
-            .select('id, name, english_name, type, is_snack, created_at')
-            .order('type').order('is_snack').order('name');
+          r = await tryFetch(false, true);
+          if (r.error && /category|column/i.test(r.error.message)) r = await tryFetch(false, false);
         }
         return r;
       };
@@ -112,7 +112,7 @@ export default function OrderList() {
         console.error('Orders fetch error:', ordersResult.error);
       }
       if (ordersResult.data) setOrders(ordersResult.data as unknown as DailyOrder[]);
-      if (mealsResult.data) setMeals(mealsResult.data as Meal[]);
+      if (mealsResult.data) setMeals(mealsResult.data as unknown as Meal[]);
 
       // نبني عدّادات منفصلة لكل entity_type
       const nextCounts: Record<EntityType, EntityCounts> = {

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { Meal, MealType, EntityType } from '@/lib/types';
+import type { Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import { exportXLSX } from '@/lib/xlsx-utils';
@@ -32,12 +32,14 @@ interface MealSectionProps {
   onDuplicate: (meal: Meal) => void;
   onDelete: (id: string) => void;
   onDeleteAll: (type: MealType, isSnack: boolean) => void;
+  onSetCategory: (meal: Meal, category: ItemCategory) => void;
+  categoryUpdating: string | null;
   deleting: string | null;
   duplicating: string | null;
   deletingAll: boolean;
 }
 
-function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, deleting, duplicating, deletingAll }: MealSectionProps) {
+function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll }: MealSectionProps) {
   return (
     <div className={`rounded-xl border ${colors.border} overflow-hidden`}>
       <div className={`flex items-center justify-between px-4 py-3 ${colors.bg}`}>
@@ -83,12 +85,37 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
         <div className="py-6 text-center text-slate-400 text-sm bg-white">لا توجد أصناف</div>
       ) : (
         <div className="bg-white divide-y divide-slate-100">
-          {meals.map((meal) => (
+          {meals.map((meal) => {
+            const cat = meal.category ?? (meal.is_snack ? 'snack' : 'hot');
+            const catCls = cat === 'hot' ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                         : cat === 'cold' ? 'bg-sky-100 text-sky-700 hover:bg-sky-200'
+                                          : 'bg-amber-100 text-amber-700';
+            const catLabel = cat === 'hot' ? '🔥 حار' : cat === 'cold' ? '❄️ بارد' : '🍿 سناك';
+            const isUpdating = categoryUpdating === meal.id;
+            return (
             <div key={meal.id} className="flex items-center justify-between px-4 py-2.5 hover:bg-slate-50">
-              <div>
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-medium text-slate-800 text-sm">{meal.name}</span>
+                {meal.is_snack ? (
+                  <span
+                    className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700"
+                    title="السناكات تبقى snack دائماً"
+                  >
+                    🍿 سناك
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onSetCategory(meal, cat === 'cold' ? 'hot' : 'cold')}
+                    disabled={isUpdating}
+                    title="اضغط للتبديل بين حار وبارد"
+                    className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded transition-colors disabled:opacity-50 ${catCls}`}
+                  >
+                    {isUpdating ? '...' : catLabel}
+                  </button>
+                )}
                 {meal.english_name && (
-                  <span className="text-slate-400 text-xs mr-2 font-mono">({meal.english_name})</span>
+                  <span className="text-slate-400 text-xs font-mono">({meal.english_name})</span>
                 )}
               </div>
               <div className="flex items-center gap-1">
@@ -123,7 +150,8 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -230,6 +258,7 @@ export default function MealList() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
   const [duplicating, setDuplicating] = useState<string | null>(null);
+  const [categoryUpdating, setCategoryUpdating] = useState<string | null>(null);
   const [duplicateResult, setDuplicateResult] = useState<{ name: string; excl: number; fixed: number; menu: number } | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; confirmLabel?: string; onConfirm: () => void } | null>(null);
   const [search, setSearch] = useState('');
@@ -248,14 +277,15 @@ export default function MealList() {
     try {
       // نحاول الفلترة بـentity_type أولاً، ولو العمود ما موجود (الـmigration ما اتشغّل)
       // نرجع لجميع الصفوف (و للمرافقين نظهر تنبيه).
-      const tryFetch = async (withEntity: boolean) => {
-        const q = supabase
-          .from('meals')
-          .select(`id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}, created_at`)
-          .order('type').order('is_snack').order('name');
+      const tryFetch = async (withEntity: boolean, withCategory: boolean) => {
+        const cols = `id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}${withCategory ? ', category' : ''}, created_at`;
+        const q = supabase.from('meals').select(cols).order('type').order('is_snack').order('name');
         return withEntity ? q.eq('entity_type', entityType) : q;
       };
-      let res = await tryFetch(true);
+      let res = await tryFetch(true, true);
+      if (res.error && /category|column/i.test(res.error.message)) {
+        res = await tryFetch(true, false);
+      }
       if (res.error && /entity_type|column/i.test(res.error.message)) {
         if (entityType === 'companion') {
           alert(
@@ -266,7 +296,10 @@ export default function MealList() {
           setLoading(false);
           return;
         }
-        res = await tryFetch(false);
+        res = await tryFetch(false, true);
+        if (res.error && /category|column/i.test(res.error.message)) {
+          res = await tryFetch(false, false);
+        }
       }
       if (res.error) throw res.error;
       if (res.data) setMeals(res.data as unknown as Meal[]);
@@ -339,6 +372,34 @@ export default function MealList() {
     setEditingMeal(meal);
     setModalDefaults({ type: meal.type, isSnack: meal.is_snack });
     setModalOpen(true);
+  };
+
+  // تبديل فئة الصنف من قائمة الأصناف مباشرة (بدون فتح المودال).
+  // التحديث متفائل — نغيّر محلياً أولاً، ولو فشل في الـDB نرجّع القيمة.
+  const handleSetCategory = async (meal: Meal, next: ItemCategory) => {
+    if (meal.is_snack) return; // السناك دائماً snack
+    if (meal.category === next) return;
+    const prev = meal.category;
+    setCategoryUpdating(meal.id);
+    setMeals(curr => curr.map(m => m.id === meal.id ? { ...m, category: next } : m));
+    const { error } = await supabase.from('meals').update({ category: next }).eq('id', meal.id);
+    if (error) {
+      setMeals(curr => curr.map(m => m.id === meal.id ? { ...m, category: prev } : m));
+      if (/category|column/i.test(error.message)) {
+        alert('شغّل supabase/meals-category-migration.sql أولاً عشان تقدر تعدّل الفئة.');
+      } else {
+        alert(`تعذّر تحديث الفئة: ${error.message}`);
+      }
+    } else {
+      void logActivity({
+        action: 'update',
+        entity_type: 'meal',
+        entity_id: meal.id,
+        entity_name: meal.name,
+        details: { previous_category: prev ?? null, new_category: next, source: 'inline_toggle' },
+      });
+    }
+    setCategoryUpdating(null);
   };
 
   const handleDuplicate = (meal: Meal) => {
@@ -750,6 +811,8 @@ export default function MealList() {
                 onDuplicate={handleDuplicate}
                 onDelete={handleDelete}
                 onDeleteAll={handleDeleteAll}
+                onSetCategory={handleSetCategory}
+                categoryUpdating={categoryUpdating}
                 deleting={deleting}
                 duplicating={duplicating}
                 deletingAll={deletingAll}
@@ -766,6 +829,8 @@ export default function MealList() {
                 onDuplicate={handleDuplicate}
                 onDelete={handleDelete}
                 onDeleteAll={handleDeleteAll}
+                onSetCategory={handleSetCategory}
+                categoryUpdating={categoryUpdating}
                 deleting={deleting}
                 duplicating={duplicating}
                 deletingAll={deletingAll}
