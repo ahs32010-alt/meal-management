@@ -5,6 +5,8 @@ import {
   PAGES,
   ACTION_LABELS,
   emptyPermissions,
+  PAGE_AVAILABLE_ACTIONS,
+  isActionAvailable,
   type AppUser,
   type PageKey,
   type PagePermission,
@@ -77,13 +79,14 @@ export default function UsersManager() {
   };
 
   const togglePerm = (page: PageKey, action: PermissionAction) => {
+    if (!isActionAvailable(page, action)) return; // الإجراء مو متاح على هذه الصفحة
     setForm(f => {
       const next = { ...f.permissions, [page]: { ...f.permissions[page], [action]: !f.permissions[page][action] } };
-      // If view is turned off, turn off everything else for that page
+      // إذا انطفى عرض، نطفي كل شي ثاني لهذه الصفحة
       if (action === 'view' && !next[page].view) {
         next[page] = { view: false, add: false, edit: false, delete: false };
       }
-      // Enabling add/edit/delete auto-enables view
+      // تفعيل add/edit/delete يفعّل view تلقائياً
       if (action !== 'view' && next[page][action]) {
         next[page].view = true;
       }
@@ -92,10 +95,12 @@ export default function UsersManager() {
   };
 
   const toggleAllForPage = (page: PageKey, on: boolean) => {
-    setForm(f => ({
-      ...f,
-      permissions: { ...f.permissions, [page]: { view: on, add: on, edit: on, delete: on } },
-    }));
+    setForm(f => {
+      // نشغّل/نطفي فقط الإجراءات المتاحة على هذه الصفحة
+      const updated: PagePermission = { view: false, add: false, edit: false, delete: false };
+      for (const a of PAGE_AVAILABLE_ACTIONS[page]) updated[a] = on;
+      return { ...f, permissions: { ...f.permissions, [page]: updated } };
+    });
   };
 
   const submit = async () => {
@@ -294,9 +299,11 @@ export default function UsersManager() {
               </label>
 
               <div className={`space-y-3 ${form.is_admin ? 'opacity-40 pointer-events-none' : ''}`}>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <h4 className="font-semibold text-slate-800 text-sm">صلاحيات الصفحات</h4>
-                  <span className="text-xs text-slate-400">حدد كل صفحة وما يستطيع المستخدم فعله فيها</span>
+                  <span className="text-xs text-slate-400">
+                    إجراء معلَّم ✓ → مباشر · إجراء غير معلَّم → يمر بنظام الموافقات · شَرطة (—) → غير متاح أصلاً
+                  </span>
                 </div>
 
                 <div className="border border-slate-200 rounded-xl overflow-hidden">
@@ -313,27 +320,39 @@ export default function UsersManager() {
                     <tbody>
                       {PAGES.map(p => {
                         const row = form.permissions[p.key];
-                        const all = row.view && row.add && row.edit && row.delete;
+                        const available = PAGE_AVAILABLE_ACTIONS[p.key];
+                        const all = available.length > 0 && available.every(a => row[a]);
                         return (
                           <tr key={p.key} className="border-t border-slate-100 hover:bg-slate-50/50">
                             <td className="px-4 py-2 font-medium text-slate-700">{p.label}</td>
-                            {(['view', 'add', 'edit', 'delete'] as PermissionAction[]).map(a => (
-                              <td key={a} className="px-2 py-2 text-center">
+                            {(['view', 'add', 'edit', 'delete'] as PermissionAction[]).map(a => {
+                              const avail = isActionAvailable(p.key, a);
+                              return (
+                                <td key={a} className="px-2 py-2 text-center">
+                                  {avail ? (
+                                    <input
+                                      type="checkbox"
+                                      checked={row[a]}
+                                      onChange={() => togglePerm(p.key, a)}
+                                      className="w-4 h-4 accent-emerald-600"
+                                    />
+                                  ) : (
+                                    <span className="text-slate-300 text-xs" title="هذا الإجراء غير متاح في هذه الصفحة">—</span>
+                                  )}
+                                </td>
+                              );
+                            })}
+                            <td className="px-2 py-2 text-center">
+                              {available.length > 0 ? (
                                 <input
                                   type="checkbox"
-                                  checked={row[a]}
-                                  onChange={() => togglePerm(p.key, a)}
-                                  className="w-4 h-4 accent-emerald-600"
+                                  checked={all}
+                                  onChange={e => toggleAllForPage(p.key, e.target.checked)}
+                                  className="w-4 h-4 accent-slate-600"
                                 />
-                              </td>
-                            ))}
-                            <td className="px-2 py-2 text-center">
-                              <input
-                                type="checkbox"
-                                checked={all}
-                                onChange={e => toggleAllForPage(p.key, e.target.checked)}
-                                className="w-4 h-4 accent-slate-600"
-                              />
+                              ) : (
+                                <span className="text-slate-300 text-xs">—</span>
+                              )}
                             </td>
                           </tr>
                         );

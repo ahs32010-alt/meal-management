@@ -32,11 +32,183 @@ function formatExact(iso: string): string {
 
 const CAT_LABELS: Record<string, string> = { hot: '🔥 حار', cold: '❄️ بارد', snack: '🍿 سناك' };
 
+// تسميات حقول المستفيد الأساسية للعرض في فروقات التعديل
+const FIELD_LABELS: Record<string, string> = {
+  name: 'الاسم',
+  english_name: 'الاسم بالإنجليزي',
+  code: 'الكود',
+  category: 'الفئة',
+  villa: 'الفيلا',
+  diet_type: 'النظام الغذائي',
+  notes: 'الملاحظات',
+};
+
+// مفتاح الصنف الثابت = صنف + وجبة + يوم
+const fmKey = (fm: { meal_id: string; meal_type: string; day_of_week: number }) =>
+  `${fm.meal_id}|${fm.meal_type}|${fm.day_of_week}`;
+
 const STATUS_THEME: Record<PendingAction['status'], { label: string; cls: string }> = {
   pending:  { label: 'بانتظار الموافقة', cls: 'bg-amber-100 text-amber-700 border-amber-200' },
   approved: { label: 'مقبول',            cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
   rejected: { label: 'مرفوض',           cls: 'bg-red-100 text-red-700 border-red-200' },
 };
+
+// ملخّص العملية بكلام بشري — يحلّل الـdiff للتعديل ويصف الإضافة/الحذف
+import type { SupabaseClient } from '@supabase/supabase-js';
+
+function ActionSummary({
+  pa,
+  mealsById,
+  supabase,
+}: {
+  pa: PendingAction;
+  mealsById: Record<string, Meal>;
+  supabase: SupabaseClient;
+}) {
+  const [lines, setLines] = useState<string[] | null>(null);
+  const [computing, setComputing] = useState(true);
+
+  const mealName = (id: string | null | undefined) => (id && mealsById[id]?.name) || '—';
+  const dayLabel = (d: number) => DAY_LABELS[d] ?? String(d);
+  const mealTypeLabel = (t: string) => MEAL_TYPE_LABELS[t as 'breakfast' | 'lunch' | 'dinner'] ?? t;
+  const catLabel = (c: string | undefined) => (c ? CAT_LABELS[c] ?? c : '');
+
+  useEffect(() => {
+    let cancelled = false;
+    const target = pa.entity_name ?? '—';
+    const entityNoun = pa.entity_type === 'companion' ? 'المرافق' : 'المستفيد';
+
+    if (pa.action === 'delete') {
+      setLines([`يطلب حذف ${entityNoun} «${target}»`]);
+      setComputing(false);
+      return;
+    }
+
+    const cp = pa.payload as unknown as CreatePayload | null;
+
+    if (pa.action === 'create') {
+      const out: string[] = [`يطلب إضافة ${entityNoun} جديد «${target}»`];
+      if (cp?.exclusions?.length) {
+        const names = cp.exclusions.slice(0, 4).map(e => mealName(e.meal_id));
+        const more = cp.exclusions.length > 4 ? ` و${cp.exclusions.length - 4} غيرها` : '';
+        out.push(`مع ${cp.exclusions.length} محظور: ${names.join('، ')}${more}`);
+      }
+      if (cp?.fixed_meals?.length) {
+        out.push(`و ${cp.fixed_meals.length} صنف ثابت في الجدول الأسبوعي`);
+      }
+      setLines(out);
+      setComputing(false);
+      return;
+    }
+
+    // update — نجلب الحالة الحالية ونحسب الفرق
+    if (pa.action === 'update' && pa.entity_id && cp) {
+      (async () => {
+        const { data: cur } = await supabase
+          .from('beneficiaries')
+          .select(`name, english_name, code, category, villa, diet_type, notes,
+                   exclusions(meal_id, alternative_meal_id),
+                   fixed_meals:beneficiary_fixed_meals(day_of_week, meal_type, meal_id, quantity, category)`)
+          .eq('id', pa.entity_id!)
+          .maybeSingle();
+
+        if (cancelled) return;
+
+        const out: string[] = [`يطلب تعديل ${entityNoun} «${target}»`];
+
+        if (!cur) {
+          out.push('⚠ تعذّر جلب البيانات الحالية للمقارنة — يحتمل أن المستفيد محذوف.');
+          setLines(out);
+          setComputing(false);
+          return;
+        }
+
+        // الحقول الأساسية
+        const curRecord = cur as unknown as Record<string, unknown>;
+        for (const [k, label] of Object.entries(FIELD_LABELS)) {
+          const oldV = String(curRecord[k] ?? '').trim();
+          const newV = String((cp.beneficiary[k] as string | undefined) ?? '').trim();
+          if (oldV !== newV) {
+            out.push(`تغيير ${label}: «${oldV || '—'}» ← «${newV || '—'}»`);
+          }
+        }
+
+        // المحظورات
+        type ExRow = { meal_id: string; alternative_meal_id: string | null };
+        const oldEx = ((cur as { exclusions?: ExRow[] }).exclusions ?? []);
+        const newEx = cp.exclusions ?? [];
+        const oldExMap = new Map(oldEx.map(e => [e.meal_id, e.alternative_meal_id ?? null]));
+        const newExMap = new Map(newEx.map(e => [e.meal_id, e.alternative_meal_id ?? null]));
+
+        for (const [mid, newAlt] of newExMap) {
+          if (!oldExMap.has(mid)) {
+            const part = newAlt ? `استبعاد جديد: ${mealName(mid)} (بديل: ${mealName(newAlt)})` : `استبعاد جديد: ${mealName(mid)} بدون بديل`;
+            out.push(part);
+          } else {
+            const oldAlt = oldExMap.get(mid) ?? null;
+            if ((oldAlt ?? null) !== (newAlt ?? null)) {
+              const oldS = oldAlt ? mealName(oldAlt) : 'بدون بديل';
+              const newS = newAlt ? mealName(newAlt) : 'بدون بديل';
+              out.push(`تغيير بديل ${mealName(mid)}: ${oldS} ← ${newS}`);
+            }
+          }
+        }
+        for (const mid of oldExMap.keys()) {
+          if (!newExMap.has(mid)) out.push(`إزالة استبعاد: ${mealName(mid)}`);
+        }
+
+        // الأصناف الثابتة
+        type FmRow = { meal_id: string; meal_type: string; day_of_week: number; quantity: number; category?: string };
+        const oldFm = ((cur as { fixed_meals?: FmRow[] }).fixed_meals ?? []);
+        const newFm = cp.fixed_meals ?? [];
+        const oldFmMap = new Map(oldFm.map(f => [fmKey(f), f]));
+        const newFmMap = new Map(newFm.map(f => [fmKey(f), f]));
+
+        for (const [k, fm] of newFmMap) {
+          if (!oldFmMap.has(k)) {
+            out.push(
+              `إضافة صنف ثابت: ${mealName(fm.meal_id)} — ${dayLabel(fm.day_of_week)} ${mealTypeLabel(fm.meal_type)} ×${fm.quantity}${fm.category ? ` ${catLabel(fm.category)}` : ''}`
+            );
+          } else {
+            const old = oldFmMap.get(k)!;
+            const qtyChanged = old.quantity !== fm.quantity;
+            const catChanged = (old.category ?? null) !== (fm.category ?? null);
+            if (qtyChanged) {
+              out.push(`تغيير كمية ${mealName(fm.meal_id)} (${dayLabel(fm.day_of_week)} ${mealTypeLabel(fm.meal_type)}): ${old.quantity} ← ${fm.quantity}`);
+            }
+            if (catChanged) {
+              out.push(`تغيير فئة ${mealName(fm.meal_id)} (${dayLabel(fm.day_of_week)} ${mealTypeLabel(fm.meal_type)}): ${catLabel(old.category)} ← ${catLabel(fm.category)}`);
+            }
+          }
+        }
+        for (const [k, fm] of oldFmMap) {
+          if (!newFmMap.has(k)) {
+            out.push(`إزالة صنف ثابت: ${mealName(fm.meal_id)} (${dayLabel(fm.day_of_week)} ${mealTypeLabel(fm.meal_type)})`);
+          }
+        }
+
+        if (out.length === 1) out.push('— لا توجد تغييرات فعلية في البيانات.');
+
+        setLines(out);
+        setComputing(false);
+      })();
+    }
+
+    return () => { cancelled = true; };
+  }, [pa, mealsById, supabase]);
+
+  if (computing) {
+    return <div className="text-xs text-slate-400">جاري تحليل التغييرات...</div>;
+  }
+
+  return (
+    <ul className="text-xs text-slate-700 space-y-1 list-disc pr-5">
+      {(lines ?? []).map((l, i) => (
+        <li key={i} className={i === 0 ? 'font-semibold text-slate-800 list-none -mr-5' : ''}>{l}</li>
+      ))}
+    </ul>
+  );
+}
 
 interface Props {
   // لو محدود → نعرض فقط أحدث N للوحة التحكم
@@ -172,8 +344,6 @@ export default function ApprovalsList({ limit, statusFilter = 'all', hideFilters
           {items.map(pa => {
             const status = STATUS_THEME[pa.status];
             const isExpanded = expandedId === pa.id;
-            const cp = pa.payload as unknown as CreatePayload | null;
-            const hasDetails = pa.action !== 'delete' && !!cp;
             return (
               <div key={pa.id} className="px-4 py-3 hover:bg-slate-50">
                 <div className="flex items-start gap-2 mb-2 flex-wrap">
@@ -203,87 +373,19 @@ export default function ApprovalsList({ limit, statusFilter = 'all', hideFilters
                       </p>
                     )}
                   </div>
-                  {hasDetails && (
-                    <button
-                      type="button"
-                      onClick={() => setExpandedId(isExpanded ? null : pa.id)}
-                      className="text-xs font-semibold text-slate-500 hover:text-slate-700 px-2 py-1 rounded-md hover:bg-slate-100 shrink-0"
-                    >
-                      {isExpanded ? 'إخفاء التفاصيل ▲' : 'عرض التفاصيل ▼'}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setExpandedId(isExpanded ? null : pa.id)}
+                    className="text-xs font-semibold text-slate-500 hover:text-slate-700 px-2 py-1 rounded-md hover:bg-slate-100 shrink-0"
+                  >
+                    {isExpanded ? 'إخفاء التفاصيل ▲' : 'تفاصيل العملية ▼'}
+                  </button>
                 </div>
 
-                {/* لوحة التفاصيل — تظهر عند الضغط */}
-                {isExpanded && hasDetails && cp && (
-                  <div className="mt-3 mb-2 p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-3">
-                    {/* البيانات الأساسية */}
-                    <div>
-                      <p className="font-bold text-slate-700 mb-1.5">البيانات الأساسية</p>
-                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                        {Object.entries(cp.beneficiary).map(([k, v]) => {
-                          const skip = ['entity_type'];
-                          if (skip.includes(k) || v == null || v === '') return null;
-                          const labels: Record<string, string> = {
-                            name: 'الاسم', english_name: 'الاسم بالإنجليزي', code: 'الكود',
-                            category: 'الفئة', villa: 'الفيلا', diet_type: 'النظام الغذائي',
-                            notes: 'ملاحظات',
-                          };
-                          return (
-                            <div key={k} className="flex gap-1">
-                              <span className="text-slate-500 shrink-0">{labels[k] ?? k}:</span>
-                              <span className="font-medium text-slate-800 truncate">{String(v)}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* المحظورات */}
-                    {cp.exclusions && cp.exclusions.length > 0 && (
-                      <div>
-                        <p className="font-bold text-slate-700 mb-1.5">
-                          المحظورات ({cp.exclusions.length})
-                        </p>
-                        <div className="flex flex-wrap gap-1">
-                          {cp.exclusions.map((ex, i) => {
-                            const meal = mealsById[ex.meal_id];
-                            const alt = ex.alternative_meal_id ? mealsById[ex.alternative_meal_id] : null;
-                            return (
-                              <span key={i} className="inline-flex items-center gap-1 bg-red-50 border border-red-200 text-red-700 px-2 py-0.5 rounded">
-                                {meal?.name ?? ex.meal_id.slice(0, 8)}
-                                {alt && <span className="text-red-400">→ {alt.name}</span>}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* الأصناف الثابتة */}
-                    {cp.fixed_meals && cp.fixed_meals.length > 0 && (
-                      <div>
-                        <p className="font-bold text-slate-700 mb-1.5">
-                          الأصناف الثابتة ({cp.fixed_meals.length} سطر)
-                        </p>
-                        <div className="space-y-1">
-                          {cp.fixed_meals.map((fm, i) => {
-                            const meal = mealsById[fm.meal_id];
-                            return (
-                              <div key={i} className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded">
-                                <span className="font-bold text-emerald-700 truncate flex-1">{meal?.name ?? fm.meal_id.slice(0, 8)}</span>
-                                <span className="text-emerald-600 text-[10px]">{MEAL_TYPE_LABELS[fm.meal_type as 'breakfast' | 'lunch' | 'dinner']}</span>
-                                <span className="text-emerald-600 text-[10px]">{DAY_LABELS[fm.day_of_week]}</span>
-                                <span className="text-emerald-600 text-[10px]">×{fm.quantity}</span>
-                                {fm.category && <span className="text-emerald-600 text-[10px]">{CAT_LABELS[fm.category] ?? fm.category}</span>}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* التوقيت الدقيق */}
+                {/* ملخّص العملية — يبيّن وش الـuser يطلب بالضبط */}
+                {isExpanded && (
+                  <div className="mt-3 mb-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
+                    <ActionSummary pa={pa} mealsById={mealsById} supabase={supabase} />
                     <div className="text-[10px] text-slate-400 font-mono pt-2 border-t border-slate-200">
                       أُرسل: {formatExact(pa.created_at)}
                       {pa.reviewed_at && <> · روجِع: {formatExact(pa.reviewed_at)}</>}

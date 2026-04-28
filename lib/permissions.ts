@@ -50,6 +50,27 @@ export const ACTION_LABELS: Record<PermissionAction, string> = {
   delete: 'حذف',
 };
 
+// الإجراءات الفعلية المتاحة لكل صفحة — مو كل الصفحات لها نفس الـactions.
+// مثلاً: لوحة التحكم/التقارير/الستيكرات — عرض فقط (لا إضافة/تعديل/حذف).
+// قائمة الطعام — تعديل لخلايا المنيو فقط.
+// الإعدادات — عرض + تعديل (لإدارة الترجمة الحرفية).
+export const PAGE_AVAILABLE_ACTIONS: Record<PageKey, PermissionAction[]> = {
+  dashboard:     ['view'],
+  beneficiaries: ['view', 'add', 'edit', 'delete'],
+  companions:    ['view', 'add', 'edit', 'delete'],
+  meals:         ['view', 'add', 'edit', 'delete'],
+  menu:          ['view', 'edit'],
+  orders:        ['view', 'add', 'edit', 'delete'],
+  reports:       ['view'],
+  stickers:      ['view'],
+  settings:      ['view', 'edit'],
+};
+
+// مساعد: هل هذا الإجراء متاح أصلاً على هذه الصفحة؟
+export function isActionAvailable(page: PageKey, action: PermissionAction): boolean {
+  return PAGE_AVAILABLE_ACTIONS[page]?.includes(action) ?? false;
+}
+
 export function emptyPermissions(): Required<Record<PageKey, PagePermission>> {
   const out = {} as Record<PageKey, PagePermission>;
   for (const p of PAGES) {
