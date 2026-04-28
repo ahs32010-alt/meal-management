@@ -161,36 +161,40 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
               الفئة <span className="text-red-500">*</span>
               <span className="text-[11px] font-normal text-slate-400">— يحدّد الكيس في الستيكرات</span>
             </label>
-            <div className="grid grid-cols-3 gap-2">
-              {(['hot', 'cold', 'snack'] as ItemCategory[]).map(c => {
-                const t = CATEGORY_THEME[c];
-                const active = category === c;
-                // لو الصنف "سناك"، نقفل اختيار حار/بارد ونثبّته على snack
-                const disabled = isSnack && c !== 'snack';
-                return (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => !disabled && setCategory(c)}
-                    disabled={disabled}
-                    className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 font-bold text-sm transition-all ${
-                      active
-                        ? `${t.bg} ${t.textOn} border-transparent shadow-md`
-                        : disabled
-                          ? 'bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed'
-                          : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
-                    }`}
-                  >
-                    <span className="text-lg leading-none">{t.icon}</span>
-                    <span>{CATEGORY_LABELS[c]}</span>
-                  </button>
-                );
-              })}
-            </div>
-            {!isSnack && (
-              <p className="text-[11px] text-slate-400 mt-1.5">
-                اختر &quot;حار&quot; أو &quot;بارد&quot; — راح ينعكس تلقائياً في كل أوامر التشغيل والمنيو والستيكرات.
-              </p>
+            {isSnack ? (
+              // الصنف سناك → الفئة ثابتة snack تلقائياً، لا داعي لأزرار
+              <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 border-amber-200 bg-amber-50">
+                <span className="text-lg leading-none">{CATEGORY_THEME.snack.icon}</span>
+                <span className="text-sm font-bold text-amber-700">{CATEGORY_LABELS.snack}</span>
+                <span className="text-[11px] text-amber-600/70">— سناك دائماً</span>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['hot', 'cold'] as ItemCategory[]).map(c => {
+                    const t = CATEGORY_THEME[c];
+                    const active = category === c;
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setCategory(c)}
+                        className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 font-bold text-sm transition-all ${
+                          active
+                            ? `${t.bg} ${t.textOn} border-transparent shadow-md`
+                            : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
+                        }`}
+                      >
+                        <span className="text-lg leading-none">{t.icon}</span>
+                        <span>{CATEGORY_LABELS[c]}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1.5">
+                  اختر &quot;حار&quot; أو &quot;بارد&quot; — راح ينعكس تلقائياً في كل أوامر التشغيل والمنيو والستيكرات.
+                </p>
+              </>
             )}
           </div>
 

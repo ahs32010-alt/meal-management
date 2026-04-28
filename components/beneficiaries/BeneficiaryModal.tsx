@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { useCurrentUser } from '@/lib/use-current-user';
+import { enqueueCreate, type CreatePayload } from '@/lib/pending-actions';
 import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS } from '@/lib/types';
 
@@ -303,6 +305,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<Tab>('info');
   const supabase = useMemo(() => createClient(), []);
+  const { user: currentUser } = useCurrentUser();
+  const isAdmin = currentUser?.is_admin === true;
 
   const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner'];
 
@@ -378,8 +382,36 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
     };
 
     try {
-      let beneficiaryId = beneficiary?.id;
       const isEdit = !!beneficiary;
+
+      // مستخدم غير أدمن + إنشاء جديد → نرسل طلباً للأدمن بدل الإدخال المباشر.
+      // التعديل ما يمر بنظام الموافقة (للحين)، تماشياً مع طلب المستخدم.
+      if (!isEdit && !isAdmin && currentUser) {
+        const cp: CreatePayload = {
+          beneficiary: payload,
+          exclusions: exclusions.map(ex => ({
+            meal_id: ex.meal_id,
+            alternative_meal_id: ex.alternative_meal_id || null,
+          })),
+          fixed_meals: fixedEntries.flatMap(fe =>
+            Array.from(fe.days).map(day => ({
+              day_of_week: day,
+              meal_type: fe.meal_type,
+              meal_id: fe.meal_id,
+              quantity: fe.quantity,
+              category: fe.category,
+            }))
+          ),
+        };
+        const { error: enqErr } = await enqueueCreate(supabase, currentUser, entityType, payload.name as string, cp);
+        if (enqErr) { setError(friendlyError(enqErr.message)); setSaving(false); return; }
+        alert(`✓ تم إرسال طلب إضافة "${payload.name}" إلى الأدمن. ستظهر في القائمة بعد الموافقة.`);
+        setSaving(false);
+        onSaved();
+        return;
+      }
+
+      let beneficiaryId = beneficiary?.id;
       if (beneficiary) {
         const { error } = await supabase.from('beneficiaries').update(payload).eq('id', beneficiary.id);
         if (error) { setError(friendlyError(error.message)); setSaving(false); return; }

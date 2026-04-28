@@ -5,6 +5,8 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { useCurrentUser } from '@/lib/use-current-user';
+import { enqueueDelete } from '@/lib/pending-actions';
 import type { Beneficiary, Meal, EntityType, ItemCategory } from '@/lib/types';
 import { DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -85,6 +87,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   const [deleting, setDeleting] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const { user: currentUser } = useCurrentUser();
+  const isAdmin = currentUser?.is_admin === true;
 
   const supabase = useMemo(() => createClient(), []);
 
@@ -185,12 +190,25 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
 
   const handleDelete = (id: string) => {
     const ben = beneficiaries.find(b => b.id === id);
+    const targetName = ben?.name ?? `هذا ال${entitySingular}`;
     setDialog({
       title: `حذف ${entitySingular}`,
-      message: `هل أنت متأكد من حذف "${ben?.name ?? `هذا ال${entitySingular}`}"؟ لا يمكن التراجع عن هذه العملية.`,
+      message: isAdmin
+        ? `هل أنت متأكد من حذف "${targetName}"؟ لا يمكن التراجع عن هذه العملية.`
+        : `سيُرسَل طلب حذف "${targetName}" إلى الأدمن للموافقة. يحدث الحذف فعلياً بعد قبول الأدمن. متابعة؟`,
       onConfirm: async () => {
         setDialog(null);
         setDeleting(id);
+        if (!isAdmin && currentUser) {
+          const { error } = await enqueueDelete(supabase, currentUser, entityType, id, ben?.name ?? null);
+          if (error) {
+            setNotice(`⚠ تعذّر إرسال طلب الحذف: ${error.message}`);
+          } else {
+            setNotice('✓ تم إرسال طلب الحذف للأدمن بانتظار الموافقة.');
+          }
+          setDeleting(null);
+          return;
+        }
         await supabase.from('beneficiaries').delete().eq('id', id);
         void logActivity({
           action: 'delete',
@@ -394,6 +412,18 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
 
   return (
     <div className="p-6 space-y-4">
+
+      {/* Pending notice */}
+      {notice && (
+        <div className={`px-4 py-3 rounded-xl text-sm font-medium border flex items-center justify-between gap-3 ${
+          notice.startsWith('✓')
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            : 'bg-red-50 border-red-200 text-red-700'
+        }`}>
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)} className="text-current opacity-60 hover:opacity-100 text-lg leading-none">✕</button>
+        </div>
+      )}
 
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">

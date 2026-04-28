@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase-client';
 import { useCurrentUser, clearCurrentUserCache } from '@/lib/use-current-user';
 import { can, type PageKey } from '@/lib/permissions';
 import ThemeToggle from '@/components/layout/ThemeToggle';
+import PendingActionsBell from '@/components/layout/PendingActionsBell';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 
 const AvatarUploadModal = dynamic(() => import('./AvatarUploadModal'), { ssr: false });
@@ -157,6 +158,9 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
           <div className="flex-1 min-w-0">
             <h1 className="text-white font-bold text-sm leading-tight truncate">مركز خطوة أمل</h1>
           </div>
+
+          {/* Pending actions bell (admin only) */}
+          <PendingActionsBell />
 
           {/* Theme toggle (icon) */}
           <ThemeToggle variant="sidebarIcon" />
