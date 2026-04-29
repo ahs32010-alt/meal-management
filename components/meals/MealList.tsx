@@ -18,6 +18,8 @@ const ImportModal = dynamic(() => import('@/components/shared/ImportModal'), { s
 
 const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner'];
 
+type MealRow = Meal & { _pendingCreate?: boolean };
+
 const TYPE_COLORS: Record<MealType, { bg: string; text: string; border: string }> = {
   breakfast: { bg: 'bg-yellow-50', text: 'text-yellow-800', border: 'border-yellow-200' },
   lunch: { bg: 'bg-blue-50', text: 'text-blue-800', border: 'border-blue-200' },
@@ -26,7 +28,7 @@ const TYPE_COLORS: Record<MealType, { bg: string; text: string; border: string }
 
 interface MealSectionProps {
   title: string;
-  meals: Meal[];
+  meals: MealRow[];
   isSnack: boolean;
   mealType: MealType;
   colors: { bg: string; text: string; border: string };
@@ -43,13 +45,12 @@ interface MealSectionProps {
   canEdit: boolean;
   canDelete: boolean;
   pendingMap: { hasUpdate: (id: string) => boolean; hasDelete: (id: string) => boolean };
-  pendingCreates: Meal[];
   deleting: string | null;
   duplicating: string | null;
   deletingAll: boolean;
 }
 
-function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll, isAdmin, canAdd, canEdit, canDelete, pendingMap, pendingCreates }: MealSectionProps) {
+function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll, isAdmin, canAdd, canEdit, canDelete, pendingMap }: MealSectionProps) {
   return (
     <div className={`rounded-xl border ${colors.border} overflow-hidden`}>
       <div className={`flex items-center justify-between px-4 py-3 ${colors.bg}`}>
@@ -96,55 +97,40 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
           )}
         </div>
       </div>
-      {meals.length === 0 && pendingCreates.length === 0 ? (
+      {meals.length === 0 ? (
         <div className="py-6 text-center text-slate-400 text-sm bg-white">لا توجد أصناف</div>
       ) : (
         <div className="bg-white divide-y divide-slate-100">
-          {/* صفوف "شبح" للإضافات بانتظار الموافقة */}
-          {pendingCreates.map((meal, i) => {
-            const cat = meal.category ?? (meal.is_snack ? 'snack' : 'hot');
-            const catCls = cat === 'hot' ? 'bg-red-100 text-red-700' : cat === 'cold' ? 'bg-sky-100 text-sky-700' : 'bg-amber-100 text-amber-700';
-            const catLabel = cat === 'hot' ? '🔥 حار' : cat === 'cold' ? '❄️ بارد' : '🍿 سناك';
-            return (
-              <div key={`pending-${i}`} className="flex items-center justify-between px-4 py-2.5 pending-create">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium text-slate-800 text-sm">{meal.name}</span>
-                  <span className="pending-badge pending-badge-create">⏳ إضافة بانتظار الموافقة</span>
-                  <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${catCls}`}>
-                    {catLabel}
-                  </span>
-                  {meal.english_name && (
-                    <span className="text-slate-400 text-xs font-mono">({meal.english_name})</span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
           {meals.map((meal) => {
+            const isPendingCreate = !!meal._pendingCreate;
             const cat = meal.category ?? (meal.is_snack ? 'snack' : 'hot');
             const catCls = cat === 'hot' ? 'bg-red-100 text-red-700 hover:bg-red-200'
                          : cat === 'cold' ? 'bg-sky-100 text-sky-700 hover:bg-sky-200'
                                           : 'bg-amber-100 text-amber-700';
             const catLabel = cat === 'hot' ? '🔥 حار' : cat === 'cold' ? '❄️ بارد' : '🍿 سناك';
             const isUpdating = categoryUpdating === meal.id;
-            const pendingCls = pendingMap.hasDelete(meal.id) ? 'pending-delete'
+            const pendingCls = isPendingCreate ? ''
+                             : pendingMap.hasDelete(meal.id) ? 'pending-delete'
                              : pendingMap.hasUpdate(meal.id) ? 'pending-update' : '';
-            const pendingBadge = pendingMap.hasDelete(meal.id) ? { cls: 'pending-badge-delete', label: '⏳ حذف' }
+            const pendingBadge = isPendingCreate ? { cls: 'pending-badge-create', label: '⏳ بانتظار الموافقة' }
+                               : pendingMap.hasDelete(meal.id) ? { cls: 'pending-badge-delete', label: '⏳ حذف' }
                                : pendingMap.hasUpdate(meal.id) ? { cls: 'pending-badge-update', label: '⏳ تعديل' }
                                : null;
+            const nameCls = isPendingCreate ? 'text-slate-400' : 'text-slate-800';
+            const catBadgeCls = isPendingCreate ? 'opacity-60' : '';
             return (
             <div key={meal.id} className={`flex items-center justify-between px-4 py-2.5 hover:bg-slate-50 ${pendingCls}`}>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-medium text-slate-800 text-sm">{meal.name}</span>
+                <span className={`font-medium text-sm ${nameCls}`}>{meal.name}</span>
                 {pendingBadge && <span className={`pending-badge ${pendingBadge.cls}`}>{pendingBadge.label}</span>}
                 {meal.is_snack ? (
                   <span
-                    className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700"
+                    className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 ${catBadgeCls}`}
                     title="السناكات تبقى snack دائماً"
                   >
                     🍿 سناك
                   </span>
-                ) : canEdit ? (
+                ) : canEdit && !isPendingCreate ? (
                   <button
                     type="button"
                     onClick={() => onSetCategory(meal, cat === 'cold' ? 'hot' : 'cold')}
@@ -156,8 +142,8 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
                   </button>
                 ) : (
                   <span
-                    className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${catCls}`}
-                    title="ما عندك صلاحية تعديل الفئة"
+                    className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${catCls} ${catBadgeCls}`}
+                    title={isPendingCreate ? 'بانتظار الموافقة' : 'ما عندك صلاحية تعديل الفئة'}
                   >
                     {catLabel}
                   </span>
@@ -167,14 +153,14 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
                 )}
               </div>
               <div className="flex items-center gap-1">
-                {canEdit && (
+                {!isPendingCreate && canEdit && (
                   <button onClick={() => onEdit(meal)} title="تعديل" className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                     </svg>
                   </button>
                 )}
-                {canAdd && (
+                {!isPendingCreate && canAdd && (
                   <button
                     onClick={() => onDuplicate(meal)}
                     disabled={duplicating === meal.id}
@@ -190,7 +176,7 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
                     )}
                   </button>
                 )}
-                {canDelete && (
+                {!isPendingCreate && canDelete && (
                 <button
                   onClick={() => onDelete(meal.id)}
                   disabled={deleting === meal.id}
@@ -706,24 +692,24 @@ export default function MealList() {
     return { added, errors };
   };
 
-  const getMeals = (type: MealType, isSnack: boolean) => {
+  // أصناف معلّقة (إضافات بانتظار الموافقة) — تُدمج في نفس قائمة الصنف العادية
+  // مع flag `_pendingCreate` لرسمها بخط رمادي. بعد الموافقة تنقلب لصنف حقيقي
+  // ويرجع لونها الطبيعي تلقائياً (لأن السطر يصير من جدول meals مباشرة).
+  const getMeals = (type: MealType, isSnack: boolean): MealRow[] => {
     const q = search.trim().toLowerCase();
-    return meals.filter(m => {
-      if (m.type !== type || m.is_snack !== isSnack) return false;
+    const matchesQuery = (name: string, en?: string | null) => {
       if (!q) return true;
-      return (
-        m.name.toLowerCase().includes(q) ||
-        (m.english_name ?? '').toLowerCase().includes(q)
-      );
-    });
-  };
-
-  // أصناف "شبح" — إضافات بانتظار الموافقة. نُنشئها من الـpayload في pending_actions
-  // ونرسمها بنفس صفوف القسم عشان المستخدم يشوف ما أضافه قبل ما يقبله الأدمن.
-  const getPendingCreates = (type: MealType, isSnack: boolean): Meal[] => {
-    return myPending.getCreates()
+      return name.toLowerCase().includes(q) || (en ?? '').toLowerCase().includes(q);
+    };
+    const real: MealRow[] = meals.filter(m =>
+      m.type === type && m.is_snack === isSnack && matchesQuery(m.name, m.english_name)
+    );
+    const pending: MealRow[] = myPending.getCreates()
       .map(pa => pa.payload as Record<string, unknown> | null)
-      .filter((p): p is Record<string, unknown> => !!p && p.type === type && Boolean(p.is_snack) === isSnack)
+      .filter((p): p is Record<string, unknown> =>
+        !!p && p.type === type && Boolean(p.is_snack) === isSnack &&
+        matchesQuery(String(p.name ?? ''), (p.english_name as string) ?? '')
+      )
       .map((p, i) => ({
         id: `pending-create-${i}-${String(p.name ?? '')}`,
         name: String(p.name ?? '—'),
@@ -733,7 +719,9 @@ export default function MealList() {
         category: (p.category as ItemCategory | undefined),
         entity_type: (p.entity_type as EntityType | undefined),
         created_at: '',
+        _pendingCreate: true,
       }));
+    return [...real, ...pending].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
   };
 
   // ── Export ──────────────────────────────────────────────────────────────
@@ -920,7 +908,6 @@ export default function MealList() {
                 canEdit={canEdit}
                 canDelete={canDelete}
                 pendingMap={myPending}
-                pendingCreates={getPendingCreates(mealType, false)}
               />
               <MealSection
                 title={`سناكات ${MEAL_TYPE_LABELS[mealType]}`}
@@ -944,7 +931,6 @@ export default function MealList() {
                 canEdit={canEdit}
                 canDelete={canDelete}
                 pendingMap={myPending}
-                pendingCreates={getPendingCreates(mealType, true)}
               />
             </div>
           </div>

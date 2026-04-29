@@ -125,6 +125,35 @@ export default function MenuView() {
 
   const slotMap = useMemo(() => buildSlotMap(allItems), [allItems]);
 
+  // خريطة الأصناف المعلّقة (إضافات بانتظار الموافقة) لخلايا فارغة في المنيو.
+  // المفتاح: week|day|meal_type|sub|rowIndex (sub: 's' للسناك، 'm' للأساسي)
+  // كل خانة فارغة تتفقد لو فيها طلب pending وترسم اسم الصنف بخط رمادي.
+  const pendingCreateBySlot = useMemo(() => {
+    const m = new Map<string, { mealId: string; multiplier: number }>();
+    for (const pa of myPending.getCreates()) {
+      const p = pa.payload as Record<string, unknown> | null;
+      if (!p) continue;
+      if (p.entity_type && p.entity_type !== entityType) continue;
+      const week = Number(p.week_number);
+      const day = Number(p.day_of_week);
+      const mealType = p.meal_type as MealType | undefined;
+      const position = Number(p.position ?? 0);
+      const mealId = p.meal_id as string | undefined;
+      if (!mealId || !mealType || !week || Number.isNaN(day)) continue;
+      const isSnack = position >= 100;
+      const rowIndex = position % 100;
+      const key = `${week}|${day}|${mealType}|${isSnack ? 's' : 'm'}|${rowIndex}`;
+      m.set(key, { mealId, multiplier: Number(p.multiplier ?? 1) });
+    }
+    return m;
+  }, [myPending, entityType]);
+
+  const mealsById = useMemo(() => {
+    const m = new Map<string, Meal>();
+    for (const meal of meals) m.set(meal.id, meal);
+    return m;
+  }, [meals]);
+
   // For a given (week, day, meal_type) slot, return arrays of mains and snacks.
   const slotMainsAndSnacks = (week: WeekNumber, day: number, mealType: MealType) => {
     const items = slotMap.get(slotKey(week, day, mealType)) ?? [];
@@ -149,7 +178,6 @@ export default function MenuView() {
         if (editNeedsApproval && currentUser) {
           const r = await enqueueGenericDelete(supabase, currentUser, 'menu_item', existing.id, slotLabel);
           if (!r.ok) alert(`⚠ ${r.error}`);
-          else alert('✓ تم إرسال طلب الحذف للأدمن.');
           return;
         }
         await supabase.from('menu_items').delete().eq('id', existing.id);
@@ -165,21 +193,23 @@ export default function MenuView() {
       return;
     }
 
-    // إرسال طلب موافقة بدل التطبيق المباشر
+    // إرسال طلب موافقة بدل التطبيق المباشر — بدون alert نجاح
+    // عشان تعبئة الجدول سلسة، والمؤشر البصري (خط رمادي/شارة) كافٍ.
     if (editNeedsApproval && currentUser) {
       if (existing) {
         const r = await enqueueGenericUpdate(supabase, currentUser, 'menu_item', existing.id, slotLabel, { meal_id: mealId });
-        if (!r.ok) { alert(`⚠ ${r.error}`); return; }
+        if (!r.ok) alert(`⚠ ${r.error}`);
       } else {
         const category: ItemCategory = isSnack ? 'snack' : 'hot';
-        const allInSlot = slotMap.get(slotKey(week, day, mealType)) ?? [];
         const baseOffset = isSnack ? 100 : 0;
         const position = baseOffset + rowIndex;
+        // entity_name فريد لكل صف عشان dedup ما يستبدل صف بآخر —
+        // المستخدم يقدر يعبّي عدّة صفوف لنفس الخانة.
+        const createLabel = `${slotLabel} #${rowIndex + 1}`;
         const payload = { week_number: week, day_of_week: day, meal_type: mealType, meal_id: mealId, category, position, entity_type: entityType, multiplier: 1 };
-        const r = await enqueueGenericCreate(supabase, currentUser, 'menu_item', slotLabel, payload);
-        if (!r.ok) { alert(`⚠ ${r.error}`); return; }
+        const r = await enqueueGenericCreate(supabase, currentUser, 'menu_item', createLabel, payload);
+        if (!r.ok) alert(`⚠ ${r.error}`);
       }
-      alert('✓ تم إرسال الطلب للأدمن.');
       return;
     }
 
@@ -228,11 +258,10 @@ export default function MenuView() {
   const handleSetMultiplier = async (item: MenuItem, value: number) => {
     const v = Math.max(1, Math.min(100, Math.floor(value) || 1));
     if (v === item.multiplier) return;
-    // إرسال طلب موافقة بدل التطبيق المباشر
+    // إرسال طلب موافقة بدل التطبيق المباشر — بدون alert نجاح
     if (editNeedsApproval && currentUser) {
       const r = await enqueueGenericUpdate(supabase, currentUser, 'menu_item', item.id, `مضاعف "${item.meals?.name ?? ''}"`, { multiplier: v });
       if (!r.ok) alert(`⚠ ${r.error}`);
-      else alert(`✓ تم إرسال طلب تغيير المضاعف للأدمن.`);
       return;
     }
     // Optimistic update so the input stays responsive
@@ -335,7 +364,38 @@ export default function MenuView() {
     const item = list[rowIndex] ?? null;
 
     if (!item) {
-      // خلية فاضية: لو ما عند المستخدم صلاحية تعديل المنيو، تظهر فاضية ساكتة
+      // خلية فاضية — أولاً نتفقد لو فيها طلب إضافة معلّق للمستخدم الحالي.
+      // لو فيه، نعرض اسم الصنف بخط رمادي بدل علامة "+" حتى يقبل الأدمن.
+      const pendingKey = `${week}|${day}|${mealType}|${isSnack ? 's' : 'm'}|${rowIndex}`;
+      const pendingCreate = pendingCreateBySlot.get(pendingKey);
+      if (pendingCreate) {
+        const pcMeal = mealsById.get(pendingCreate.mealId);
+        const pcCat: ItemCategory = pcMeal?.category ?? (isSnack ? 'snack' : 'hot');
+        const pcTheme = CATEGORY_THEME[pcCat];
+        const pcMult = pendingCreate.multiplier;
+        return (
+          <div className="flex items-center gap-1 px-2 py-1.5" title="بانتظار موافقة الأدمن">
+            {!isSnack && (
+              <span className={`shrink-0 text-sm leading-none w-5 h-5 flex items-center justify-center rounded ${pcTheme.bg} ${pcTheme.text} opacity-60`}>
+                {pcTheme.icon}
+              </span>
+            )}
+            <span className="flex-1 text-right text-sm font-medium text-slate-400 truncate">
+              {pcMeal?.name ?? '—'}
+            </span>
+            <span className="shrink-0 text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1 leading-tight">
+              ⏳
+            </span>
+            {pcMult > 1 && (
+              <span className="shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 text-violet-400 bg-violet-50/50 border border-violet-200">
+                ×{pcMult}
+              </span>
+            )}
+          </div>
+        );
+      }
+
+      // ما فيه طلب معلّق: لو ما عند المستخدم صلاحية تعديل المنيو، تظهر فاضية ساكتة
       if (!canEdit) {
         return <div className="w-full h-full min-h-[34px]" />;
       }
