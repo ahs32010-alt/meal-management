@@ -927,10 +927,10 @@ html { scroll-behavior: smooth; }
 }
 .pending-create {
   position: relative;
-  background-color: rgba(220, 252, 231, 0.55) !important; /* emerald-100 */
-  outline: 1px dashed rgb(16, 185, 129); /* emerald-500 */
+  background-color: rgba(220, 252, 231, 0.22) !important; /* خفيف جداً */
+  outline: 1px dashed rgba(16, 185, 129, 0.45);
   outline-offset: -1px;
-  opacity: 0.92;
+  opacity: 0.62;  /* باهت — لين الأدمن يقبل ويرجع بلونه الطبيعي */
 }
 
 /* badge نصّي صغير يُرسم بداخل العنصر — يستخدم بإضافة <span class="pending-badge ..."> */

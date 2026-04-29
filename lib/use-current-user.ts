@@ -48,12 +48,14 @@ async function fetchUser(): Promise<AppUser | null> {
   if (inflight) return inflight;
   inflight = (async () => {
     const supabase = createClient();
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth.user) return null;
+    // نستخدم getSession() بدل getUser() — getSession يقرأ من localStorage
+    // محلياً بلا قفل ولا طلب شبكة، فيتفادى التصادم لما عدة hooks ينادون معاً.
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) return null;
     const { data } = await supabase
       .from('app_users')
       .select('*')
-      .eq('id', auth.user.id)
+      .eq('id', session.user.id)
       .maybeSingle();
     return (data as AppUser | null) ?? null;
   })();

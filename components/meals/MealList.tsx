@@ -387,7 +387,7 @@ export default function MealList() {
         if (deleteNeedsApproval && currentUser) {
           const r = await enqueueGenericDelete(supabase, currentUser, 'meal', id, meal?.name ?? null);
           if (!r.ok) alert(`⚠ ${r.error}`);
-          else alert('✓ تم إرسال طلب الحذف للأدمن.');
+          else myPending.refresh();
           setDeleting(null);
           return;
         }
@@ -454,7 +454,7 @@ export default function MealList() {
     if (editNeedsApproval && currentUser) {
       const r = await enqueueGenericUpdate(supabase, currentUser, 'meal', meal.id, meal.name, { category: next });
       if (!r.ok) alert(`⚠ ${r.error}`);
-      else alert(`✓ تم إرسال طلب تغيير فئة "${meal.name}" للأدمن.`);
+      else myPending.refresh();
       return;
     }
     const prev = meal.category;
@@ -969,7 +969,7 @@ export default function MealList() {
           defaultIsSnack={modalDefaults.isSnack}
           entityType={entityType}
           onClose={() => setModalOpen(false)}
-          onSaved={() => { setModalOpen(false); fetchMeals(); }}
+          onSaved={() => { setModalOpen(false); fetchMeals(); myPending.refresh(); }}
         />
       )}
 

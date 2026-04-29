@@ -53,3 +53,15 @@ end $$;
 create index if not exists idx_pending_actions_status on pending_actions(status);
 create index if not exists idx_pending_actions_user on pending_actions(user_id);
 create index if not exists idx_pending_actions_created on pending_actions(created_at desc);
+
+-- نضيف الجدول لـrealtime publication عشان أي تغيير (insert/update/delete) ينعكس
+-- فوراً عند المستخدمين بدون refresh للصفحة. idempotent — ما يكسر إذا مضاف مسبقاً.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and tablename = 'pending_actions'
+  ) then
+    alter publication supabase_realtime add table pending_actions;
+  end if;
+end $$;

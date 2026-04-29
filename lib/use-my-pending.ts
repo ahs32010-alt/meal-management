@@ -24,6 +24,8 @@ export interface MyPendingState {
   getCreates: () => PendingAction[];
   // أي pending action على هذا الـid (update/delete)
   getForId: (entityId: string) => PendingAction | undefined;
+  // إعادة جلب يدوية (في حال realtime مش مفعَّل أو نبي ضمان)
+  refresh: () => void;
 }
 
 export function useMyPending(entityType: PendingEntityType): MyPendingState {
@@ -77,5 +79,6 @@ export function useMyPending(entityType: PendingEntityType): MyPendingState {
     hasDelete: (id) => deletes.has(id),
     getCreates: () => items.filter(i => i.action === 'create'),
     getForId: (id) => byId.get(id),
+    refresh: () => { fetchData(); },
   };
 }

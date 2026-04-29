@@ -213,7 +213,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
           if (!r.ok) {
             setNotice(r.duplicate ? `⚠ ${r.error}` : `⚠ تعذّر إرسال طلب الحذف: ${r.error}`);
           } else {
-            setNotice('✓ تم إرسال طلب الحذف للأدمن بانتظار الموافقة.');
+            myPending.refresh();
           }
           setDeleting(null);
           return;
@@ -269,6 +269,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   const handleSaved = () => {
     setIsModalOpen(false);
     fetchData();
+    myPending.refresh();
   };
 
   const handleExport = () => {
