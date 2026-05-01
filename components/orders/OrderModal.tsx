@@ -138,25 +138,35 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       if (cancelled) return;
 
       const items = (data as unknown as MenuItem[] | null) ?? [];
+      // الفئة الفعلية تُؤخذ من meals.category (المصدر الموحد) — menu_items.category
+      // قد يحمل قيمة قديمة (مثلاً 'hot' افتراضي) ما تعكس تصنيف الصنف الحالي.
+      const itemsWithCat = items.map(it => {
+        const fullMeal = meals.find(m => m.id === it.meal_id);
+        const effectiveCat: ItemCategory =
+          (fullMeal?.category as ItemCategory | undefined) ??
+          (it.category as ItemCategory | undefined) ??
+          (fullMeal?.is_snack || it.meals?.is_snack ? 'snack' : 'hot');
+        return { it, effectiveCat };
+      });
       // Sort: hot, cold, snack — then position
-      const sorted = items.sort((a, b) => {
+      const sorted = itemsWithCat.sort((a, b) => {
         const r = (c: ItemCategory) => c === 'hot' ? 0 : c === 'cold' ? 1 : 2;
-        if (a.category !== b.category) return r(a.category) - r(b.category);
-        return a.position - b.position;
+        if (a.effectiveCat !== b.effectiveCat) return r(a.effectiveCat) - r(b.effectiveCat);
+        return a.it.position - b.it.position;
       });
 
-      setSelected(sorted.map(it => ({
+      setSelected(sorted.map(({ it, effectiveCat }) => ({
         meal_id: it.meal_id,
         display_name: it.meals?.name ?? '',
         extra_quantity: 0,
-        category: it.category,
+        category: effectiveCat,
         multiplier: it.multiplier ?? 1,
       })));
       setAutoFilledKey(key);
     })();
 
     return () => { cancelled = true; };
-  }, [isEdit, weekNumber, dayOfWeek, mealType, supabase, autoFilledKey, entityType]);
+  }, [isEdit, weekNumber, dayOfWeek, mealType, supabase, autoFilledKey, entityType, meals]);
 
   const handleTypeChange = (t: MealType) => {
     setMealType(t);
@@ -186,16 +196,25 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     }
     const { data } = refillRes;
     const items = (data as unknown as MenuItem[] | null) ?? [];
-    const sorted = items.sort((a, b) => {
-      const r = (c: ItemCategory) => c === 'hot' ? 0 : c === 'cold' ? 1 : 2;
-      if (a.category !== b.category) return r(a.category) - r(b.category);
-      return a.position - b.position;
+    // الفئة من meals.category (المصدر الموحد) — نفس منطق التعبئة التلقائية أعلاه.
+    const itemsWithCat = items.map(it => {
+      const fullMeal = meals.find(m => m.id === it.meal_id);
+      const effectiveCat: ItemCategory =
+        (fullMeal?.category as ItemCategory | undefined) ??
+        (it.category as ItemCategory | undefined) ??
+        (fullMeal?.is_snack || it.meals?.is_snack ? 'snack' : 'hot');
+      return { it, effectiveCat };
     });
-    setSelected(sorted.map(it => ({
+    const sorted = itemsWithCat.sort((a, b) => {
+      const r = (c: ItemCategory) => c === 'hot' ? 0 : c === 'cold' ? 1 : 2;
+      if (a.effectiveCat !== b.effectiveCat) return r(a.effectiveCat) - r(b.effectiveCat);
+      return a.it.position - b.it.position;
+    });
+    setSelected(sorted.map(({ it, effectiveCat }) => ({
       meal_id: it.meal_id,
       display_name: it.meals?.name ?? '',
       extra_quantity: 0,
-      category: it.category,
+      category: effectiveCat,
       multiplier: it.multiplier ?? 1,
     })));
   };
