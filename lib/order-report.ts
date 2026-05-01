@@ -168,9 +168,12 @@ export async function buildOrderReport(
         allMealDetails[item.meal_id] = displayMealMap[item.meal_id];
       }
     });
-    excludedItems.forEach(({ alternative }) => {
+    excludedItems.forEach(({ meal, alternative }) => {
       if (alternative) {
-        altQty[alternative.id] = (altQty[alternative.id] || 0) + 1;
+        // البديل يتزامن مع مضاعف الصنف المستبعد: لو الفول ×٢، كل مستفيد
+        // مستبعَد من الفول يحتاج حصّتين من البديل أيضاً.
+        const mult = multiplierMap[meal.id] ?? 1;
+        altQty[alternative.id] = (altQty[alternative.id] || 0) + mult;
         allMealDetails[alternative.id] = alternative;
       }
     });
