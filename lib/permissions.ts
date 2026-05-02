@@ -12,6 +12,7 @@ export type PageKey =
   | 'meals'
   | 'menu'
   | 'orders'
+  | 'delivery_orders'
   | 'reports'
   | 'stickers'
   | 'settings';
@@ -47,8 +48,9 @@ export const PAGES: { key: PageKey; label: string; href: string }[] = [
   { key: 'companions',    label: 'المرافقون',    href: '/companions' },
   { key: 'meals',         label: 'الأصناف',      href: '/meals' },
   { key: 'menu',          label: 'قائمة الطعام', href: '/menu' },
-  { key: 'orders',        label: 'أوامر التشغيل', href: '/orders' },
-  { key: 'reports',       label: 'التقارير',     href: '/reports' },
+  { key: 'orders',          label: 'أوامر التشغيل', href: '/orders' },
+  { key: 'delivery_orders', label: 'أوامر التسليم', href: '/delivery-orders' },
+  { key: 'reports',         label: 'التقارير',     href: '/reports' },
   { key: 'stickers',      label: 'الستيكرات',    href: '/stickers' },
   { key: 'settings',      label: 'الإعدادات',    href: '/settings' },
 ];
@@ -70,8 +72,9 @@ export const PAGE_AVAILABLE_ACTIONS: Record<PageKey, PermissionAction[]> = {
   companions:    ['view', 'add', 'edit', 'delete'],
   meals:         ['view', 'add', 'edit', 'delete'],
   menu:          ['view', 'edit'],
-  orders:        ['view', 'add', 'edit', 'delete'],
-  reports:       ['view'],
+  orders:          ['view', 'add', 'edit', 'delete'],
+  delivery_orders: ['view', 'add', 'edit', 'delete'],
+  reports:         ['view'],
   stickers:      ['view'],
   settings:      ['view', 'edit'],
 };

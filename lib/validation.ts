@@ -8,6 +8,7 @@ const PAGE_KEYS: readonly PageKey[] = [
   'meals',
   'menu',
   'orders',
+  'delivery_orders',
   'reports',
   'stickers',
   'settings',
@@ -104,3 +105,74 @@ export function parseJson<T>(schema: z.ZodType<T>, body: unknown): ParseResult<T
   const path = first.path.length ? first.path.join('.') + ': ' : '';
   return { ok: false, error: `${path}${first.message}`, status: 400 };
 }
+
+// ── أوامر التسليم ────────────────────────────────────────────────────────────
+
+const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'تاريخ غير صالح');
+const timeStringSchema = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'وقت غير صالح');
+
+export const citySchema = z.object({
+  name: trimmedString(1, 120),
+});
+export type CityInput = z.infer<typeof citySchema>;
+
+export const deliveryLocationSchema = z.object({
+  name: trimmedString(1, 200),
+  city_id: uuidSchema.nullable().optional(),
+});
+export type DeliveryLocationInput = z.infer<typeof deliveryLocationSchema>;
+
+export const deliveryCreatorSchema = z.object({
+  name: trimmedString(1, 200),
+  phone: trimmedString(1, 40).nullable().optional(),
+});
+export type DeliveryCreatorInput = z.infer<typeof deliveryCreatorSchema>;
+
+export const deliveryMealSchema = z.object({
+  name: trimmedString(1, 200),
+  meal_type: mealTypeSchema,
+  is_snack: z.boolean().default(false),
+});
+export type DeliveryMealInput = z.infer<typeof deliveryMealSchema>;
+
+const optionalText = (max: number) =>
+  z.string().trim().max(max).nullable().optional();
+
+export const deliveryPrintHeaderSchema = z.object({
+  company_name_en: optionalText(200),
+  company_name_ar: optionalText(200),
+  address_line1:   optionalText(300),
+  address_line2:   optionalText(300),
+  cr_number:       optionalText(60),
+  vat_number:      optionalText(60),
+  logo_url:        optionalText(2048),
+  title_ar:        optionalText(120),
+  title_en:        optionalText(120),
+});
+export type DeliveryPrintHeaderInput = z.infer<typeof deliveryPrintHeaderSchema>;
+
+const deliveryMealTypeSchema = z.enum(['breakfast', 'lunch', 'dinner', 'all']);
+
+const deliveryOrderItemSchema = z.object({
+  display_name: trimmedString(1, 300),
+  meal_type: deliveryMealTypeSchema,
+  quantity: z.number().int().min(0).max(1_000_000),
+  receiver_signature_url: z.string().trim().max(2048).nullable().optional(),
+});
+
+export const deliveryOrderSchema = z.object({
+  source_order_id: uuidSchema.nullable().optional(),
+  date: dateStringSchema,
+  meal_type: deliveryMealTypeSchema,
+  delivery_location_id: uuidSchema.nullable().optional(),
+  creator_id: uuidSchema.nullable().optional(),
+  created_by_name: trimmedString(1, 200).nullable().optional(),
+  created_by_phone: trimmedString(1, 40).nullable().optional(),
+  delivery_date: dateStringSchema.nullable().optional(),
+  delivery_time: timeStringSchema.nullable().optional(),
+  notes: z.string().trim().max(4000).nullable().optional(),
+  creator_signature_url: z.string().trim().max(2048).nullable().optional(),
+  receiver_signature_url: z.string().trim().max(2048).nullable().optional(),
+  items: z.array(deliveryOrderItemSchema).min(1, 'يرجى إضافة صنف واحد على الأقل').max(500),
+});
+export type DeliveryOrderInput = z.infer<typeof deliveryOrderSchema>;

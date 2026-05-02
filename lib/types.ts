@@ -174,3 +174,93 @@ export interface StickerData {
   excludedItems: Meal[];
   alternativeItems: Meal[];
 }
+
+// ── أوامر التسليم ────────────────────────────────────────────────────────────
+// نوع الوجبة في أوامر التسليم — يضيف 'all' (الثلاث وجبات) فوق الأنواع الأساسية.
+// لا يُستخدم في أوامر التشغيل (daily_orders).
+export type DeliveryMealType = MealType | 'all';
+
+export const DELIVERY_MEAL_TYPE_LABELS: Record<DeliveryMealType, string> = {
+  breakfast: 'فطور',
+  lunch:     'غداء',
+  dinner:    'عشاء',
+  all:       'الثلاث وجبات',
+};
+
+export interface City {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface DeliveryLocation {
+  id: string;
+  name: string;
+  city_id?: string | null;
+  created_at: string;
+  cities?: City | null;
+}
+
+export interface DeliveryCreator {
+  id: string;
+  name: string;
+  phone?: string | null;
+  created_at: string;
+}
+
+// أصناف أوامر التسليم — جدول مستقل عن `meals` (الذي يخص قوائم المستفيدين/المرافقين).
+export interface DeliveryMeal {
+  id: string;
+  name: string;
+  meal_type: MealType;
+  is_snack: boolean;
+  created_at: string;
+}
+
+// بيانات هيدر طباعة أمر التسليم (صفّ واحد فقط في جدول delivery_print_header)
+export interface DeliveryPrintHeader {
+  id: number;
+  company_name_en?: string | null;
+  company_name_ar?: string | null;
+  address_line1?: string | null;
+  address_line2?: string | null;
+  cr_number?: string | null;
+  vat_number?: string | null;
+  logo_url?: string | null;
+  title_ar?: string | null;
+  title_en?: string | null;
+  updated_at: string;
+}
+
+export interface DeliveryOrderItem {
+  id: string;
+  delivery_order_id: string;
+  display_name: string;
+  meal_type: DeliveryMealType;
+  quantity: number;
+  receiver_signature_url?: string | null;
+  position: number;
+  created_at: string;
+}
+
+export interface DeliveryOrder {
+  id: string;
+  order_number: string;
+  source_order_id?: string | null;
+  date: string;
+  meal_type: DeliveryMealType;
+  delivery_location_id?: string | null;
+  creator_id?: string | null;
+  created_by_name?: string | null;
+  created_by_phone?: string | null;
+  delivery_date?: string | null;
+  delivery_time?: string | null;
+  notes?: string | null;
+  creator_signature_url?: string | null;
+  receiver_signature_url?: string | null;
+  created_at: string;
+  updated_at: string;
+  delivery_locations?: DeliveryLocation | null;
+  delivery_creators?: DeliveryCreator | null;
+  delivery_order_items?: DeliveryOrderItem[];
+}
