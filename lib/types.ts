@@ -184,7 +184,7 @@ export const DELIVERY_MEAL_TYPE_LABELS: Record<DeliveryMealType, string> = {
   breakfast: 'فطور',
   lunch:     'غداء',
   dinner:    'عشاء',
-  all:       'الثلاث وجبات',
+  all:       'فطور + غداء + عشاء',
 };
 
 export interface City {
@@ -229,6 +229,7 @@ export interface DeliveryPrintHeader {
   logo_url?: string | null;
   title_ar?: string | null;
   title_en?: string | null;
+  default_creator_signature_url?: string | null;
   updated_at: string;
 }
 

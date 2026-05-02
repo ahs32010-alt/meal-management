@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { City, DailyOrder, DeliveryCreator, DeliveryLocation, DeliveryMeal, DeliveryMealType, DeliveryOrder, MealType } from '@/lib/types';
+import type { City, DailyOrder, DeliveryLocation, DeliveryMeal, DeliveryMealType, DeliveryOrder, MealType } from '@/lib/types';
 import { DELIVERY_MEAL_TYPE_LABELS, MEAL_TYPE_LABELS } from '@/lib/types';
 
 interface SourceMode {
@@ -54,13 +54,6 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
   const [mealType, setMealType] = useState<DeliveryMealType>(editingOrder?.meal_type ?? 'lunch');
   const [locationId, setLocationId] = useState<string>(editingOrder?.delivery_location_id ?? '');
   const [cityId, setCityId] = useState<string>(editingOrder?.delivery_locations?.city_id ?? '');
-  const [creatorId, setCreatorId] = useState<string>(editingOrder?.creator_id ?? '');
-  const [createdByName, setCreatedByName] = useState(editingOrder?.created_by_name ?? '');
-  const [createdByPhone, setCreatedByPhone] = useState(editingOrder?.created_by_phone ?? '');
-  const [deliveryDate, setDeliveryDate] = useState(editingOrder?.delivery_date ?? '');
-  const [deliveryTime, setDeliveryTime] = useState(
-    editingOrder?.delivery_time ? editingOrder.delivery_time.slice(0, 5) : ''
-  );
   const [notes, setNotes] = useState(editingOrder?.notes ?? '');
   const [creatorSignature, setCreatorSignature] = useState<string | null>(editingOrder?.creator_signature_url ?? null);
   const [receiverSignature, setReceiverSignature] = useState<string | null>(editingOrder?.receiver_signature_url ?? null);
@@ -79,7 +72,6 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
   // Lookups
   const [cities, setCities] = useState<City[]>([]);
   const [locations, setLocations] = useState<DeliveryLocation[]>([]);
-  const [creators, setCreators] = useState<DeliveryCreator[]>([]);
   const [deliveryMeals, setDeliveryMeals] = useState<DeliveryMeal[]>([]);
   const [productionOrders, setProductionOrders] = useState<DailyOrder[]>([]);
 
@@ -92,10 +84,6 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
   const [showAddLocation, setShowAddLocation] = useState(false);
   const [newLocationName, setNewLocationName] = useState('');
   const [savingLocation, setSavingLocation] = useState(false);
-  const [showAddCreator, setShowAddCreator] = useState(false);
-  const [newCreatorName, setNewCreatorName] = useState('');
-  const [newCreatorPhone, setNewCreatorPhone] = useState('');
-  const [savingCreator, setSavingCreator] = useState(false);
   const [uploadingSig, setUploadingSig] = useState<'creator' | 'receiver' | null>(null);
   const [loadingFromOrder, setLoadingFromOrder] = useState(false);
 
@@ -119,10 +107,9 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
   // Initial load
   useEffect(() => {
     (async () => {
-      const [citiesRes, locsRes, creatorsRes, mealsRes, ordersRes] = await Promise.all([
+      const [citiesRes, locsRes, mealsRes, ordersRes] = await Promise.all([
         fetch('/api/cities').then(r => r.ok ? r.json() : []),
         fetch('/api/delivery-locations').then(r => r.ok ? r.json() : []),
-        fetch('/api/delivery-creators').then(r => r.ok ? r.json() : []),
         fetch('/api/delivery-meals').then(r => r.ok ? r.json() : []),
         supabase.from('daily_orders')
           .select('id, date, meal_type, week_number, day_of_week, entity_type, created_at')
@@ -131,7 +118,6 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
       ]);
       setCities(citiesRes ?? []);
       setLocations(locsRes ?? []);
-      setCreators(creatorsRes ?? []);
       setDeliveryMeals(mealsRes ?? []);
       setProductionOrders((ordersRes.data ?? []) as unknown as DailyOrder[]);
     })();
@@ -263,40 +249,6 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
       if (loc?.city_id && loc.city_id !== cityId) setCityId(loc.city_id);
     }
   }, [locationId, locations, cityId]);
-
-  const onPickCreator = (id: string) => {
-    setCreatorId(id);
-    if (!id) return;
-    const c = creators.find(x => x.id === id);
-    if (c) {
-      setCreatedByName(c.name);
-      setCreatedByPhone(c.phone ?? '');
-    }
-  };
-
-  const handleAddCreator = async () => {
-    const name = newCreatorName.trim();
-    if (!name) return;
-    setSavingCreator(true);
-    try {
-      const res = await fetch('/api/delivery-creators', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, phone: newCreatorPhone.trim() || null }),
-      });
-      const j = await res.json();
-      if (!res.ok) { alert(j.error ?? 'تعذّر إضافة الشخص'); return; }
-      setCreators(prev => [...prev, j].sort((a, b) => a.name.localeCompare(b.name)));
-      setCreatorId(j.id);
-      setCreatedByName(j.name);
-      setCreatedByPhone(j.phone ?? '');
-      setShowAddCreator(false);
-      setNewCreatorName('');
-      setNewCreatorPhone('');
-    } finally {
-      setSavingCreator(false);
-    }
-  };
 
   const loadFromProductionOrder = async (orderId: string) => {
     setLoadingFromOrder(true);
@@ -433,11 +385,11 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
         date,
         meal_type: mealType,
         delivery_location_id: locationId,
-        creator_id: creatorId || null,
-        created_by_name: createdByName.trim() || null,
-        created_by_phone: createdByPhone.trim() || null,
-        delivery_date: deliveryDate || null,
-        delivery_time: deliveryTime || null,
+        creator_id: null,
+        created_by_name: null,
+        created_by_phone: null,
+        delivery_date: null,
+        delivery_time: null,
         notes: notes.trim() || null,
         creator_signature_url: creatorSignature,
         receiver_signature_url: receiverSignature,
@@ -688,118 +640,6 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
                     </button>
                   </div>
                 )}
-              </div>
-            </div>
-
-            {/* بيانات المنشئ */}
-            <div className="border border-slate-200 rounded-xl p-4 space-y-3 bg-slate-50/50">
-              <p className="font-semibold text-sm text-slate-700">أُنشئ بواسطة</p>
-
-              <div>
-                <label className="label">اختر شخص محفوظ</label>
-                <div className="flex gap-2">
-                  <select
-                    value={creatorId}
-                    onChange={e => onPickCreator(e.target.value)}
-                    className="input-field flex-1"
-                  >
-                    <option value="">— اختر من القائمة —</option>
-                    {creators.map(c => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}{c.phone ? ` — ${c.phone}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddCreator(true)}
-                    className="px-3 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 text-sm font-semibold"
-                    title="إضافة شخص"
-                  >
-                    +
-                  </button>
-                </div>
-                {showAddCreator && (
-                  <div className="mt-2 p-2 border border-emerald-200 bg-emerald-50 rounded-lg space-y-2">
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={newCreatorName}
-                        onChange={e => setNewCreatorName(e.target.value)}
-                        placeholder="الاسم"
-                        className="input-field flex-1 py-1.5 text-sm"
-                        autoFocus
-                      />
-                      <input
-                        type="tel"
-                        value={newCreatorPhone}
-                        onChange={e => setNewCreatorPhone(e.target.value)}
-                        placeholder="رقم الجوال (اختياري)"
-                        className="input-field flex-1 py-1.5 text-sm"
-                        dir="ltr"
-                      />
-                    </div>
-                    <div className="flex justify-end gap-2">
-                      <button
-                        type="button"
-                        disabled={savingCreator}
-                        onClick={handleAddCreator}
-                        className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
-                      >
-                        {savingCreator ? '...' : 'حفظ'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { setShowAddCreator(false); setNewCreatorName(''); setNewCreatorPhone(''); }}
-                        className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm"
-                      >
-                        إلغاء
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="label">الاسم {creatorId && <span className="text-xs text-slate-400 font-normal">(محفوظ على الأمر)</span>}</label>
-                  <input
-                    type="text"
-                    value={createdByName}
-                    onChange={e => setCreatedByName(e.target.value)}
-                    placeholder="اسم منشئ الأمر"
-                    className="input-field"
-                  />
-                </div>
-                <div>
-                  <label className="label">رقم الجوال</label>
-                  <input
-                    type="tel"
-                    value={createdByPhone}
-                    onChange={e => setCreatedByPhone(e.target.value)}
-                    placeholder="05xxxxxxxx"
-                    className="input-field"
-                    dir="ltr"
-                  />
-                </div>
-                <div>
-                  <label className="label">تاريخ التوصيل</label>
-                  <input
-                    type="date"
-                    value={deliveryDate}
-                    onChange={e => setDeliveryDate(e.target.value)}
-                    className="input-field"
-                  />
-                </div>
-                <div>
-                  <label className="label">وقت التوصيل</label>
-                  <input
-                    type="time"
-                    value={deliveryTime}
-                    onChange={e => setDeliveryTime(e.target.value)}
-                    className="input-field"
-                  />
-                </div>
               </div>
             </div>
 

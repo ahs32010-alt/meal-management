@@ -11,6 +11,16 @@ function arabicDate(dateStr: string) {
   return `${dayNames[d.getDay()]} ${day}-${m}-${y}`;
 }
 
+// تنسيق التاريخ لختم RELEASED — مثلاً: 24-Apr-26
+function stampDate(dateStr: string) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const d = new Date(dateStr);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = months[d.getMonth()];
+  const year = String(d.getFullYear()).slice(-2);
+  return `${day}-${month}-${year}`;
+}
+
 const PALETTE = {
   title: { bg: '#eff6ff', border: '#1e3a8a', text: '#1e3a8a' },
   header: { bg: '#0ea5e9', text: '#fff' },
@@ -266,29 +276,6 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
           </div>
         </div>
 
-        {/* بيانات المنشئ */}
-        <div style={s.creatorBox}>
-          <div style={s.creatorHeader}>أُنشئ بواسطة</div>
-          <div style={s.creatorGrid}>
-            <div style={s.infoCell}>
-              <span style={s.infoLabel}>الاسم:</span>
-              <span style={s.infoValue}>{order.created_by_name ?? '—'}</span>
-            </div>
-            <div style={{ ...s.infoCell, borderLeft: 'none' }}>
-              <span style={s.infoLabel}>الجوال:</span>
-              <span style={{ ...s.infoValue, direction: 'ltr' }}>{order.created_by_phone ?? '—'}</span>
-            </div>
-            <div style={{ ...s.infoCell, borderBottom: 'none' }}>
-              <span style={s.infoLabel}>تاريخ التوصيل:</span>
-              <span style={s.infoValue}>{order.delivery_date ? arabicDate(order.delivery_date) : '—'}</span>
-            </div>
-            <div style={{ ...s.infoCell, borderLeft: 'none', borderBottom: 'none' }}>
-              <span style={s.infoLabel}>وقت التوصيل:</span>
-              <span style={s.infoValue}>{order.delivery_time ? order.delivery_time.slice(0, 5) : '—'}</span>
-            </div>
-          </div>
-        </div>
-
         {/* جدول الأصناف */}
         <table style={s.table}>
           <thead>
@@ -334,13 +321,8 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
         <div style={s.signatureBox}>
           <div style={s.sigBlock}>
             <div style={s.sigBlockHeader}>توقيع المنشئ</div>
-            <div style={s.sigBlockBody}>
-              {order.creator_signature_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={order.creator_signature_url} alt="توقيع المنشئ" style={{ maxHeight: 70, maxWidth: '100%' }} />
-              ) : (
-                <span style={{ color: '#94a3b8', fontSize: 11 }}>(فراغ للتوقيع اليدوي)</span>
-              )}
+            <div style={{ ...s.sigBlockBody, padding: 8 }}>
+              <ReleasedStamp date={order.date} />
             </div>
           </div>
           <div style={s.sigBlock}>
@@ -357,6 +339,66 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
         </div>
       </div>
     </>
+  );
+}
+
+// ── ReleasedStamp ───────────────────────────────────────────────────────────
+// ختم RELEASED — مرسوم بالـHTML/CSS، التاريخ في المنتصف ديناميكي
+function ReleasedStamp({ date }: { date: string }) {
+  const blue = '#1d4ed8';
+  return (
+    <div
+      dir="ltr"
+      style={{
+        border: '2.5px solid #000',
+        borderRadius: 6,
+        padding: '6px 14px 8px',
+        background: '#fff',
+        textAlign: 'center',
+        fontFamily: 'Arial, "Helvetica Neue", sans-serif',
+        display: 'inline-block',
+        lineHeight: 1.1,
+      }}
+    >
+      <div style={{
+        color: blue,
+        fontSize: 28,
+        fontWeight: 800,
+        letterSpacing: 2,
+        marginBottom: 4,
+      }}>
+        RELEASED
+      </div>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+      }}>
+        <div style={{ color: blue, fontSize: 14, fontWeight: 700, lineHeight: 1.05 }}>
+          CK<br />01
+        </div>
+        <div style={{
+          border: '1.2px solid #000',
+          padding: '4px 14px',
+          color: '#dc2626',
+          fontSize: 18,
+          fontWeight: 800,
+          minWidth: 110,
+        }}>
+          {stampDate(date)}
+        </div>
+        <div style={{ color: blue, fontSize: 14, fontWeight: 700, lineHeight: 1.05 }}>
+          CK<br />01
+        </div>
+      </div>
+      <div style={{ color: blue, fontSize: 12, fontWeight: 700, marginTop: 4 }}>
+        Al-Adamah - Central Kitchen
+      </div>
+      <div style={{ color: blue, fontSize: 12, fontWeight: 700 }}>
+        Rawabi Alsham
+      </div>
+    </div>
   );
 }
 

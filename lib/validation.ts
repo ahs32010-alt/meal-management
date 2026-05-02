@@ -148,6 +148,7 @@ export const deliveryPrintHeaderSchema = z.object({
   logo_url:        optionalText(2048),
   title_ar:        optionalText(120),
   title_en:        optionalText(120),
+  default_creator_signature_url: optionalText(2048),
 });
 export type DeliveryPrintHeaderInput = z.infer<typeof deliveryPrintHeaderSchema>;
 

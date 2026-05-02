@@ -67,6 +67,7 @@ export default function DeliveryPrintHeaderModal({ onClose }: Props) {
           logo_url:        data.logo_url ?? null,
           title_ar:        data.title_ar ?? null,
           title_en:        data.title_en ?? null,
+          default_creator_signature_url: data.default_creator_signature_url ?? null,
         }),
       });
       const j = await res.json();

@@ -50,6 +50,7 @@ export async function PUT(request: NextRequest) {
     logo_url: parsed.data.logo_url ?? null,
     title_ar: parsed.data.title_ar ?? null,
     title_en: parsed.data.title_en ?? null,
+    default_creator_signature_url: parsed.data.default_creator_signature_url ?? null,
   };
 
   const { data, error } = await supabase
