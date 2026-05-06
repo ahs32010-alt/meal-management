@@ -10,7 +10,7 @@ export type BackupTriggerType = 'auto_daily' | 'manual' | 'pre_restore';
 // ترتيب الإدراج:
 //   1) meals (مرجع لكل شيء تقريباً)
 //   2) beneficiaries (يشمل المستفيدين والمرافقين)
-//   3) daily_orders (يجب أن يسبق order_items)
+//   3) daily_orders (يجب أن يسبق order_items + delivery_orders)
 //   4) custom_transliterations (مستقل)
 //   5) meal_alternatives (يعتمد على meals فقط)
 //   6) exclusions (يعتمد على beneficiaries + meals)
@@ -18,6 +18,14 @@ export type BackupTriggerType = 'auto_daily' | 'manual' | 'pre_restore';
 //   8) menu_items (يعتمد على meals)
 //   9) order_items (يعتمد على daily_orders + meals)
 //  10) sticker_splits (يعتمد على daily_orders + beneficiaries)
+//  ── منظومة أوامر التسليم ──
+//  11) cities (مستقل)
+//  12) delivery_locations (يعتمد على cities)
+//  13) delivery_meals (مستقل — أصناف التسليم منفصلة عن meals)
+//  14) delivery_creators (مستقل — أشخاص منشئون)
+//  15) delivery_print_header (مستقل — صف واحد، إعدادات هيدر الطباعة)
+//  16) delivery_orders (يعتمد على delivery_locations + daily_orders + delivery_creators)
+//  17) delivery_order_items (يعتمد على delivery_orders)
 export const BACKUP_TABLES = [
   'meals',
   'beneficiaries',
@@ -29,6 +37,13 @@ export const BACKUP_TABLES = [
   'menu_items',
   'order_items',
   'sticker_splits',
+  'cities',
+  'delivery_locations',
+  'delivery_meals',
+  'delivery_creators',
+  'delivery_print_header',
+  'delivery_orders',
+  'delivery_order_items',
 ] as const;
 
 export type BackupTableName = (typeof BACKUP_TABLES)[number];
@@ -81,6 +96,13 @@ const TABLE_SELECTS: Record<BackupTableName, string> = {
   menu_items: '*',
   order_items: '*',
   sticker_splits: '*',
+  cities: '*',
+  delivery_locations: '*',
+  delivery_meals: '*',
+  delivery_creators: '*',
+  delivery_print_header: '*',
+  delivery_orders: '*',
+  delivery_order_items: '*',
 };
 
 /**
@@ -348,20 +370,35 @@ export async function restoreFromSnapshot(
   const warnings: string[] = [];
   const inserted: Record<BackupTableName, number> = {} as Record<BackupTableName, number>;
 
-  // 1) محو البيانات الحالية. نمسح الجداول الأم أولاً، والتعليقات FKs ON DELETE CASCADE
-  //    تتولّى تنظيف الجداول التابعة. الجداول المستقلة نحذفها صراحة.
-  //    ترتيب الحذف:
-  //      a) order_items (يحذف بقاء سواء كان عبر cascade أو مباشرة)
-  //      b) sticker_splits
-  //      c) daily_orders
-  //      d) menu_items
-  //      e) beneficiary_fixed_meals
-  //      f) exclusions
-  //      g) meal_alternatives
-  //      h) beneficiaries
-  //      i) meals
-  //      j) custom_transliterations
+  // 1) محو البيانات الحالية. نمسح الجداول التابعة أولاً ثم الأم.
+  //    ترتيب الحذف يحترم FKs (الجداول التابعة قبل الأم):
+  //      ── منظومة أوامر التسليم (تعتمد على daily_orders) ──
+  //      a) delivery_order_items (تابع لـ delivery_orders)
+  //      b) delivery_orders       (تابع لـ delivery_locations + daily_orders + delivery_creators)
+  //      c) delivery_print_header (مستقل — صف واحد)
+  //      d) delivery_creators     (مستقل)
+  //      e) delivery_meals        (مستقل)
+  //      f) delivery_locations    (تابع لـ cities)
+  //      g) cities                (مستقل)
+  //      ── منظومة الأوامر اليومية ──
+  //      h) order_items
+  //      i) sticker_splits
+  //      j) daily_orders
+  //      k) menu_items
+  //      l) beneficiary_fixed_meals
+  //      m) exclusions
+  //      n) meal_alternatives
+  //      o) beneficiaries
+  //      p) meals
+  //      q) custom_transliterations
   const wipeOrder: BackupTableName[] = [
+    'delivery_order_items',
+    'delivery_orders',
+    'delivery_print_header',
+    'delivery_creators',
+    'delivery_meals',
+    'delivery_locations',
+    'cities',
     'order_items',
     'sticker_splits',
     'daily_orders',
@@ -373,11 +410,18 @@ export async function restoreFromSnapshot(
     'meals',
     'custom_transliterations',
   ];
-  // كل الجداول الـ10 عندها عمود id (تحقّقتُ من المخططات). نستخدم فلتر
+  // كل الجداول عندها عمود id (سواء uuid أو smallint). نستخدم فلتر
   // صادق دائماً (not id is null) كبديل عن delete بدون where (الذي يحجبه supabase-js).
   for (const t of wipeOrder) {
     const { error } = await supabase.from(t).delete().not('id', 'is', null);
     if (error) {
+      // لو الجدول غير موجود (الـmigration ما اتشغّل بعد) نتجاوز بهدوء
+      if (/relation .* does not exist|does not exist/i.test(error.message)) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn(`backup restore: skipping wipe of missing table ${t}`);
+        }
+        continue;
+      }
       warnings.push(`فشل مسح ${t}: ${error.message}`);
     }
   }
@@ -397,6 +441,12 @@ export async function restoreFromSnapshot(
       const slice = rows.slice(c, c + CHUNK);
       const { error } = await supabase.from(t).insert(slice);
       if (error) {
+        // الجدول غير موجود في DB الحالية (مثلاً snapshot أحدث من الـmigrations المطبّقة).
+        // نتخطى الجدول كاملاً ونسجل تحذيراً واحداً بدل أن نطبع تحذيراً لكل صف.
+        if (/relation .* does not exist|does not exist/i.test(error.message)) {
+          warnings.push(`${t}: الجدول غير موجود في قاعدة البيانات — تخطّي ${rows.length} صف`);
+          break;
+        }
         // إعادة المحاولة صفّاً صفّاً لتحديد الخطأ، ثم تسجيل تحذير.
         let okCount = 0;
         for (const r of slice) {

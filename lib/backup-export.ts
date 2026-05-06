@@ -50,6 +50,21 @@ interface CustomTranslitRow {
   word: string; transliteration: string;
 }
 
+// ─── أنواع منظومة التسليم ──────────────────────────────────────────────────
+interface CityRow { id: string; name: string; created_at?: string }
+interface DeliveryLocationRow { id: string; name: string; city_id?: string | null; created_at?: string }
+interface DeliveryMealRow { id: string; name: string; meal_type: MealType; is_snack: boolean; created_at?: string }
+interface DeliveryOrderRow {
+  id: string; order_number: string; date: string; meal_type: string;
+  delivery_location_id?: string | null;
+  notes?: string | null;
+  created_at?: string;
+}
+interface DeliveryOrderItemRow {
+  id: string; delivery_order_id: string; display_name: string;
+  meal_type: string; quantity: number; position: number;
+}
+
 // ─── خرائط مساعدة ───────────────────────────────────────────────────────────
 
 const DAY_SHORT: Record<number, string> = {
@@ -229,6 +244,65 @@ function buildTranslitSheet(t: CustomTranslitRow[]): Record<string, string>[] {
   }));
 }
 
+// ─── أوراق منظومة التسليم ──────────────────────────────────────────────────
+
+function buildDeliveryMealsSheet(meals: DeliveryMealRow[]): Record<string, string>[] {
+  return meals.map(m => ({
+    'الاسم': m.name,
+    'نوع الوجبة': MEAL_TYPE_AR[m.meal_type] ?? m.meal_type,
+    'سناك': m.is_snack ? 'نعم' : 'لا',
+  }));
+}
+
+function buildDeliveryLocationsSheet(
+  locs: DeliveryLocationRow[],
+  cities: CityRow[],
+): Record<string, string>[] {
+  const cityById = new Map(cities.map(c => [c.id, c.name] as const));
+  return locs.map(l => ({
+    'الموقع': l.name,
+    'المدينة': l.city_id ? (cityById.get(l.city_id) ?? '') : '',
+  }));
+}
+
+function buildDeliveryOrdersSheet(
+  orders: DeliveryOrderRow[],
+  items: DeliveryOrderItemRow[],
+  locs: DeliveryLocationRow[],
+  cities: CityRow[],
+): Record<string, string>[] {
+  const cityById = new Map(cities.map(c => [c.id, c.name] as const));
+  const locById = new Map(locs.map(l => [l.id, l] as const));
+  const itemsByOrder = new Map<string, DeliveryOrderItemRow[]>();
+  for (const it of items) {
+    const arr = itemsByOrder.get(it.delivery_order_id) ?? [];
+    arr.push(it);
+    itemsByOrder.set(it.delivery_order_id, arr);
+  }
+  const mealTypeAr = (mt: string) =>
+    mt === 'all' ? 'فطور + غداء + عشاء' : (MEAL_TYPE_AR[mt as MealType] ?? mt);
+
+  return orders.map(o => {
+    const loc = o.delivery_location_id ? locById.get(o.delivery_location_id) : null;
+    const cityName = loc?.city_id ? (cityById.get(loc.city_id) ?? '') : '';
+    const ordItems = (itemsByOrder.get(o.id) ?? []).slice().sort((a, b) => a.position - b.position);
+    const itemsStr = ordItems.map(it => {
+      const mt = mealTypeAr(it.meal_type);
+      return `${it.display_name} (${mt}) ×${it.quantity}`;
+    }).join(' | ');
+    return {
+      'رقم الأمر': o.order_number,
+      'التاريخ': o.date,
+      'نوع الوجبة': mealTypeAr(o.meal_type),
+      'موقع التسليم': loc?.name ?? '',
+      'المدينة': cityName,
+      'الأصناف': itemsStr,
+      'الملاحظات': o.notes ?? '',
+      'تاريخ الإنشاء': o.created_at ?? '',
+    };
+  });
+}
+
 // ─── التنزيل كـExcel متعدد الأوراق ──────────────────────────────────────────
 
 export async function downloadBackupAsXLSX(
@@ -241,7 +315,7 @@ export async function downloadBackupAsXLSX(
   if (!wb.Workbook.Views) wb.Workbook.Views = [];
   wb.Workbook.Views[0] = { RTL: true };
 
-  const t = snapshot.tables;
+  const t = snapshot.tables as unknown as Record<string, unknown[]>;
   const meals = (t.meals ?? []) as unknown as MealRow[];
   const bens = (t.beneficiaries ?? []) as unknown as BeneficiaryRow[];
   const excls = (t.exclusions ?? []) as unknown as ExclusionRow[];
@@ -250,6 +324,12 @@ export async function downloadBackupAsXLSX(
   const orders = (t.daily_orders ?? []) as unknown as OrderRow[];
   const orderItems = (t.order_items ?? []) as unknown as OrderItemRow[];
   const translit = (t.custom_transliterations ?? []) as unknown as CustomTranslitRow[];
+  // منظومة أوامر التسليم
+  const cities = (t.cities ?? []) as unknown as CityRow[];
+  const deliveryLocs = (t.delivery_locations ?? []) as unknown as DeliveryLocationRow[];
+  const deliveryMeals = (t.delivery_meals ?? []) as unknown as DeliveryMealRow[];
+  const deliveryOrders = (t.delivery_orders ?? []) as unknown as DeliveryOrderRow[];
+  const deliveryItems = (t.delivery_order_items ?? []) as unknown as DeliveryOrderItemRow[];
 
   const addSheet = (title: string, rows: Record<string, string>[]) => {
     if (rows.length === 0) return;
@@ -287,7 +367,12 @@ export async function downloadBackupAsXLSX(
   // 4) أوامر التشغيل
   addSheet('أوامر التشغيل', buildOrdersSheet(orders, orderItems, meals));
 
-  // 5) الترجمة الحرفية المخصصة
+  // 5) منظومة أوامر التسليم
+  addSheet('أصناف التسليم',  buildDeliveryMealsSheet(deliveryMeals));
+  addSheet('مواقع التسليم',  buildDeliveryLocationsSheet(deliveryLocs, cities));
+  addSheet('أوامر التسليم',  buildDeliveryOrdersSheet(deliveryOrders, deliveryItems, deliveryLocs, cities));
+
+  // 6) الترجمة الحرفية المخصصة
   addSheet('الترجمة الحرفية', buildTranslitSheet(translit));
 
   // ورقة Meta للنسخة

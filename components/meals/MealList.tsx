@@ -727,12 +727,17 @@ export default function MealList() {
   // ── Export ──────────────────────────────────────────────────────────────
   const handleExport = () => {
     const typeMap: Record<string, string> = { breakfast: 'فطور', lunch: 'غداء', dinner: 'عشاء' };
-    const rows = meals.map(m => ({
-      'الاسم': m.name,
-      'الاسم الإنجليزي': m.english_name ?? '',
-      'نوع الوجبة': typeMap[m.type] ?? m.type,
-      'سناك': m.is_snack ? 'نعم' : 'لا',
-    }));
+    const catMap: Record<ItemCategory, string> = { hot: 'حار', cold: 'بارد', snack: 'سناك' };
+    const rows = meals.map(m => {
+      const cat: ItemCategory = (m.category as ItemCategory | undefined) ?? (m.is_snack ? 'snack' : 'hot');
+      return {
+        'الاسم': m.name,
+        'الاسم الإنجليزي': m.english_name ?? '',
+        'نوع الوجبة': typeMap[m.type] ?? m.type,
+        'سناك': m.is_snack ? 'نعم' : 'لا',
+        'الفئة': catMap[cat],
+      };
+    });
     const tag = entityType === 'companion' ? 'مرافقون' : 'مستفيدون';
     exportXLSX(rows, `أصناف_${tag}_${new Date().toISOString().slice(0, 10)}.xlsx`, `أصناف ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`);
   };
@@ -742,6 +747,10 @@ export default function MealList() {
     let imported = 0;
     const errors: string[] = [];
     const typeRevMap: Record<string, string> = { 'فطور': 'breakfast', 'غداء': 'lunch', 'عشاء': 'dinner', breakfast: 'breakfast', lunch: 'lunch', dinner: 'dinner' };
+    const catRevMap: Record<string, ItemCategory> = {
+      'حار': 'hot', 'بارد': 'cold', 'سناك': 'snack',
+      hot: 'hot', cold: 'cold', snack: 'snack',
+    };
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -753,13 +762,40 @@ export default function MealList() {
       const snackRaw = row['سناك']?.trim().toLowerCase();
       const is_snack = snackRaw === 'نعم' || snackRaw === 'yes' || snackRaw === 'true' || snackRaw === '1';
 
-      const payload = { name, english_name: row['الاسم الإنجليزي']?.trim() || null, type, is_snack, entity_type: entityType };
+      // الفئة: لو محددة في الملف نستخدمها، وإلا نستنتجها (سناك→snack، رئيسي→hot افتراضياً)
+      const catRaw = row['الفئة']?.trim();
+      let category: ItemCategory = is_snack ? 'snack' : 'hot';
+      if (catRaw) {
+        const parsed = catRevMap[catRaw];
+        if (parsed) {
+          category = parsed;
+        } else {
+          errors.push(`صف ${i + 2} (${name}): الفئة "${catRaw}" غير صحيحة — القيم المقبولة: حار، بارد، سناك`);
+          continue;
+        }
+      }
+      // اتساق: سناك ↔ category=snack
+      const finalIsSnack = is_snack || category === 'snack';
+      const finalCategory: ItemCategory = finalIsSnack ? 'snack' : (category === 'snack' ? 'hot' : category);
+
+      const payload = { name, english_name: row['الاسم الإنجليزي']?.trim() || null, type, is_snack: finalIsSnack, category: finalCategory, entity_type: entityType };
       // الـconflict على (entity_type, type, is_snack, name) عشان الاستيراد يستبدل المكرر
       // داخل نفس الفئة + الوجبة + التصنيف فقط (وما يخلط بين فواكه فطور وفواكه عشاء مثلاً).
       const { error } = await supabase
         .from('meals')
         .upsert(payload, { onConflict: 'entity_type,type,is_snack,name' });
-      if (error) { errors.push(`صف ${i + 2} (${name}): ${error.message}`); continue; }
+      if (error) {
+        // لو عمود category غير موجود في DB (ما اتشغّل meals-category-migration.sql)،
+        // نعيد المحاولة بدون category بدل ما يتعطل الاستيراد كاملاً.
+        if (/category|column/i.test(error.message)) {
+          const { category: _omit, ...fallback } = payload;
+          void _omit;
+          const { error: e2 } = await supabase.from('meals').upsert(fallback, { onConflict: 'entity_type,type,is_snack,name' });
+          if (e2) { errors.push(`صف ${i + 2} (${name}): ${e2.message}`); continue; }
+        } else {
+          errors.push(`صف ${i + 2} (${name}): ${error.message}`); continue;
+        }
+      }
       imported++;
     }
     if (imported > 0) {
@@ -940,8 +976,8 @@ export default function MealList() {
       {importOpen && (
         <ImportModal
           title="الأصناف"
-          templateHeaders={['الاسم', 'الاسم الإنجليزي', 'نوع الوجبة', 'سناك']}
-          templateRow={['أرز بالدجاج', 'Rice with Chicken', 'غداء', 'لا']}
+          templateHeaders={['الاسم', 'الاسم الإنجليزي', 'نوع الوجبة', 'سناك', 'الفئة']}
+          templateRow={['أرز بالدجاج', 'Rice with Chicken', 'غداء', 'لا', 'حار']}
           onImport={handleImport}
           onClose={() => setImportOpen(false)}
           onDone={() => { setImportOpen(false); fetchMeals(); }}
