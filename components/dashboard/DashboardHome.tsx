@@ -355,8 +355,8 @@ export default function DashboardHome() {
         {canView('beneficiaries') && (
           <StatCard href="/beneficiaries" label="المستفيدون" value={stats.beneficiaries} color="blue" icon={<UsersIcon />} />
         )}
-        {canView('beneficiaries') && (
-          <StatCard href="/beneficiaries?type=companion" label="المرافقون" value={stats.companions} color="indigo" icon={<UsersIcon />} />
+        {canView('companions') && (
+          <StatCard href="/companions" label="المرافقون" value={stats.companions} color="indigo" icon={<UsersIcon />} />
         )}
         {canView('meals') && (
           <StatCard href="/meals" label="الأصناف" value={stats.meals} color="emerald" icon={<MealsIcon />} />
