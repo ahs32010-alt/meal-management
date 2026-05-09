@@ -373,6 +373,31 @@ export default function ReportView({ initialOrderId }: Props) {
               تصدير PDF
             </a>
           )}
+          {mode === 'period' && periodReport && (
+            <a
+              href={(() => {
+                const s = JSON.stringify(
+                  Object.fromEntries(
+                    Object.entries(selections)
+                      .filter(([, days]) => (days as Set<number>).size > 0)
+                      .map(([w, days]) => [w, [...(days as Set<number>)]]),
+                  ),
+                );
+                const params = new URLSearchParams({ s });
+                if (periodMealType) params.set('meal', periodMealType);
+                if (periodEntityType) params.set('entity', periodEntityType);
+                return `/reports/period/print?${params}`;
+              })()}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-primary no-print"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              تصدير PDF
+            </a>
+          )}
         </div>
       </div>
 
@@ -623,18 +648,18 @@ export default function ReportView({ initialOrderId }: Props) {
             <div className="flex items-center justify-between pt-1">
               <div className="flex items-center gap-3">
                 {totalSelectedDays > 0 && (
-                  <span className="text-xs text-emerald-700 font-medium">
-                    {totalSelectedDays} يوم محدد عبر {Object.values(selections).filter(s => s.size > 0).length} أسابيع
-                  </span>
-                )}
-                {totalSelectedDays > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSelections(emptySelections())}
-                    className="text-xs text-slate-400 hover:text-slate-600 underline"
-                  >
-                    مسح الكل
-                  </button>
+                  <>
+                    <span className="text-xs text-emerald-700 font-medium">
+                      {totalSelectedDays} يوم محدد عبر {Object.values(selections).filter(s => s.size > 0).length} أسابيع
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelections(emptySelections())}
+                      className="text-xs text-slate-400 hover:text-slate-600 underline"
+                    >
+                      مسح الكل
+                    </button>
+                  </>
                 )}
               </div>
               <button
