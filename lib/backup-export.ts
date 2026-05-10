@@ -389,6 +389,72 @@ export async function downloadBackupAsXLSX(
   XLSX.writeFile(wb, filename);
 }
 
+// ─── التنزيل كـSQL ──────────────────────────────────────────────────────────
+
+function toSqlLiteral(val: unknown): string {
+  if (val === null || val === undefined) return 'NULL';
+  if (typeof val === 'boolean') return val ? 'true' : 'false';
+  if (typeof val === 'number') return isFinite(val) ? String(val) : 'NULL';
+  if (typeof val === 'string') return `'${val.replace(/'/g, "''")}'`;
+  return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
+}
+
+export function downloadBackupAsSQL(snapshot: BackupSnapshot, filename: string): void {
+  const tables = Object.keys(snapshot.tables) as (keyof typeof snapshot.tables)[];
+  const lines: string[] = [
+    '-- ============================================================',
+    '-- نسخة احتياطية — نظام إدارة الوجبات',
+    `-- تاريخ النسخة: ${snapshot.taken_at}`,
+    `-- الإصدار: ${snapshot.version}`,
+    '-- ============================================================',
+    '-- للاستخدام: شغّل هذا الملف في Supabase SQL Editor أو psql',
+    '-- ============================================================',
+    '',
+    'BEGIN;',
+    '',
+    '-- تعطيل قيود المفاتيح الخارجية مؤقتاً لتسهيل الإدراج',
+    "SET session_replication_role = replica;",
+    '',
+    '-- ─── حذف البيانات القديمة (بترتيب عكسي لتجنب تعارض FKs) ───',
+  ];
+
+  for (const table of [...tables].reverse()) {
+    lines.push(`TRUNCATE TABLE "${table}" RESTART IDENTITY CASCADE;`);
+  }
+  lines.push('');
+
+  for (const table of tables) {
+    const rows = snapshot.tables[table] as Record<string, unknown>[];
+    lines.push(`-- ─── جدول: ${table} (${rows.length} صف) ───`);
+    if (rows.length === 0) { lines.push(''); continue; }
+
+    const cols = Object.keys(rows[0]);
+    const colList = cols.map(c => `"${c}"`).join(', ');
+    const valueGroups = rows.map(row => {
+      const vals = cols.map(c => toSqlLiteral(row[c])).join(', ');
+      return `  (${vals})`;
+    });
+    lines.push(`INSERT INTO "${table}" (${colList}) VALUES`);
+    lines.push(valueGroups.join(',\n') + ';');
+    lines.push('');
+  }
+
+  lines.push('-- إعادة تفعيل قيود المفاتيح الخارجية');
+  lines.push("SET session_replication_role = DEFAULT;");
+  lines.push('');
+  lines.push('COMMIT;');
+
+  const blob = new Blob([lines.join('\n')], { type: 'application/sql;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // ─── التنزيل كـJSON ─────────────────────────────────────────────────────────
 
 export function downloadBackupAsJSON(snapshot: BackupSnapshot, filename: string): void {

@@ -20,7 +20,7 @@ import {
   getBackupSchedule,
   setBackupSchedule,
 } from '@/lib/backup-snapshot';
-import { downloadBackupAsXLSX, downloadBackupAsJSON } from '@/lib/backup-export';
+import { downloadBackupAsXLSX, downloadBackupAsJSON, downloadBackupAsSQL } from '@/lib/backup-export';
 
 const TRIGGER_LABELS: Record<BackupTriggerType, string> = {
   auto_daily: 'تلقائية يومية',
@@ -211,7 +211,7 @@ export default function BackupRestoreView() {
   }, [loading, migrationMissing, supabase, runBackup]);
 
   // ── Download (XLSX or JSON or full DB JSON) ──────────────────────────────
-  const handleDownload = async (backup: BackupRow, kind: 'xlsx' | 'json' | 'fulldb') => {
+  const handleDownload = async (backup: BackupRow, kind: 'xlsx' | 'json' | 'sql' | 'fulldb') => {
     setDownloading(backup.id);
     setError('');
     try {
@@ -221,6 +221,8 @@ export default function BackupRestoreView() {
         await downloadBackupAsXLSX(snapshot, `نسخة_احتياطية_${stamp}.xlsx`);
       } else if (kind === 'json') {
         downloadBackupAsJSON(snapshot, `backup_${stamp}.json`);
+      } else if (kind === 'sql') {
+        downloadBackupAsSQL(snapshot, `backup_${stamp}.sql`);
       } else {
         // fulldb — لقطة DB الكاملة الخام (كل جداول public)
         if (!fullDb) {
@@ -551,6 +553,15 @@ export default function BackupRestoreView() {
                       title="تنزيل النسخة المنطقية الخام كملف JSON (نفس بيانات Excel لكن JSON)"
                     >
                       ⬇ JSON
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownload(b, 'sql')}
+                      disabled={isDownloading}
+                      className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50"
+                      title="تنزيل النسخة كملف SQL جاهز للاستيراد في PostgreSQL أو Supabase SQL Editor"
+                    >
+                      ⬇ SQL
                     </button>
                     <button
                       type="button"

@@ -702,7 +702,9 @@ html { scroll-behavior: smooth; }
   #report-content,
   #report-content *,
   #order-print-root,
-  #order-print-root * { visibility: visible; }
+  #order-print-root *,
+  #period-print-root,
+  #period-print-root * { visibility: visible; }
 
   #report-content {
     position: absolute;
