@@ -54,7 +54,6 @@ const TABLE_LABELS: Record<string, string> = {
   beneficiaries: 'المستفيدون والمرافقون',
   daily_orders: 'أوامر التشغيل',
   custom_transliterations: 'الترجمة الحرفية',
-  meal_alternatives: 'بدائل الأصناف',
   exclusions: 'المحظورات',
   beneficiary_fixed_meals: 'الأصناف الثابتة',
   menu_items: 'بنود قائمة الطعام',

@@ -31,7 +31,6 @@ export const BACKUP_TABLES = [
   'beneficiaries',
   'daily_orders',
   'custom_transliterations',
-  'meal_alternatives',
   'exclusions',
   'beneficiary_fixed_meals',
   'menu_items',
@@ -90,7 +89,6 @@ const TABLE_SELECTS: Record<BackupTableName, string> = {
   beneficiaries: '*',
   daily_orders: '*',
   custom_transliterations: '*',
-  meal_alternatives: '*',
   exclusions: '*',
   beneficiary_fixed_meals: '*',
   menu_items: '*',
@@ -387,8 +385,7 @@ export async function restoreFromSnapshot(
   //      k) menu_items
   //      l) beneficiary_fixed_meals
   //      m) exclusions
-  //      n) meal_alternatives
-  //      o) beneficiaries
+  //      n) beneficiaries
   //      p) meals
   //      q) custom_transliterations
   const wipeOrder: BackupTableName[] = [
@@ -405,7 +402,6 @@ export async function restoreFromSnapshot(
     'menu_items',
     'beneficiary_fixed_meals',
     'exclusions',
-    'meal_alternatives',
     'beneficiaries',
     'meals',
     'custom_transliterations',
