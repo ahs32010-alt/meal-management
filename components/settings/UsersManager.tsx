@@ -251,9 +251,10 @@ export default function UsersManager() {
       )}
 
       {modalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm overflow-y-auto">
+          <div className="min-h-full flex items-start justify-center p-4 py-8">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white rounded-t-2xl z-10">
               <h3 className="font-bold text-slate-800 text-lg">
                 {form.id ? 'تعديل مستخدم' : 'إضافة مستخدم جديد'}
               </h3>
@@ -264,7 +265,7 @@ export default function UsersManager() {
               </button>
             </div>
 
-            <div className="p-6 space-y-5 overflow-y-auto flex-1">
+            <div className="p-6 space-y-5">
               {err && (
                 <div className="bg-red-50 text-red-700 text-sm rounded-lg px-4 py-2.5 font-medium">{err}</div>
               )}
@@ -500,12 +501,13 @@ export default function UsersManager() {
               </div>
             </div>
 
-            <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2 shrink-0">
+            <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2 rounded-b-2xl">
               <button onClick={() => setModalOpen(false)} className="btn-secondary">إلغاء</button>
               <button onClick={submit} disabled={saving} className="btn-primary disabled:opacity-50">
                 {saving ? 'جاري الحفظ...' : form.id ? 'حفظ التعديلات' : 'إنشاء المستخدم'}
               </button>
             </div>
+          </div>
           </div>
         </div>
       )}
