@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createClient } from '@/lib/supabase-client';
 import type { DailyOrder, ReportData, ItemCategory, EntityType } from '@/lib/types';
-import { MEAL_TYPE_LABELS, MEAL_TYPE_EN, CATEGORY_ORDER, CATEGORY_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
+import { MEAL_TYPE_LABELS, MEAL_TYPE_EN, CATEGORY_ORDER, CATEGORY_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, DAY_LABELS } from '@/lib/types';
 import { formatDate, formatDateFull } from '@/lib/date-utils';
 import { transliterate } from '@/lib/transliterate';
 import {
@@ -21,13 +21,16 @@ const t = (s: string, dict: Record<string, string>) => dict[s] ?? transliterate(
 
 
 // ── Sticker Card ──────────────────────────────────────────────────────────────
-function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 0, category = null }: {
+function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 0, category = null, orderDate, weekNumber, dayOfWeek }: {
   detail: ReportData['beneficiaryDetails'][0];
   mealTypeAr: string;
   mealTypeEn: string;
   customDict: Record<string, string>;
   groupIndex?: number;
   category?: ItemCategory | null;
+  orderDate?: string;
+  weekNumber?: number | null;
+  dayOfWeek?: number | null;
 }) {
   const gc = GROUP_COLORS[groupIndex] ?? GROUP_COLORS[0];
   const ct = category ? CATEGORY_THEME[category] : null;
@@ -80,8 +83,20 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
       style={{ font: 'inherit', color: 'inherit' }} />
   );
 
+  const orderInfoParts = [
+    orderDate ? orderDate.slice(8, 10) + '/' + orderDate.slice(5, 7) + '/' + orderDate.slice(0, 4) : null,
+    mealTypeAr || null,
+    weekNumber != null ? `أسبوع ${weekNumber}` : null,
+    dayOfWeek != null ? DAY_LABELS[dayOfWeek] : null,
+  ].filter(Boolean);
+
   return (
     <div className="sticker-card">
+      {/* Order info — date | meal | week | day */}
+      {orderInfoParts.length > 0 && (
+        <div className="sticker-order-info">{orderInfoParts.join(' | ')}</div>
+      )}
+
       {/* Edit button */}
       <div className="sticker-edit-bar no-print">
         <button type="button" onClick={() => setEditMode(m => !m)} className="sticker-edit-btn">
@@ -645,7 +660,12 @@ export default function StickersView() {
     if (!report || displayDetails.length === 0) return;
     const fn = `ستيكرات_${new Date(report.order.date).toISOString().slice(0, 10)}_${mealTypeAr}`;
     const { exportStickersWord } = await import('./word-export');
-    exportStickersWord(displayDetails, mealTypeAr, mealTypeEn, fn, customDict);
+    exportStickersWord(
+      displayDetails, mealTypeAr, mealTypeEn, fn, customDict,
+      report.order.date,
+      report.order.week_number ?? report.order.week_of_month,
+      report.order.day_of_week,
+    );
   };
 
   const handleExportPerPage = async () => {
@@ -659,7 +679,12 @@ export default function StickersView() {
     const fn = `ستيكرات_${new Date(report.order.date).toISOString().slice(0, 10)}_${mealTypeAr}_${w}x${h}سم`;
     try {
       const { exportStickersPerPageDocx } = await import('./word-export');
-      await exportStickersPerPageDocx(displayDetails, mealTypeAr, mealTypeEn, fn, w, h, customDict);
+      await exportStickersPerPageDocx(
+        displayDetails, mealTypeAr, mealTypeEn, fn, w, h, customDict,
+        report.order.date,
+        report.order.week_number ?? report.order.week_of_month,
+        report.order.day_of_week,
+      );
     } catch (e) {
       alert('حدث خطأ أثناء إنشاء الملف');
       console.error(e);
@@ -759,6 +784,9 @@ export default function StickersView() {
                     customDict={customDict}
                     groupIndex={detail.groupIndex}
                     category={detail.category}
+                    orderDate={report.order.date}
+                    weekNumber={report.order.week_number ?? report.order.week_of_month}
+                    dayOfWeek={report.order.day_of_week}
                   />
                 ))}
               </div>

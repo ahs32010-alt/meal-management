@@ -100,7 +100,13 @@ interface ParaOpts {
   title?: { mealTypeAr: string; mealTypeEn: string };
   // Font scale — 1.0 for grid, larger for per-page based on sticker size
   scale?: number;
+  orderInfo?: { date: string; mealTypeAr: string; weekNumber?: number | null; dayOfWeek?: number | null };
 }
+
+const AR_DAYS: Record<number, string> = {
+  0: 'الأحد', 1: 'الاثنين', 2: 'الثلاثاء', 3: 'الأربعاء',
+  4: 'الخميس', 5: 'الجمعة', 6: 'السبت',
+};
 
 function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[] {
   const k = opts.scale ?? 1;
@@ -116,6 +122,32 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
       keepNext: true,
       children,
     });
+
+  // Order info line — date | meal | week | day
+  if (opts.orderInfo) {
+    const oi = opts.orderInfo;
+    const d = oi.date;
+    const dateStr = d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4);
+    const parts = [
+      dateStr,
+      oi.mealTypeAr,
+      oi.weekNumber != null ? `أسبوع ${oi.weekNumber}` : null,
+      oi.dayOfWeek != null ? (AR_DAYS[oi.dayOfWeek] ?? '') : null,
+    ].filter(Boolean);
+    out.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        bidirectional: true,
+        spacing: { after: 40, before: 0, line: 240 },
+        keepLines: true,
+        keepNext: true,
+        shading: { type: ShadingType.CLEAR, fill: 'F8FAFC', color: 'auto' },
+        children: [
+          new TextRun({ text: parts.join(' | '), size: fs(7), color: '64748B' }),
+        ],
+      }),
+    );
+  }
 
   if (opts.title || s.groupIndex > 0 || s.category) {
     const gc = GROUP_COLORS[s.groupIndex] ?? GROUP_COLORS[0];
@@ -269,8 +301,12 @@ export async function exportStickersWord(
   mealTypeEn: string,
   filename: string,
   customDict: Record<string, string> = {},
+  orderDate?: string,
+  weekNumber?: number | null,
+  dayOfWeek?: number | null,
 ) {
   const stickers = displayDetails.map(d => prepareSticker(d, d.groupIndex, d.category, customDict));
+  const orderInfo = orderDate ? { date: orderDate, mealTypeAr, weekNumber, dayOfWeek } : undefined;
 
   const COLS = 4;
   const rows: TableRow[] = [];
@@ -282,7 +318,7 @@ export async function exportStickersWord(
       verticalAlign: VerticalAlign.TOP,
       margins: { top: 100, bottom: 100, left: 110, right: 110 },
       borders: { top: CARD_BORDER, bottom: CARD_BORDER, left: CARD_BORDER, right: CARD_BORDER },
-      children: buildStickerParagraphs(s, { title: { mealTypeAr, mealTypeEn } }),
+      children: buildStickerParagraphs(s, { title: { mealTypeAr, mealTypeEn }, orderInfo }),
     }));
     while (cells.length < COLS) cells.push(emptyCell());
 
@@ -354,10 +390,14 @@ export async function exportStickersPerPageDocx(
   widthCm: number,
   heightCm: number,
   customDict: Record<string, string> = {},
+  orderDate?: string,
+  weekNumber?: number | null,
+  dayOfWeek?: number | null,
 ) {
   const minDim = Math.min(widthCm, heightCm);
   // Conservative scale: small stickers stay readable, large ones don't get jumbo fonts
   const scale = Math.max(0.7, Math.min(1.5, minDim / 11));
+  const orderInfo = orderDate ? { date: orderDate, mealTypeAr, weekNumber, dayOfWeek } : undefined;
 
   const sections = displayDetails.map(d => {
     const data = prepareSticker(d, d.groupIndex, d.category, customDict);
@@ -381,7 +421,7 @@ export async function exportStickersPerPageDocx(
         },
         verticalAlign: VerticalAlign.CENTER,
       },
-      children: buildStickerParagraphs(data, { title: { mealTypeAr, mealTypeEn }, scale }),
+      children: buildStickerParagraphs(data, { title: { mealTypeAr, mealTypeEn }, scale, orderInfo }),
     };
   });
 

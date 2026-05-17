@@ -248,11 +248,12 @@ export async function buildOrderReport(
     .sort((a, b) => b.qty - a.qty);
 
   // Per-meal final count (used by OrderList for the snapshot-friendly count column)
+  // يشمل: الأصليين × المضاعف + extra_quantity يدوي + البدائل (altQty)
   const itemFinalCounts: Record<string, number> = {};
   orderItems.forEach(item => {
     const id = item.meal_id;
     const mult = multiplierMap[id] ?? 1;
-    itemFinalCounts[id] = (mainQty[id] || 0) * mult + (extraQtyMap[id] ?? 0);
+    itemFinalCounts[id] = (mainQty[id] || 0) * mult + (extraQtyMap[id] ?? 0) + (altQty[id] || 0);
   });
 
   return {

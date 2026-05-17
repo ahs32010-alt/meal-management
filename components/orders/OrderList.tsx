@@ -21,8 +21,13 @@ const MEAL_TYPE_STYLES: Record<string, string> = {
 };
 
 // عدد المستفيدين/المرافقين وعدد المحظورات لكل صنف — مفصول حسب نوع الكيان.
-type EntityCounts = { total: number; exclusions: Record<string, number> };
-const EMPTY_COUNTS: EntityCounts = { total: 0, exclusions: {} };
+// altCounts[alt_meal_id][excl_meal_id] = عدد المستفيدين الذين يأخذون alt بديلاً عن excl
+type EntityCounts = {
+  total: number;
+  exclusions: Record<string, number>;
+  altCounts: Record<string, Record<string, number>>;
+};
+const EMPTY_COUNTS: EntityCounts = { total: 0, exclusions: {}, altCounts: {} };
 
 export default function OrderList() {
   const [orders, setOrders] = useState<DailyOrder[]>([]);
@@ -83,8 +88,8 @@ export default function OrderList() {
       // نعتبر الكل مستفيدين.
       const bensSelect = entityTypeOk ? 'id, entity_type' : 'id';
       const exclSelect = entityTypeOk
-        ? 'meal_id, beneficiaries!inner(entity_type)'
-        : 'meal_id';
+        ? 'meal_id, alternative_meal_id, beneficiaries!inner(entity_type)'
+        : 'meal_id, alternative_meal_id';
 
       // الأصناف نجلبها كاملة مع عمود entity_type/category عشان OrderModal يفلتر
       // حسب النوع ويعرف الفئة. لو أي عمود ما موجود نرجع للسلوك القديم.
@@ -116,8 +121,8 @@ export default function OrderList() {
 
       // نبني عدّادات منفصلة لكل entity_type
       const nextCounts: Record<EntityType, EntityCounts> = {
-        beneficiary: { total: 0, exclusions: {} },
-        companion:   { total: 0, exclusions: {} },
+        beneficiary: { total: 0, exclusions: {}, altCounts: {} },
+        companion:   { total: 0, exclusions: {}, altCounts: {} },
       };
 
       if (bensResult.data) {
@@ -130,13 +135,20 @@ export default function OrderList() {
       if (exclusionsResult.data) {
         const rows = exclusionsResult.data as unknown as Array<{
           meal_id: string;
+          alternative_meal_id?: string | null;
           beneficiaries?: { entity_type?: string } | { entity_type?: string }[] | null;
         }>;
         for (const ex of rows) {
-          // قد يرجع `beneficiaries` إما object (لو !inner) أو array (لو join عادي)
           const ben = Array.isArray(ex.beneficiaries) ? ex.beneficiaries[0] : ex.beneficiaries;
           const t: EntityType = (ben?.entity_type === 'companion' ? 'companion' : 'beneficiary');
+          // عدّاد المحظورات المباشرة
           nextCounts[t].exclusions[ex.meal_id] = (nextCounts[t].exclusions[ex.meal_id] ?? 0) + 1;
+          // عدّاد البدائل: altCounts[بديل][محظور] = عدد المستفيدين
+          if (ex.alternative_meal_id) {
+            const altMap = nextCounts[t].altCounts;
+            if (!altMap[ex.alternative_meal_id]) altMap[ex.alternative_meal_id] = {};
+            altMap[ex.alternative_meal_id][ex.meal_id] = (altMap[ex.alternative_meal_id][ex.meal_id] ?? 0) + 1;
+          }
         }
       }
 
@@ -338,9 +350,17 @@ export default function OrderList() {
                             const snap = (order as DailyOrder & { snapshot?: { itemFinalCounts?: Record<string, number> } }).snapshot;
                             const snapCount = snap?.itemFinalCounts?.[item.meal_id];
                             const liveBase = Math.max(0, entityCounts.total - (entityCounts.exclusions[item.meal_id] ?? 0));
+                            // البدائل: نضيف من كل محظور (موجود في نفس الأمر) × مضاعفه
+                            const orderMealIdSet = new Set(order.order_items?.map((oi: { meal_id: string }) => oi.meal_id) ?? []);
+                            const liveAltBonus = Object.entries(entityCounts.altCounts[item.meal_id] ?? {})
+                              .filter(([exclId]) => orderMealIdSet.has(exclId))
+                              .reduce((sum, [exclId, cnt]) => {
+                                const exclItem = order.order_items?.find((oi: { meal_id: string; multiplier?: number }) => oi.meal_id === exclId);
+                                return sum + cnt * (exclItem?.multiplier ?? 1);
+                              }, 0);
                             const finalCount = snapCount != null
                               ? snapCount
-                              : liveBase * mult + extra;
+                              : liveBase * mult + extra + liveAltBonus;
                             const isFrozen = snapCount != null;
                             return (
                               <div key={item.id}
@@ -437,6 +457,7 @@ export default function OrderList() {
           entityType={modalEntityType}
           totalBeneficiaries={counts[modalEntityType].total}
           exclusionCounts={counts[modalEntityType].exclusions}
+          altCounts={counts[modalEntityType].altCounts}
           editingOrder={editingOrder}
           onClose={() => { setIsModalOpen(false); setEditingOrder(null); }}
           onSaved={() => { setIsModalOpen(false); setEditingOrder(null); fetchData(); }}

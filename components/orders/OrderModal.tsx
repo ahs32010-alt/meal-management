@@ -21,6 +21,8 @@ interface Props {
   // مسبقاً حسب entityType من قِبَل المكوّن الأب (OrderList).
   totalBeneficiaries: number;
   exclusionCounts: Record<string, number>;
+  // altCounts[alt_meal_id][excl_meal_id] = عدد مستفيدين يأخذون alt بديلاً عن excl
+  altCounts?: Record<string, Record<string, number>>;
   // نوع الكيان الذي ينتمي له هذا الأمر (مستفيدين أو مرافقين)
   entityType?: EntityType;
   editingOrder?: DailyOrder | null;
@@ -42,7 +44,7 @@ const CATEGORY_THEME: Record<ItemCategory, {
   snack: { icon: '🍿', bg: 'bg-amber-500',   textOn: 'text-white', bgChip: 'bg-amber-50',   border: 'border-amber-200',   badge: 'bg-amber-100 text-amber-700',   ring: 'ring-amber-400' },
 };
 
-export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts, entityType: entityTypeProp, editingOrder, onClose, onSaved }: Props) {
+export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts, altCounts, entityType: entityTypeProp, editingOrder, onClose, onSaved }: Props) {
   const isEdit = !!editingOrder;
   // النوع الفعلي للأمر: لو نحرّر أمر سابق نحترم نوعه، وإلا نأخذ النوع المُمَرَّر،
   // وإن لم يُمرَّر شيء نفترض المستفيدين (للحفاظ على التوافق).
@@ -243,8 +245,21 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
   const setItemMultiplier = (meal_id: string, multiplier: number) =>
     setSelected(prev => prev.map(s => s.meal_id === meal_id ? { ...s, multiplier: Math.max(1, Math.min(100, multiplier || 1)) } : s));
 
-  const beneficiaryCount = (meal_id: string) =>
+  // المستفيدون الأصليون (بدون البدائل)
+  const directCount = (meal_id: string) =>
     Math.max(0, totalBeneficiaries - (exclusionCounts[meal_id] ?? 0));
+
+  // عدد إضافي من البدائل: مجموع من كل محظور موجود في الأمر × مضاعفه
+  const selectedMealIds = useMemo(() => new Set(selected.map(s => s.meal_id)), [selected]);
+  const altBonus = (meal_id: string) => {
+    if (!altCounts) return 0;
+    return Object.entries(altCounts[meal_id] ?? {})
+      .filter(([exclId]) => selectedMealIds.has(exclId))
+      .reduce((sum, [exclId, cnt]) => {
+        const exclMult = selectedByMealId.get(exclId)?.multiplier ?? 1;
+        return sum + cnt * exclMult;
+      }, 0);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -507,9 +522,11 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                   {CATEGORY_ORDER.flatMap(cat => itemsByCategory(cat)).map(item => {
                     const meal = meals.find(m => m.id === item.meal_id);
                     if (!meal) return null;
-                    const count = beneficiaryCount(item.meal_id);
-                    // total = (people who get it) × multiplier + manual offset
+                    const count = directCount(item.meal_id);
+                    // total = أصليون × مضاعف + تعديل يدوي (البدائل معلوماتية فقط — لا تُضاف للكمية
+                    // لأن أصحاب البدائل محسوبون بالفعل ضمن directCount)
                     const baseAfterMultiplier = count * item.multiplier;
+                    const bonus = altBonus(item.meal_id);
                     const total = baseAfterMultiplier + item.extra_quantity;
                     const isEditing = editingId === item.meal_id;
                     const theme = CATEGORY_THEME[item.category];
@@ -576,6 +593,11 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                             }}
                             className="w-16 text-center text-base font-bold text-emerald-700 border border-slate-200 rounded-lg py-1 focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200"
                           />
+                          {bonus > 0 && (
+                            <div className="text-[10px] text-violet-600 mt-0.5 whitespace-nowrap" title="عدد المستفيدين الذين يأخذون هذا الصنف بديلاً">
+                              +{bonus} بديل
+                            </div>
+                          )}
                         </div>
 
                         <button type="button" onClick={() => removeItem(item.meal_id)}
