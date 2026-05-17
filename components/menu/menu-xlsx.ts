@@ -1,51 +1,74 @@
 import type { Meal, MealType, ItemCategory, MenuItem } from '@/lib/types';
-import { MENU_DAYS, MEAL_SECTIONS, MAIN_ROWS_PER_MEAL, SNACK_ROWS_PER_MEAL, WEEK_NUMBERS, WEEK_TITLES } from '@/lib/menu-utils';
+import { MENU_DAYS, MEAL_SECTIONS, WEEK_NUMBERS, WEEK_TITLES } from '@/lib/menu-utils';
 
-// ─── Layout (matches the menu image exactly) ────────────────────────────────
-//   Row 1:  Title — merged across cols A..H
-//   Row 2:  Headers — Sat..Fri then "اليوم" (label column)
-//   Rows 3..7   — breakfast main (5),  H merged "الفطور"
-//   Rows 8..9   — breakfast snack (2), H merged "سناك"
-//   Rows 10..14 — lunch main (5),      H merged "الغداء"
-//   Rows 15..16 — lunch snack (2),     H merged "سناك"
-//   Rows 17..21 — dinner main (5),     H merged "العشاء"
-//   Rows 22..23 — dinner snack (2),    H merged "سناك"
+// ─── Layout ─────────────────────────────────────────────────────────────────
+//   Row 0:  Title — merged across all columns
+//   Row 1:  Day headers — Sat..Fri  +  "اليوم" label column
+//   Per meal type (فطور / غداء / عشاء):
+//     HOT_ROWS   rows — category=hot,   label= "الفطور"/"الغداء"/"العشاء"
+//     COLD_ROWS  rows — category=cold,  label= "بارد"
+//     SNACK_ROWS rows — category=snack, label= "سناك"
 //
-// Columns are written right-to-left (col A = الجمعة, col G = السبت) so when
-// Excel/Numbers renders RTL the layout matches the image. We then mark the
-// sheet as RTL on the workbook.
+// Columns are written right-to-left (col 0 = الجمعة, col 6 = السبت) so the
+// sheet renders correctly in RTL mode.
 
-const COL_DAYS = [...MENU_DAYS].reverse(); // [Fri, Thu, Wed, Tue, Mon, Sun, Sat]
-const NUM_DAY_COLS = COL_DAYS.length; // 7
-const LABEL_COL_INDEX = NUM_DAY_COLS;  // 0-based; col index of the "اليوم" column
+const HOT_ROWS   = 5;
+const COLD_ROWS  = 3;
+const SNACK_ROWS = 4;
 
-// Per (meal_type, isSnack) → starting row (0-based) and count
-interface SectionLayout { startRow: number; rows: number; isSnack: boolean; label: string; meal_type: MealType }
+const COL_DAYS        = [...MENU_DAYS].reverse(); // [Fri, Thu, Wed, Tue, Mon, Sun, Sat]
+const NUM_DAY_COLS    = COL_DAYS.length;           // 7
+const LABEL_COL_INDEX = NUM_DAY_COLS;              // rightmost col = "اليوم"
+
+interface SectionLayout {
+  startRow: number;
+  rows:     number;
+  category: ItemCategory;
+  label:    string;
+  meal_type: MealType;
+}
+
 function buildSectionLayout(): SectionLayout[] {
   const out: SectionLayout[] = [];
-  let row = 2; // start after title (0) + header (1)
+  let row = 2; // after title (0) + header (1)
   for (const s of MEAL_SECTIONS) {
-    out.push({ startRow: row, rows: MAIN_ROWS_PER_MEAL, isSnack: false, label: s.label, meal_type: s.meal_type });
-    row += MAIN_ROWS_PER_MEAL;
-    out.push({ startRow: row, rows: SNACK_ROWS_PER_MEAL, isSnack: true, label: 'سناك', meal_type: s.meal_type });
-    row += SNACK_ROWS_PER_MEAL;
+    out.push({ startRow: row, rows: HOT_ROWS,   category: 'hot',   label: s.label,  meal_type: s.meal_type });
+    row += HOT_ROWS;
+    out.push({ startRow: row, rows: COLD_ROWS,  category: 'cold',  label: 'بارد',   meal_type: s.meal_type });
+    row += COLD_ROWS;
+    out.push({ startRow: row, rows: SNACK_ROWS, category: 'snack', label: 'سناك',   meal_type: s.meal_type });
+    row += SNACK_ROWS;
   }
   return out;
 }
-const SECTIONS = buildSectionLayout();
+const SECTIONS   = buildSectionLayout();
+const TOTAL_ROWS = 2 + MEAL_SECTIONS.length * (HOT_ROWS + COLD_ROWS + SNACK_ROWS);
+const TOTAL_COLS = NUM_DAY_COLS + 1;
 
-const SNACK_FILL = { fgColor: { rgb: 'FFFCE7B5' } };  // amber/yellow background for snack rows
-const HEADER_FILL = { fgColor: { rgb: 'FFF1F5F9' } };
+// ─── Fill colours ────────────────────────────────────────────────────────────
+const HEADER_FILL    = { fgColor: { rgb: 'FFF1F5F9' } };
+const HOT_CELL_FILL  = { fgColor: { rgb: 'FFFFF7F5' } }; // very light warm
+const COLD_CELL_FILL = { fgColor: { rgb: 'FFF0F9FF' } }; // very light sky
+const SNACK_FILL     = { fgColor: { rgb: 'FFFCE7B5' } }; // amber
+
 const LABEL_FILL_BREAKFAST = { fgColor: { rgb: 'FFFEF3C7' } };
 const LABEL_FILL_LUNCH     = { fgColor: { rgb: 'FFD1FAE5' } };
 const LABEL_FILL_DINNER    = { fgColor: { rgb: 'FFFCE7E7' } };
+const LABEL_FILL_COLD      = { fgColor: { rgb: 'FFE0F2FE' } };
 const LABEL_FILL_SNACK     = { fgColor: { rgb: 'FFFCE7B5' } };
 
-function labelFill(label: string) {
-  if (label === 'الفطور') return LABEL_FILL_BREAKFAST;
-  if (label === 'الغداء') return LABEL_FILL_LUNCH;
-  if (label === 'العشاء') return LABEL_FILL_DINNER;
-  return LABEL_FILL_SNACK;
+function labelFill(sec: SectionLayout) {
+  if (sec.category === 'cold')  return LABEL_FILL_COLD;
+  if (sec.category === 'snack') return LABEL_FILL_SNACK;
+  if (sec.meal_type === 'breakfast') return LABEL_FILL_BREAKFAST;
+  if (sec.meal_type === 'lunch')     return LABEL_FILL_LUNCH;
+  return LABEL_FILL_DINNER;
+}
+
+function cellFill(sec: SectionLayout) {
+  if (sec.category === 'snack') return SNACK_FILL;
+  if (sec.category === 'cold')  return COLD_CELL_FILL;
+  return HOT_CELL_FILL;
 }
 
 const BORDER = {
@@ -55,15 +78,11 @@ const BORDER = {
   right:  { style: 'thin' as const, color: { rgb: 'FFCBD5E1' } },
 };
 
-const TOTAL_ROWS = 2 + MEAL_SECTIONS.length * (MAIN_ROWS_PER_MEAL + SNACK_ROWS_PER_MEAL);
-const TOTAL_COLS = NUM_DAY_COLS + 1;
-
 // ─── Export ─────────────────────────────────────────────────────────────────
 
 export async function exportMenuXLSX(items: MenuItem[], _meals: Meal[]) {
   const XLSX = await import('xlsx');
   const wb = XLSX.utils.book_new();
-  // Mark workbook RTL
   if (!wb.Workbook) wb.Workbook = {};
   if (!wb.Workbook.Views) wb.Workbook.Views = [];
   wb.Workbook.Views[0] = { RTL: true };
@@ -77,86 +96,70 @@ export async function exportMenuXLSX(items: MenuItem[], _meals: Meal[]) {
 }
 
 function buildWeekSheet(XLSX: typeof import('xlsx'), weekItems: MenuItem[], week: number) {
-  // 2D matrix [row][col]
   const matrix: (string | null)[][] = Array.from({ length: TOTAL_ROWS }, () => Array(TOTAL_COLS).fill(null));
 
-  // Row 0: Title (will be merged later)
+  // Row 0: title
   matrix[0][0] = WEEK_TITLES[week as 1 | 2 | 3 | 4];
 
-  // Row 1: Day headers (right-to-left rendering means col 0 = Friday on the left, col 6 = Saturday on the right)
+  // Row 1: day headers
   COL_DAYS.forEach((d, idx) => { matrix[1][idx] = d.label; });
   matrix[1][LABEL_COL_INDEX] = 'اليوم';
 
-  // Section labels (col index = NUM_DAY_COLS) at the start row of each section
+  // Section labels
   for (const s of SECTIONS) {
     matrix[s.startRow][LABEL_COL_INDEX] = s.label;
   }
 
-  // Fill data cells
+  // Data cells — one section per category, no @suffix needed
   for (const s of SECTIONS) {
-    for (const colDayIdx in COL_DAYS) {
-      const colIdx = Number(colDayIdx);
+    for (let colIdx = 0; colIdx < NUM_DAY_COLS; colIdx++) {
       const day = COL_DAYS[colIdx].value;
       const slotItems = weekItems
-        .filter(i => i.day_of_week === day && i.meal_type === s.meal_type
-                  && (s.isSnack ? i.category === 'snack' : i.category !== 'snack'))
-        .sort((a, b) => {
-          // hot first, then cold (for mains); position as tiebreaker
-          if (a.category !== b.category) {
-            const r = (c: ItemCategory) => c === 'hot' ? 0 : c === 'cold' ? 1 : 2;
-            return r(a.category) - r(b.category);
-          }
-          return a.position - b.position;
-        });
+        .filter(i =>
+          i.day_of_week   === day         &&
+          i.meal_type     === s.meal_type &&
+          i.category      === s.category
+        )
+        .sort((a, b) => a.position - b.position);
 
       for (let r = 0; r < s.rows; r++) {
         const item = slotItems[r];
-        if (item) {
-          const name = item.meals?.name ?? '';
-          const mult = item.multiplier ?? 1;
-          // الفئة الافتراضية للقسم: "snack" في صفوف السناك، "hot" في الصفوف الرئيسية.
-          // نضيف لاحقة `@بارد` (أو `@حار/@سناك`) فقط لو الفئة تختلف عن الافتراض،
-          // عشان الملفات القديمة بدون اللاحقة تبقى صالحة.
-          const sectionDefault: ItemCategory = s.isSnack ? 'snack' : 'hot';
-          const catSuffix = item.category && item.category !== sectionDefault
-            ? ` @${item.category === 'cold' ? 'بارد' : item.category === 'hot' ? 'حار' : 'سناك'}`
-            : '';
-          let cell = mult > 1 ? `${name} ×${mult}` : name;
-          cell += catSuffix;
-          matrix[s.startRow + r][colIdx] = cell;
-        }
+        if (!item) continue;
+        const name = item.meals?.name ?? '';
+        const mult = item.multiplier ?? 1;
+        matrix[s.startRow + r][colIdx] = mult > 1 ? `${name} ×${mult}` : name;
       }
     }
   }
 
-  // Convert matrix → AOA
+  // AOA → worksheet
   const ws = XLSX.utils.aoa_to_sheet(matrix.map(row => row.map(c => c ?? '')));
 
   // Column widths
-  const cols: { wch: number }[] = Array(TOTAL_COLS).fill({ wch: 18 });
+  const cols: { wch: number }[] = Array(TOTAL_COLS).fill(null).map(() => ({ wch: 18 }));
   cols[LABEL_COL_INDEX] = { wch: 12 };
   ws['!cols'] = cols;
 
-  // Row heights (all the same)
+  // Row heights
   ws['!rows'] = Array.from({ length: TOTAL_ROWS }, (_, i) => ({ hpt: i === 0 ? 26 : 22 }));
 
   // Merges
   const merges: { s: { r: number; c: number }; e: { r: number; c: number } }[] = [];
-  // Title merge across all columns
   merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: TOTAL_COLS - 1 } });
-  // Section label merges in the rightmost column
   for (const s of SECTIONS) {
-    merges.push({ s: { r: s.startRow, c: LABEL_COL_INDEX }, e: { r: s.startRow + s.rows - 1, c: LABEL_COL_INDEX } });
+    merges.push({
+      s: { r: s.startRow, c: LABEL_COL_INDEX },
+      e: { r: s.startRow + s.rows - 1, c: LABEL_COL_INDEX },
+    });
   }
   ws['!merges'] = merges;
 
-  // Apply styling per cell
+  // Cell styles
   for (let r = 0; r < TOTAL_ROWS; r++) {
     for (let c = 0; c < TOTAL_COLS; c++) {
       const addr = XLSX.utils.encode_cell({ r, c });
       if (!ws[addr]) ws[addr] = { v: '', t: 's' };
       const cell = ws[addr];
-
       cell.s = cell.s ?? {};
       cell.s.alignment = { horizontal: 'center', vertical: 'center', wrapText: true, readingOrder: 2 };
       cell.s.font = { name: 'Cairo', sz: r === 0 ? 13 : 11, bold: r === 0 || r === 1 || c === LABEL_COL_INDEX };
@@ -167,20 +170,16 @@ function buildWeekSheet(XLSX: typeof import('xlsx'), weekItems: MenuItem[], week
       } else if (r === 1) {
         cell.s.fill = HEADER_FILL;
       } else if (c === LABEL_COL_INDEX) {
-        // Determine which section this row belongs to
         const sec = SECTIONS.find(s => r >= s.startRow && r < s.startRow + s.rows);
-        cell.s.fill = labelFill(sec?.label ?? '');
+        cell.s.fill = sec ? labelFill(sec) : HEADER_FILL;
       } else {
-        // Data cell
         const sec = SECTIONS.find(s => r >= s.startRow && r < s.startRow + s.rows);
-        if (sec?.isSnack) cell.s.fill = SNACK_FILL;
+        if (sec) cell.s.fill = cellFill(sec);
       }
     }
   }
 
-  // Mark the worksheet as RTL
   ws['!sheetView'] = [{ rightToLeft: true } as unknown as never];
-
   return ws;
 }
 
@@ -189,17 +188,19 @@ function buildWeekSheet(XLSX: typeof import('xlsx'), weekItems: MenuItem[], week
 interface ImportedRow {
   week_number: number;
   day_of_week: number;
-  meal_type: MealType;
-  meal_id: string;
-  category: ItemCategory;
-  position: number;
-  multiplier: number;
+  meal_type:   MealType;
+  meal_id:     string;
+  category:    ItemCategory;
+  position:    number;
+  multiplier:  number;
 }
 
+const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+
 export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
-  rows: ImportedRow[];
+  rows:   ImportedRow[];
   errors: string[];
-  weeks: number[];
+  weeks:  number[];
 }> {
   const XLSX = await import('xlsx');
   const buffer = await file.arrayBuffer();
@@ -209,8 +210,7 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
   const rows: ImportedRow[] = [];
   const touchedWeeks = new Set<number>();
 
-  // Normalize: lookup map of meal name → meal info
-  const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+  // Meal lookup maps
   const mealByNameType = new Map<string, Meal[]>();
   for (const m of meals) {
     const k = `${norm(m.name)}|${m.type}|${m.is_snack ? '1' : '0'}`;
@@ -226,10 +226,10 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
   }
 
   for (const sheetName of wb.SheetNames) {
-    // Match sheet name against expected week titles
-    const week = WEEK_NUMBERS.find(w => norm(WEEK_TITLES[w]) === norm(sheetName)
-      || norm(sheetName).includes(String(w))
-      || norm(sheetName).includes(`${w}`));
+    const week = WEEK_NUMBERS.find(w =>
+      norm(WEEK_TITLES[w]) === norm(sheetName) ||
+      norm(sheetName).includes(String(w))
+    );
     if (!week) continue;
 
     touchedWeeks.add(week);
@@ -237,6 +237,7 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
     const matrix: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false }) as string[][];
 
     for (const s of SECTIONS) {
+      const isSnack = s.category === 'snack';
       for (let colIdx = 0; colIdx < NUM_DAY_COLS; colIdx++) {
         const day = COL_DAYS[colIdx].value;
         for (let r = 0; r < s.rows; r++) {
@@ -245,18 +246,18 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
           let cellText = raw ? norm(String(raw)) : '';
           if (!cellText) continue;
 
-          // استخراج لاحقة الفئة `@بارد/@حار/@سناك` أينما كانت في النص.
-          // الافتراضي: "snack" في صفوف السناك، "hot" في الصفوف الرئيسية.
-          let category: ItemCategory = s.isSnack ? 'snack' : 'hot';
+          // Category: comes from the section by default.
+          // @بارد / @حار / @سناك suffix can override (backward compat with old files).
+          let category: ItemCategory = s.category;
           const catMatch = cellText.match(/@\s*(حار|بارد|سناك)\b/);
           if (catMatch) {
             category = catMatch[1] === 'حار' ? 'hot' : catMatch[1] === 'بارد' ? 'cold' : 'snack';
             cellText = cellText.replace(catMatch[0], '').trim();
           }
 
-          // Parse optional " ×N" or " *N" suffix from the cell text
+          // Multiplier: " ×N" or " *N" or " xN"
           let multiplier = 1;
-          const multMatch = cellText.match(/[\s ]*[×x*]\s*(\d+)\s*$/i);
+          const multMatch = cellText.match(/[\s ]*[×x*]\s*(\d+)\s*$/i);
           if (multMatch) {
             const n = parseInt(multMatch[1], 10);
             if (n >= 1 && n <= 100) multiplier = n;
@@ -266,11 +267,10 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
           const name = cellText;
           if (!name) continue;
 
-          // Try exact match by (name, meal_type, is_snack)
-          const exactKey = `${name}|${s.meal_type}|${s.isSnack ? '1' : '0'}`;
+          // Find meal: exact (name, meal_type, is_snack) then fall back to name only
+          const exactKey = `${name}|${s.meal_type}|${isSnack ? '1' : '0'}`;
           let candidates = mealByNameType.get(exactKey);
           if (!candidates || candidates.length === 0) {
-            // Fall back to any meal with this name
             candidates = mealByName.get(name);
           }
           if (!candidates || candidates.length === 0) {
@@ -282,10 +282,10 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
           rows.push({
             week_number: week,
             day_of_week: day,
-            meal_type: s.meal_type,
-            meal_id: meal.id,
+            meal_type:   s.meal_type,
+            meal_id:     meal.id,
             category,
-            position: (s.isSnack ? 100 : 0) + r,
+            position:    r,
             multiplier,
           });
         }
@@ -293,7 +293,7 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
     }
   }
 
-  // Deduplicate by (week, day, meal_type, meal_id) — last one wins
+  // Deduplicate by (week, day, meal_type, meal_id) — last wins
   const seen = new Map<string, ImportedRow>();
   for (const r of rows) {
     const k = `${r.week_number}|${r.day_of_week}|${r.meal_type}|${r.meal_id}`;
@@ -301,8 +301,8 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
   }
 
   return {
-    rows: Array.from(seen.values()),
+    rows:   Array.from(seen.values()),
     errors,
-    weeks: Array.from(touchedWeeks),
+    weeks:  Array.from(touchedWeeks),
   };
 }
