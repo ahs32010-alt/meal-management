@@ -299,7 +299,7 @@ export default function MealList() {
   const [deletingAll, setDeletingAll] = useState(false);
   const [duplicating, setDuplicating] = useState<string | null>(null);
   const [categoryUpdating, setCategoryUpdating] = useState<string | null>(null);
-  const [duplicateResult, setDuplicateResult] = useState<{ name: string; excl: number; fixed: number; menu: number } | null>(null);
+  const [duplicateResult, setDuplicateResult] = useState<{ name: string; excl: number; fixed: number } | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; confirmLabel?: string; onConfirm: () => void } | null>(null);
   const [search, setSearch] = useState('');
   const { user: currentUser } = useCurrentUser();
@@ -470,10 +470,10 @@ export default function MealList() {
       title: 'نسخ صنف',
       message:
         `سيتم إنشاء نسخة من "${meal.name}" باسم "نسخة من ${meal.name}".\n\n` +
-        `كل التخصيصات تُنقَل تلقائياً للنسخة:\n` +
+        `التخصيصات التالية تُنقَل للنسخة:\n` +
         `• المحظورات (مع نفس البديل لكل شخص)\n` +
-        `• الأصناف الثابتة (نفس الأيام والكمية والتصنيف)\n` +
-        `• بنود قائمة الطعام (نفس الأسبوع/اليوم/التصنيف)\n\n` +
+        `• الأصناف الثابتة (نفس الأيام والكمية والتصنيف)\n\n` +
+        `قائمة الطعام لا تُنسخ — تضيف النسخة يدوياً للأيام اللي تحتاجها.\n` +
         `الأصلي يبقى كما هو دون تغيير. متابعة؟`,
       confirmLabel: 'نسخ',
       onConfirm: async () => {
@@ -594,51 +594,6 @@ export default function MealList() {
         fmCount = fmRows.length;
       }
 
-      // 4) نسخ بنود قائمة الطعام
-      const fetchMI = async (withEntity: boolean) =>
-        supabase
-          .from('menu_items')
-          .select(`week_number, day_of_week, meal_type, category, position, multiplier${withEntity ? ', entity_type' : ''}`)
-          .eq('meal_id', meal.id);
-      let miRes = await fetchMI(true);
-      let miHasEntity = true;
-      if (miRes.error && /entity_type|column/i.test(miRes.error.message)) {
-        miRes = await fetchMI(false);
-        miHasEntity = false;
-      }
-      if (miRes.error) throw miRes.error;
-
-      let miCount = 0;
-      if (miRes.data && miRes.data.length > 0) {
-        const miRows = (miRes.data as unknown as Array<{
-          week_number: number; day_of_week: number; meal_type: string;
-          category: string; position: number; multiplier?: number; entity_type?: string;
-        }>).map(r => {
-          const out: Record<string, unknown> = {
-            week_number: r.week_number,
-            day_of_week: r.day_of_week,
-            meal_type: r.meal_type,
-            meal_id: newId,
-            category: r.category,
-            position: r.position,
-            multiplier: r.multiplier ?? 1,
-          };
-          if (miHasEntity) out.entity_type = r.entity_type ?? entityType;
-          return out;
-        });
-        const { error: miInsErr } = await supabase.from('menu_items').insert(miRows);
-        if (miInsErr) {
-          if (/entity_type|column/i.test(miInsErr.message)) {
-            const fallback = miRows.map(({ entity_type: _omit, ...rest }) => rest);
-            const { error: miInsErr2 } = await supabase.from('menu_items').insert(fallback);
-            if (miInsErr2) throw miInsErr2;
-          } else {
-            throw miInsErr;
-          }
-        }
-        miCount = miRows.length;
-      }
-
       void logActivity({
         action: 'create',
         entity_type: 'meal',
@@ -651,11 +606,10 @@ export default function MealList() {
           for_entity: entityType,
           copied_exclusions: exclCount,
           copied_fixed_meals: fmCount,
-          copied_menu_items: miCount,
         },
       });
 
-      setDuplicateResult({ name: finalName, excl: exclCount, fixed: fmCount, menu: miCount });
+      setDuplicateResult({ name: finalName, excl: exclCount, fixed: fmCount });
       await fetchMeals();
     } catch (err) {
       alert(`تعذّر النسخ: ${err instanceof Error ? err.message : String(err)}`);
@@ -826,8 +780,8 @@ export default function MealList() {
           <div className="text-sm">
             ✓ تم إنشاء <span className="font-bold">&quot;{duplicateResult.name}&quot;</span> ونُسخ معها{' '}
             <span className="font-bold">{duplicateResult.excl}</span> محظور،{' '}
-            <span className="font-bold">{duplicateResult.fixed}</span> صنف ثابت،{' '}
-            <span className="font-bold">{duplicateResult.menu}</span> بند منيو.
+            <span className="font-bold">{duplicateResult.fixed}</span> صنف ثابت.{' '}
+            أضفها يدوياً لقائمة الطعام.
           </div>
           <button
             onClick={() => setDuplicateResult(null)}

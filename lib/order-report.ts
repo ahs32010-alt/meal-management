@@ -194,22 +194,29 @@ export async function buildOrderReport(
     };
   });
 
-  const allIds = new Set([...Object.keys(mainQty), ...Object.keys(altQty), ...Object.keys(fixedQty)]);
+  // allIds يشمل: كل أصناف الأمر (حتى لو mainQty=0 بسبب استثناء الجميع)
+  // + البدائل (altQty) + الأصناف الثابتة (fixedQty)
+  const allIds = new Set([
+    ...orderItems.map(i => i.meal_id),
+    ...Object.keys(altQty),
+    ...Object.keys(fixedQty),
+  ]);
   const itemsSummary = Array.from(allIds)
     .map(id => {
       const extra = extraQtyMap[id] ?? 0;
       const mult  = multiplierMap[id] ?? 1;
       const mainCooked = (mainQty[id] || 0) * mult + extra;
+      const total = mainCooked + (altQty[id] || 0) + (fixedQty[id] || 0);
       return {
         meal: allMealDetails[id],
-        quantity: mainCooked + (altQty[id] || 0) + (fixedQty[id] || 0),
+        quantity: total,
         mainQty: mainCooked,
         altQty: altQty[id] || 0,
         fixedQty: fixedQty[id] || 0,
         multiplier: mult,
       };
     })
-    .filter(x => x.meal)
+    .filter(x => x.meal && x.quantity > 0)
     .sort((a, b) => b.quantity - a.quantity);
 
   const mainMealsSummary = orderItems
@@ -248,13 +255,12 @@ export async function buildOrderReport(
     .sort((a, b) => b.qty - a.qty);
 
   // Per-meal final count (used by OrderList for the snapshot-friendly count column)
-  // يشمل: الأصليين × المضاعف + extra_quantity يدوي + البدائل (altQty)
+  // يشمل: أصناف الأمر × المضاعف + extra_quantity + البدائل + الأصناف الثابتة
   const itemFinalCounts: Record<string, number> = {};
-  orderItems.forEach(item => {
-    const id = item.meal_id;
+  for (const id of allIds) {
     const mult = multiplierMap[id] ?? 1;
-    itemFinalCounts[id] = (mainQty[id] || 0) * mult + (extraQtyMap[id] ?? 0) + (altQty[id] || 0);
-  });
+    itemFinalCounts[id] = (mainQty[id] || 0) * mult + (extraQtyMap[id] ?? 0) + (altQty[id] || 0) + (fixedQty[id] || 0);
+  }
 
   return {
     order,
