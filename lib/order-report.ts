@@ -201,7 +201,9 @@ export async function buildOrderReport(
     ...Object.keys(altQty),
     ...Object.keys(fixedQty),
   ]);
-  const itemsSummary = Array.from(allIds)
+
+  // احسب الكمية لكل ID أولاً
+  const perIdItems = Array.from(allIds)
     .map(id => {
       const extra = extraQtyMap[id] ?? 0;
       const mult  = multiplierMap[id] ?? 1;
@@ -216,7 +218,24 @@ export async function buildOrderReport(
         multiplier: mult,
       };
     })
-    .filter(x => x.meal && x.quantity > 0)
+    .filter(x => x.meal && x.quantity > 0);
+
+  // اجمع الأصناف التي لها نفس الاسم (مثل صنف + سناك باسم واحد) في بند واحد
+  const nameMap = new Map<string, typeof perIdItems[0]>();
+  for (const item of perIdItems) {
+    const key = item.meal.name.trim();
+    const existing = nameMap.get(key);
+    if (existing) {
+      existing.quantity += item.quantity;
+      existing.mainQty  += item.mainQty;
+      existing.altQty   += item.altQty;
+      existing.fixedQty += item.fixedQty;
+    } else {
+      nameMap.set(key, { ...item });
+    }
+  }
+
+  const itemsSummary = Array.from(nameMap.values())
     .sort((a, b) => b.quantity - a.quantity);
 
   const mainMealsSummary = orderItems
