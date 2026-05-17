@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { supabase } from '@/lib/supabase-client';
 import type { MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import { exportXLSX, parseXLSX } from '@/lib/xlsx-utils';
@@ -67,7 +67,6 @@ export default function SettingsView() {
   const [importStatus, setImportStatus] = useState<'idle' | 'importing' | 'done' | 'error'>('idle');
   const [importMsg, setImportMsg] = useState('');
   const importRef = useRef<HTMLInputElement>(null);
-  const supabase = useMemo(() => createClient(), []);
   const [tab, setTab] = useState<Tab>('translit');
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.is_admin === true;

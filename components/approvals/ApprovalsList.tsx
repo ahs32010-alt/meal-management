@@ -5,8 +5,8 @@
 //   - الأدمن: يشوف الكل (طلبات الجميع) ويقدر يقبل/يرفض
 //   - اليوزر: يشوف طلباته فقط (read-only)
 
-import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { useState, useEffect, useCallback, useRef, useId } from 'react';
+import { supabase } from '@/lib/supabase-client';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { ENTITY_TYPE_LABELS, MEAL_TYPE_LABELS, DAY_LABELS } from '@/lib/types';
 import type { Meal } from '@/lib/types';
@@ -231,7 +231,6 @@ interface Props {
 
 export default function ApprovalsList({ limit, statusFilter = 'all', hideFilters = false, onChange }: Props) {
   const { user } = useCurrentUser();
-  const supabase = useMemo(() => createClient(), []);
   const channelId = useId();
   const isAdmin = user?.is_admin === true;
 

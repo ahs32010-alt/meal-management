@@ -1,7 +1,7 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { Fragment, useCallback, useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase-client';
 import { useCurrentUser } from '@/lib/use-current-user';
 import {
   ENTITY_LABELS,
@@ -79,7 +79,6 @@ function entityStyle(type: string): string {
 }
 
 export default function ActivityLogView() {
-  const supabase = useMemo(() => createClient(), []);
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.is_admin === true;
 

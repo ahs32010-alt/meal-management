@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 
 const ApprovalsList = dynamic(() => import('@/components/approvals/ApprovalsList'), { ssr: false });
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
 import type { MealType } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
 import { useCurrentUser } from '@/lib/use-current-user';
@@ -93,7 +93,6 @@ export default function DashboardHome() {
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
-  const supabase = useMemo(() => createClient(), []);
 
   // ── Fetch stats + today's orders + recent orders (with item counts) ─────
   const fetchStats = useCallback(async () => {
@@ -151,11 +150,10 @@ export default function DashboardHome() {
         ({ from, to } = getPresetRange(datePreset));
       }
 
-      const { data: ordersArr } = await supabase
-        .from('daily_orders')
-        .select('id, date, meal_type')
-        .gte('date', from)
-        .lte('date', to);
+      const [{ data: ordersArr }, { data: exclRaw }] = await Promise.all([
+        supabase.from('daily_orders').select('id, date, meal_type').gte('date', from).lte('date', to),
+        supabase.from('exclusions').select('meal_id, meals(name, type)'),
+      ]);
 
       const allOrders = ordersArr ?? [];
       const orderIds = allOrders.map(o => o.id);
@@ -204,7 +202,6 @@ export default function DashboardHome() {
           .slice(0, 50);
       }
 
-      const { data: exclRaw } = await supabase.from('exclusions').select('meal_id, meals(name, type)');
       const exclMap = new Map<string, { name: string; type: string; count: number }>();
       for (const e of exclRaw ?? []) {
         const m = e.meals as unknown as { name: string; type: string } | null;
@@ -271,7 +268,7 @@ export default function DashboardHome() {
 
   // ── Refresh on window focus (fallback if realtime isn't enabled) ─────────
   useEffect(() => {
-    const onFocus = () => refreshAll();
+    const onFocus = () => scheduleRefresh(true);
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [refreshAll]);

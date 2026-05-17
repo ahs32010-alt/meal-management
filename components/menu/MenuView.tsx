@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
@@ -36,7 +36,6 @@ const CATEGORY_THEME: Record<ItemCategory, { icon: string; bg: string; text: str
 };
 
 export default function MenuView() {
-  const supabase = useMemo(() => createClient(), []);
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.is_admin === true;
   const canEdit = can(currentUser, 'menu', 'edit');

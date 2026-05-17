@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { useState, useEffect, useRef } from 'react';
+import { supabase } from '@/lib/supabase-client';
 import type { DailyOrder, ReportData, ItemCategory, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, MEAL_TYPE_EN, CATEGORY_ORDER, CATEGORY_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, DAY_LABELS } from '@/lib/types';
 import { formatDate, formatDateFull } from '@/lib/date-utils';
@@ -513,7 +513,6 @@ export default function StickersView() {
   const [sizeHeight, setSizeHeight] = useState<string>('10');
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFirstSplitsLoad = useRef(true);
-  const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
     const loadOrders = async () => {

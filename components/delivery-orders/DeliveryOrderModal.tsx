@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import type { City, DailyOrder, DeliveryLocation, DeliveryMeal, DeliveryMealType, DeliveryOrder, MealType } from '@/lib/types';
 import { DELIVERY_MEAL_TYPE_LABELS, MEAL_TYPE_LABELS } from '@/lib/types';
@@ -41,7 +41,6 @@ interface ReportPayload {
 
 export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: Props) {
   const isEdit = !!editingOrder;
-  const supabase = useMemo(() => createClient(), []);
 
   // Mode: لو تعديل وعنده source_order_id نخش بـfrom_order، وإلا manual
   const [mode, setMode] = useState<SourceMode['type']>(

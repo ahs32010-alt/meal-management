@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase-client';
 import type { DeliveryPrintHeader } from '@/lib/types';
 
 interface Props {
@@ -9,7 +9,6 @@ interface Props {
 }
 
 export default function DeliveryPrintHeaderModal({ onClose }: Props) {
-  const supabase = useMemo(() => createClient(), []);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

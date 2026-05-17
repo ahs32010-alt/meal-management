@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -62,7 +62,6 @@ const TABLE_LABELS: Record<string, string> = {
 };
 
 export default function BackupRestoreView() {
-  const supabase = useMemo(() => createClient(), []);
   const { user: currentUser } = useCurrentUser();
 
   const [backups, setBackups] = useState<BackupRow[]>([]);

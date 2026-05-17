@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
 import type { DailyOrder, Meal, EntityType, MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import { formatDate, formatDateFull, formatNow } from '@/lib/date-utils';
@@ -266,7 +266,6 @@ export default function ReportView({ initialOrderId }: Props) {
   const [loadingPeriod, setLoadingPeriod] = useState(false);
   const [periodError, setPeriodError] = useState('');
 
-  const supabase = useMemo(() => createClient(), []);
 
   const totalSelectedDays = useMemo(
     () => Object.values(selections).reduce((s, days) => s + days.size, 0),

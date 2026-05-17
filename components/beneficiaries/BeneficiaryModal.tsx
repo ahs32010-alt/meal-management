@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { useState, useRef, useEffect } from 'react';
+import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { needsApproval } from '@/lib/permissions';
@@ -305,7 +305,6 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<Tab>('info');
-  const supabase = useMemo(() => createClient(), []);
   const { user: currentUser } = useCurrentUser();
   // المسار: الزر يظهر/يخفى من القسم الأول (canAdd/canEdit)، ولو يظهر،
   // نسأل القسم الثاني: هل هذا الإجراء يحتاج موافقة لهذا المستخدم؟
@@ -439,7 +438,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
         const { error } = await supabase.from('beneficiaries').update(payload).eq('id', beneficiary.id);
         if (error) { setError(friendlyError(error.message)); setSaving(false); return; }
       } else {
-        const { data, error } = await supabase.from('beneficiaries').insert(payload).select().single();
+        const { data, error } = await supabase.from('beneficiaries').insert(payload).select('id').single();
         if (error) { setError(friendlyError(error.message)); setSaving(false); return; }
         beneficiaryId = data.id;
       }

@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
@@ -100,7 +100,6 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   const isAdmin = currentUser?.is_admin === true;
   const myPending = useMyPending(entityType);
 
-  const supabase = useMemo(() => createClient(), []);
 
   // نصوص واجهة المستخدم تتغير حسب نوع الكيان (مستفيد/مرافق)
   const entitySingular = ENTITY_TYPE_LABELS[entityType];

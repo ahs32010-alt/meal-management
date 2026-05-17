@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import type { Beneficiary, Meal, ItemCategory, EntityType } from '@/lib/types';
 import {
@@ -145,7 +145,6 @@ function MealSearchPicker({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function BulkCustomization({ entityType }: Props) {
-  const supabase = useMemo(() => createClient(), []);
 
   const entityLabel = ENTITY_TYPE_LABELS[entityType];
   const entityPlural = ENTITY_TYPE_LABELS_PLURAL[entityType];

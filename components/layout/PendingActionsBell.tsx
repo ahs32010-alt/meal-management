@@ -3,8 +3,8 @@
 // جرس إشعارات للأدمن: يبيّن طلبات الإضافة/الحذف pending مع زرّي قبول/رفض.
 // realtime على pending_actions لتحديث العداد فوراً.
 
-import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { useState, useEffect, useCallback, useRef, useId } from 'react';
+import { supabase } from '@/lib/supabase-client';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { ENTITY_TYPE_LABELS } from '@/lib/types';
 import {
@@ -26,7 +26,6 @@ function timeAgo(iso: string): string {
 
 export default function PendingActionsBell() {
   const { user } = useCurrentUser();
-  const supabase = useMemo(() => createClient(), []);
   // اسم قناة realtime فريد لكل instance — يمنع التصادم لما الجرس يُرسم
   // في عدّة أماكن (الـsidebar وشريط الموبايل والديسكتوب).
   const channelId = useId();
@@ -42,9 +41,10 @@ export default function PendingActionsBell() {
     if (!isAdmin) { setItems([]); return; }
     const { data } = await supabase
       .from('pending_actions')
-      .select('*')
+      .select('id, user_id, user_name, action, entity_type, entity_id, entity_name, payload, status, reviewed_by, reviewed_at, reject_reason, created_at')
       .eq('status', 'pending')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(50);
     setItems((data ?? []) as PendingAction[]);
   }, [isAdmin, supabase]);
 

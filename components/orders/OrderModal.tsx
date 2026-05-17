@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import type { DailyOrder, Meal, MealType, OrderItem, ItemCategory, MenuItem, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, CATEGORY_LABELS, CATEGORY_ORDER, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
@@ -86,7 +86,6 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     typeof window !== 'undefined' ? localStorage.getItem('orderPrintShowFixed') !== '0' : true
   );
   const [autoFilledKey, setAutoFilledKey] = useState<string | null>(null);
-  const supabase = useMemo(() => createClient(), []);
 
   // نفلتر الأصناف على نوع الكيان أولاً (مستفيدين/مرافقين)، بعدها على نوع الوجبة
   // والسناك. الأصناف القديمة بدون entity_type تُعتبر للمستفيدين.

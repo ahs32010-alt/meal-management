@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
@@ -310,7 +310,6 @@ export default function MealList() {
   const editNeedsApproval   = needsApproval(currentUser, 'meals', 'edit');
   const deleteNeedsApproval = needsApproval(currentUser, 'meals', 'delete');
   const myPending = useMyPending('meal');
-  const supabase = useMemo(() => createClient(), []);
 
   // كل ما تغيّر الـtab نخزن الاختيار ونعيد التحميل.
   const switchEntity = useCallback((next: EntityType) => {

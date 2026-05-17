@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { useState } from 'react';
+import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { needsApproval } from '@/lib/permissions';
@@ -38,7 +38,6 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const supabase = useMemo(() => createClient(), []);
   const { user: currentUser } = useCurrentUser();
   const addNeedsApproval  = needsApproval(currentUser, 'meals', 'add');
   const editNeedsApproval = needsApproval(currentUser, 'meals', 'edit');
