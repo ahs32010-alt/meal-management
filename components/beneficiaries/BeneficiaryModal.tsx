@@ -24,7 +24,7 @@ interface ExclusionEntry {
   alternative_meal_id: string;
 }
 
-type FixedEntry = { meal_id: string; meal_type: MealType; days: Set<number>; quantity: number; category: ItemCategory };
+type FixedEntry = { meal_id: string; meal_type: MealType; days: Set<number>; quantity: number; category: ItemCategory; suppress_if_meal_id?: string | null };
 
 function buildFixedEntries(fixedMeals: Beneficiary['fixed_meals'], allMeals?: Meal[]): FixedEntry[] {
   const mealById = new Map((allMeals ?? []).map(m => [m.id, m]));
@@ -38,12 +38,14 @@ function buildFixedEntries(fixedMeals: Beneficiary['fixed_meals'], allMeals?: Me
       const masterCat = masterMeal?.category as ItemCategory | undefined;
       const joinedMeal = (fm as unknown as { meals?: { is_snack?: boolean } }).meals;
       const inferred: ItemCategory = (masterMeal?.is_snack || joinedMeal?.is_snack) ? 'snack' : 'hot';
+      const suppressId = (fm as unknown as { suppress_if_meal_id?: string | null }).suppress_if_meal_id;
       map[key] = {
         meal_id: fm.meal_id,
         meal_type: fm.meal_type as MealType,
         days: new Set(),
         quantity: fm.quantity ?? 1,
         category: masterCat ?? (fm.category as ItemCategory) ?? inferred,
+        suppress_if_meal_id: suppressId ?? null,
       };
     }
     map[key].days.add(fm.day_of_week);
@@ -327,12 +329,15 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const addFixedMeal = (meal: Meal) => {
     const exists = fixedEntries.find(fe => fe.meal_id === meal.id && fe.meal_type === newFixedMealType);
     if (!exists) {
-      // الفئة من meals.category (المصدر الموحد)، ولو ما محدّدة → اشتقاق من is_snack.
       const category: ItemCategory = (meal.category as ItemCategory | undefined) ?? (meal.is_snack ? 'snack' : 'hot');
-      setFixedEntries(prev => [...prev, { meal_id: meal.id, meal_type: newFixedMealType, days: new Set(), quantity: 1, category }]);
+      setFixedEntries(prev => [...prev, { meal_id: meal.id, meal_type: newFixedMealType, days: new Set(), quantity: 1, category, suppress_if_meal_id: null }]);
     }
     setAddingFixed(false);
   };
+  const setFixedEntrySuppressIf = (meal_id: string, meal_type: MealType, suppress_id: string | null) =>
+    setFixedEntries(prev => prev.map(fe =>
+      fe.meal_id === meal_id && fe.meal_type === meal_type ? { ...fe, suppress_if_meal_id: suppress_id } : fe
+    ));
   const removeFixedEntry = (meal_id: string, meal_type: MealType) =>
     setFixedEntries(prev => prev.filter(fe => !(fe.meal_id === meal_id && fe.meal_type === meal_type)));
   const setFixedEntryQty = (meal_id: string, meal_type: MealType, quantity: number) =>
@@ -403,6 +408,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
             meal_id: fe.meal_id,
             quantity: fe.quantity,
             category: fe.category,
+            suppress_if_meal_id: fe.suppress_if_meal_id ?? null,
           }))
         ),
       });
@@ -458,20 +464,22 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           meal_id: fe.meal_id,
           quantity: fe.quantity,
           category: fe.category,
+          suppress_if_meal_id: fe.suppress_if_meal_id ?? null,
         }))
       );
       if (fixedRows.length > 0) {
         const { error: fixedErr } = await supabase.from('beneficiary_fixed_meals').insert(fixedRows);
         if (fixedErr) {
-          if (/category|column/i.test(fixedErr.message)) {
-            // Migration not run — let the user know category won't persist
-            const fallback = fixedRows.map(({ category: _c, ...rest }) => rest);
+          if (/column/i.test(fixedErr.message)) {
+            // One or more migration columns missing — fall back to base columns only
+            const fallback = fixedRows.map(({ category: _c, suppress_if_meal_id: _s, ...rest }) => rest);
             const { error: fallbackErr } = await supabase.from('beneficiary_fixed_meals').insert(fallback);
             if (fallbackErr) { throw fallbackErr; }
             alert(
-              'تنبيه: تم حفظ المستفيد لكن لم يتم حفظ تصنيف (حار/بارد/سناك) للأصناف الثابتة.\n\n' +
-              'السبب: عمود category غير موجود في جدول beneficiary_fixed_meals.\n\n' +
-              'الحل: شغّل ملف supabase/fixed-meals-category-migration.sql في Supabase SQL Editor.'
+              'تنبيه: تم حفظ المستفيد لكن بعض الخصائص (التصنيف / شرط الإلغاء) لم تُحفظ للأصناف الثابتة.\n\n' +
+              'الحل: شغّل ملفات الـmigration في Supabase SQL Editor:\n' +
+              '• supabase/fixed-meals-category-migration.sql\n' +
+              '• supabase/fixed-meals-suppress-if-migration.sql'
             );
           } else {
             throw fixedErr;
@@ -747,9 +755,9 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                     }[fe.meal_type] ?? 'text-slate-700 bg-slate-50';
 
                     return (
-                      <div key={`${fe.meal_id}_${fe.meal_type}`} className="border border-slate-200 rounded-xl overflow-hidden">
+                      <div key={`${fe.meal_id}_${fe.meal_type}`} className="border border-slate-200 rounded-xl">
                         {/* Meal header */}
-                        <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border-b border-slate-100">
+                        <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border-b border-slate-100 rounded-t-xl">
                           <div className="flex items-center gap-2">
                             <span className="font-bold text-sm text-slate-800">{meal.name}</span>
                             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${labelColor}`}>
@@ -803,6 +811,27 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                               {DAY_LABELS[day]}
                             </button>
                           ))}
+                        </div>
+                        {/* Suppress if meal present */}
+                        <div className="flex items-center gap-2 px-4 pb-3 border-t border-slate-100 pt-2.5">
+                          <span className="text-[11px] text-slate-400 whitespace-nowrap shrink-0">يُلغى إذا وُجد في الأمر:</span>
+                          {fe.suppress_if_meal_id ? (
+                            <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-200 text-orange-700 rounded-lg px-2 py-1 text-xs font-medium">
+                              <span>{mealById(fe.suppress_if_meal_id)?.name ?? '—'}</span>
+                              <button
+                                type="button"
+                                onClick={() => setFixedEntrySuppressIf(fe.meal_id, fe.meal_type, null)}
+                                className="text-slate-300 hover:text-red-500 transition-colors font-bold leading-none"
+                              >✕</button>
+                            </div>
+                          ) : (
+                            <MealPicker
+                              meals={meals}
+                              placeholder="اختر صنف..."
+                              onSelect={(m) => setFixedEntrySuppressIf(fe.meal_id, fe.meal_type, m.id)}
+                              customClass="border-slate-200 text-slate-400 hover:border-orange-400 hover:text-orange-600"
+                            />
+                          )}
                         </div>
                       </div>
                     );

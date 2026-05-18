@@ -511,6 +511,7 @@ export default function StickersView() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [sizeWidth, setSizeWidth]   = useState<string>('10');
   const [sizeHeight, setSizeHeight] = useState<string>('10');
+  const [hideNoAlt, setHideNoAlt] = useState(true);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFirstSplitsLoad = useRef(true);
 
@@ -655,12 +656,20 @@ export default function StickersView() {
     return result;
   });
 
+  const effectiveDisplayDetails = hideNoAlt
+    ? displayDetails.filter(detail => {
+        const hasAnyAlt = detail.excludedItems.some(item => item.alternative !== null);
+        const hasFixed = (detail.fixedItems ?? []).length > 0;
+        return hasAnyAlt || hasFixed;
+      })
+    : displayDetails;
+
   const handleExportWord = async () => {
-    if (!report || displayDetails.length === 0) return;
+    if (!report || effectiveDisplayDetails.length === 0) return;
     const fn = `ستيكرات_${new Date(report.order.date).toISOString().slice(0, 10)}_${mealTypeAr}`;
     const { exportStickersWord } = await import('./word-export');
     exportStickersWord(
-      displayDetails, mealTypeAr, mealTypeEn, fn, customDict,
+      effectiveDisplayDetails, mealTypeAr, mealTypeEn, fn, customDict,
       report.order.date,
       report.order.week_number ?? report.order.week_of_month,
       report.order.day_of_week,
@@ -668,7 +677,7 @@ export default function StickersView() {
   };
 
   const handleExportPerPage = async () => {
-    if (!report || displayDetails.length === 0) return;
+    if (!report || effectiveDisplayDetails.length === 0) return;
     const w = parseFloat(sizeWidth);
     const h = parseFloat(sizeHeight);
     if (!w || !h || w < 2 || h < 2 || w > 30 || h > 30) {
@@ -679,7 +688,7 @@ export default function StickersView() {
     try {
       const { exportStickersPerPageDocx } = await import('./word-export');
       await exportStickersPerPageDocx(
-        displayDetails, mealTypeAr, mealTypeEn, fn, w, h, customDict,
+        effectiveDisplayDetails, mealTypeAr, mealTypeEn, fn, w, h, customDict,
         report.order.date,
         report.order.week_number ?? report.order.week_of_month,
         report.order.day_of_week,
@@ -704,19 +713,28 @@ export default function StickersView() {
             return <span className={`badge ${ENTITY_BADGE_STYLES[e]}`}>{ENTITY_TYPE_LABELS_PLURAL[e]}</span>;
           })()}
         </div>
-        {report && displayDetails.length > 0 && (
-          <div className="flex items-center gap-2">
+        {report && effectiveDisplayDetails.length > 0 && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="flex items-center gap-2 cursor-pointer select-none px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors">
+              <input
+                type="checkbox"
+                checked={hideNoAlt}
+                onChange={e => setHideNoAlt(e.target.checked)}
+                className="w-4 h-4 accent-emerald-600 cursor-pointer"
+              />
+              <span className="text-sm text-slate-700 font-medium">إخفاء الأصناف التي ليس لها بديل</span>
+            </label>
             <button onClick={handleExportWord} className="btn-secondary text-sm">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              تصدير Word ({displayDetails.length})
+              تصدير Word ({effectiveDisplayDetails.length})
             </button>
             <button onClick={() => window.print()} className="btn-primary">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
               </svg>
-              طباعة ({displayDetails.length})
+              طباعة ({effectiveDisplayDetails.length})
             </button>
           </div>
         )}
@@ -766,15 +784,15 @@ export default function StickersView() {
             </div>
 
             <div className="no-print text-sm text-slate-500 px-1 mb-3">
-              {displayDetails.length} ستيكر
-              {displayDetails.length !== stickerDetails.length && (
-                <span className="text-violet-600 mr-2">({displayDetails.length - stickerDetails.length} مفصول)</span>
+              {effectiveDisplayDetails.length} ستيكر
+              {effectiveDisplayDetails.length > stickerDetails.length && (
+                <span className="text-violet-600 mr-2">({effectiveDisplayDetails.length - stickerDetails.length} مفصول)</span>
               )}
             </div>
 
             <div className="sticker-wrap">
               <div className="sticker-grid">
-                {displayDetails.map((detail) => (
+                {effectiveDisplayDetails.map((detail) => (
                   <StickerCard
                     key={`${detail.beneficiary.id}_g${detail.groupIndex}_c${detail.category ?? 'x'}_${detail.excludedItems.map(i => i.meal.id).join(',')}_${(detail.fixedItems ?? []).map(m => m.meal.id).join(',')}`}
                     detail={detail}
@@ -864,7 +882,7 @@ export default function StickersView() {
 
               <button
                 onClick={handleExportPerPage}
-                disabled={displayDetails.length === 0}
+                disabled={effectiveDisplayDetails.length === 0}
                 className="btn-primary text-sm disabled:opacity-50"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

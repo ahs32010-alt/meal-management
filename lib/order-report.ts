@@ -69,7 +69,7 @@ export async function buildOrderReport(
   // Same fallback strategy for the entity_type filter on beneficiaries.
   const fetchBens = async (withFixedCategory: boolean, withEntityType: boolean, withMealCategory: boolean) => {
     const mealCols = `id, name, english_name, type, is_snack${withMealCategory ? ', category' : ''}`;
-    const sel = `*, exclusions(id, meal_id, alternative_meal_id, meals:meals!exclusions_meal_id_fkey(${mealCols})), fixed_meals:beneficiary_fixed_meals(id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category' : ''}, meals(${mealCols}))`;
+    const sel = `*, exclusions(id, meal_id, alternative_meal_id, meals:meals!exclusions_meal_id_fkey(${mealCols})), fixed_meals:beneficiary_fixed_meals(id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category, suppress_if_meal_id' : ''}, meals!meal_id(${mealCols}))`;
     const q = supabase.from('beneficiaries').select(sel).order('name');
     return withEntityType ? q.eq('entity_type', orderEntityType) : q;
   };
@@ -96,7 +96,7 @@ export async function buildOrderReport(
     category: string; villa?: string; diet_type?: string;
     fixed_items?: string; notes?: string; created_at: string;
     exclusions: { id: string; meal_id: string; alternative_meal_id: string | null }[];
-    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; category?: string }[];
+    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; category?: string; suppress_if_meal_id?: string | null }[];
   };
   const beneficiaries = bensRes.data as unknown as BenRow[] | null;
 
@@ -129,7 +129,7 @@ export async function buildOrderReport(
     category: string; villa?: string; diet_type?: string;
     fixed_items?: string; notes?: string; created_at: string;
     exclusions: { id: string; meal_id: string; alternative_meal_id: string | null }[];
-    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal }[];
+    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; suppress_if_meal_id?: string | null }[];
   }) => {
     const excludedIds = new Set((ben.exclusions || []).map(e => e.meal_id));
 
@@ -146,7 +146,12 @@ export async function buildOrderReport(
       });
 
     const todayFixed: { meal: Meal; quantity: number; category: ItemCategory }[] = (ben.fixed_meals || [])
-      .filter(fm => fm.day_of_week === orderDayOfWeek && fm.meal_type === order.meal_type && fm.meals)
+      .filter(fm =>
+        fm.day_of_week === orderDayOfWeek &&
+        fm.meal_type === order.meal_type &&
+        fm.meals &&
+        !(fm.suppress_if_meal_id && orderMealIds.has(fm.suppress_if_meal_id))
+      )
       .map(fm => {
         // أولوية تصنيف الصنف الثابت:
         //   1) meals.category — المصدر الموحد (يضمن نفس الصنف نفس الفئة في كل مكان)
