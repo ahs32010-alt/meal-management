@@ -48,6 +48,8 @@ export default function MenuView() {
   });
   const [allItems, setAllItems] = useState<MenuItem[]>([]);
   const [meals, setMeals] = useState<Meal[]>([]);
+  const [benTotal, setBenTotal] = useState(0);
+  const [benExclusions, setBenExclusions] = useState<Record<string, number>>({});
   const [activeWeek, setActiveWeek] = useState<WeekNumber>(1);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<CellEditState | null>(null);
@@ -117,6 +119,30 @@ export default function MenuView() {
 
     if (itemsRes.data) setAllItems(itemsRes.data as unknown as MenuItem[]);
     if (mealsRes.data) setMeals(mealsRes.data as unknown as Meal[]);
+
+    // جلب إجمالي المستفيدين والمحظورات لعرض الأعداد الفعلية في الخلايا
+    try {
+      const [bensRes, exclRes] = await Promise.all([
+        supabase.from('beneficiaries').select('id, entity_type'),
+        supabase.from('exclusions').select('meal_id, beneficiaries!inner(entity_type)'),
+      ]);
+      if (!bensRes.error && bensRes.data) {
+        setBenTotal(
+          (bensRes.data as Array<{ entity_type?: string }>)
+            .filter(b => (b.entity_type ?? 'beneficiary') === entityType).length
+        );
+      }
+      if (!exclRes.error && exclRes.data) {
+        const counts: Record<string, number> = {};
+        for (const ex of exclRes.data as Array<{ meal_id: string; beneficiaries?: { entity_type?: string } | { entity_type?: string }[] }>) {
+          const ben = Array.isArray(ex.beneficiaries) ? ex.beneficiaries[0] : ex.beneficiaries;
+          if ((ben?.entity_type ?? 'beneficiary') !== entityType) continue;
+          counts[ex.meal_id] = (counts[ex.meal_id] ?? 0) + 1;
+        }
+        setBenExclusions(counts);
+      }
+    } catch { /* غير حرج — يرجع لعرض ×مضاعف */ }
+
     setLoading(false);
   }, [supabase, entityType]);
 
@@ -414,6 +440,9 @@ export default function MenuView() {
     const effectiveCat: ItemCategory = mealCat ?? item.category ?? (item.meals?.is_snack ? 'snack' : 'hot');
     const theme = CATEGORY_THEME[effectiveCat];
     const mult = item.multiplier ?? 1;
+    const directCount = Math.max(0, benTotal - (benExclusions[item.meal_id] ?? 0));
+    const totalCount = directCount * mult;
+    const hasBenData = benTotal > 0;
     const q = search.trim().toLowerCase();
     const itemName = item.meals?.name ?? '';
     const itemEnglish = item.meals?.english_name ?? '';
@@ -453,26 +482,56 @@ export default function MenuView() {
             {item.meals?.name ?? '—'}
           </span>
         )}
-        {canEdit ? (
-          <input
-            type="number"
-            min={1}
-            max={100}
-            value={mult}
-            onChange={e => handleSetMultiplier(item, parseInt(e.target.value) || 1)}
-            onClick={e => e.stopPropagation()}
-            title="مضاعف الكمية (×N)"
-            className={`shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 focus:outline-none focus:ring-1 ${
-              mult > 1
-                ? 'text-violet-700 bg-violet-50 border border-violet-300 focus:ring-violet-300'
-                : 'text-slate-400 bg-transparent border border-transparent hover:border-slate-200 focus:ring-slate-300'
-            }`}
-          />
-        ) : mult > 1 ? (
-          <span className="shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 text-violet-700 bg-violet-50 border border-violet-300">
-            ×{mult}
-          </span>
-        ) : null}
+        {hasBenData ? (
+          <>
+            {canEdit ? (
+              <input
+                type="number"
+                min={0}
+                value={totalCount}
+                onChange={e => {
+                  const desired = parseInt(e.target.value) || 0;
+                  const newMult = directCount > 0 ? Math.max(1, Math.round(desired / directCount)) : 1;
+                  handleSetMultiplier(item, newMult);
+                }}
+                onClick={e => e.stopPropagation()}
+                title={`${directCount} مستفيد × ${mult}${mult > 1 ? ` = ${totalCount}` : ''}\nغيّر الرقم لتعديل المضاعف تلقائياً`}
+                className="shrink-0 w-14 text-center text-xs font-bold rounded py-0.5 text-emerald-700 bg-emerald-50 border border-emerald-300 focus:outline-none focus:ring-1 focus:ring-emerald-400"
+              />
+            ) : (
+              <span className="shrink-0 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">
+                {totalCount}
+              </span>
+            )}
+            {mult > 1 && (
+              <span className="shrink-0 text-[10px] font-bold text-violet-500" title={`مضاعف ×${mult}`}>
+                ×{mult}
+              </span>
+            )}
+          </>
+        ) : (
+          // لا يوجد بيانات مستفيدين — يرجع لعرض المضاعف
+          canEdit ? (
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={mult}
+              onChange={e => handleSetMultiplier(item, parseInt(e.target.value) || 1)}
+              onClick={e => e.stopPropagation()}
+              title="مضاعف الكمية (×N)"
+              className={`shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 focus:outline-none focus:ring-1 ${
+                mult > 1
+                  ? 'text-violet-700 bg-violet-50 border border-violet-300 focus:ring-violet-300'
+                  : 'text-slate-400 bg-transparent border border-transparent hover:border-slate-200 focus:ring-slate-300'
+              }`}
+            />
+          ) : mult > 1 ? (
+            <span className="shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 text-violet-700 bg-violet-50 border border-violet-300">
+              ×{mult}
+            </span>
+          ) : null
+        )}
         {canEdit && (
           <button
             type="button"

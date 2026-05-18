@@ -52,6 +52,7 @@ export default function OrderList() {
   const [pickBulkEntityOpen, setPickBulkEntityOpen] = useState(false);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkEntityType, setBulkEntityType] = useState<EntityType>('beneficiary');
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -216,6 +217,25 @@ export default function OrderList() {
 
   const pagination = usePagination(filteredOrders, { pageSize: 25 });
 
+  const allPageSelected = pagination.pageItems.length > 0 && pagination.pageItems.every(o => selectedOrderIds.has(o.id));
+  const toggleOrder = (id: string) => setSelectedOrderIds(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  const togglePageAll = () => {
+    setSelectedOrderIds(prev => {
+      const next = new Set(prev);
+      if (allPageSelected) pagination.pageItems.forEach(o => next.delete(o.id));
+      else pagination.pageItems.forEach(o => next.add(o.id));
+      return next;
+    });
+  };
+
+  const exportIds = selectedOrderIds.size > 0
+    ? Array.from(selectedOrderIds)
+    : filteredOrders.map(o => o.id);
+
   return (
     <div className="p-6 space-y-4">
       {/* Header */}
@@ -229,20 +249,17 @@ export default function OrderList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* تصدير بكج PDF للأوامر الظاهرة */}
+          {/* تصدير PDF — المحدد أو كل الظاهر */}
           {filteredOrders.length > 0 && (
             <button
-              onClick={() => {
-                const ids = filteredOrders.map(o => o.id).join(',');
-                window.open(`/orders/bulk-print?ids=${ids}`, '_blank');
-              }}
+              onClick={() => window.open(`/orders/bulk-print?ids=${exportIds.join(',')}`, '_blank')}
               className="btn-secondary"
-              title={`تصدير ${filteredOrders.length} أمر كـ PDF واحد`}
+              title={selectedOrderIds.size > 0 ? `تصدير ${selectedOrderIds.size} أمر محدد` : `تصدير ${filteredOrders.length} أمر كـ PDF واحد`}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              تصدير الكل ({filteredOrders.length})
+              {selectedOrderIds.size > 0 ? `تصدير المحدد (${selectedOrderIds.size})` : `تصدير الكل (${filteredOrders.length})`}
             </button>
           )}
           {/* إنشاء بكج أوامر */}
@@ -330,6 +347,15 @@ export default function OrderList() {
             <table className="w-full">
               <thead>
                 <tr className="bg-slate-50">
+                  <th className="table-header w-8">
+                    <input
+                      type="checkbox"
+                      checked={allPageSelected}
+                      onChange={togglePageAll}
+                      className="w-4 h-4 accent-emerald-600 cursor-pointer"
+                      title={allPageSelected ? 'إلغاء تحديد الصفحة' : 'تحديد كل الصفحة'}
+                    />
+                  </th>
                   <th className="table-header">#</th>
                   <th className="table-header">التاريخ</th>
                   <th className="table-header">اليوم</th>
@@ -345,7 +371,15 @@ export default function OrderList() {
                   const orderEntity: EntityType = (order.entity_type === 'companion' ? 'companion' : 'beneficiary');
                   const entityCounts = counts[orderEntity];
                   return (
-                  <tr key={order.id} className="hover:bg-slate-50 transition-colors">
+                  <tr key={order.id} className={`transition-colors ${selectedOrderIds.has(order.id) ? 'bg-emerald-50/60' : 'hover:bg-slate-50'}`}>
+                    <td className="table-cell">
+                      <input
+                        type="checkbox"
+                        checked={selectedOrderIds.has(order.id)}
+                        onChange={() => toggleOrder(order.id)}
+                        className="w-4 h-4 accent-emerald-600 cursor-pointer"
+                      />
+                    </td>
                     <td className="table-cell text-slate-400 text-xs">
                       {(pagination.page - 1) * pagination.pageSize + index + 1}
                     </td>
