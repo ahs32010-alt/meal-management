@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import type { Meal } from '@/lib/types';
 
@@ -120,20 +120,46 @@ function CompactGrid({ title, color, items, numKey, columns = 4 }: {
   );
 }
 
-function OrderPage({ report, showFixed, showCustom, isFirst }: { report: FullReport; showFixed: boolean; showCustom: boolean; isFirst: boolean }) {
+// Target height for "fit one page" mode — A4 portrait at 96 dpi ≈ 1123px,
+// minus 2 × 5mm @page margins ≈ 1080px. Matches the value used in OrderPrintView.
+const FIT_TARGET_HEIGHT = 1080;
+
+function OrderPage({ report, showFixed, showCustom, isFirst, fitOnePage }: { report: FullReport; showFixed: boolean; showCustom: boolean; isFirst: boolean; fitOnePage: boolean }) {
   const { order, mainMealsSummary, snackMealsSummary, altSummary, snackAltSummary, fixedSummary, itemsSummary, beneficiaryDetails } = report;
   const mealLabel = MEAL_TYPE_LABELS[order.meal_type as keyof typeof MEAL_TYPE_LABELS] || order.meal_type;
   const withCustom = beneficiaryDetails.filter(d => d.excludedItems.length > 0 || d.fixedItems.length > 0);
   const wk = order.week_number ?? order.week_of_month;
+
+  const pageRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  // Auto-scale so each order fits one A4 page. Re-runs when content or
+  // toggles change so the measurement stays accurate.
+  useLayoutEffect(() => {
+    const el = pageRef.current;
+    if (!el) return;
+    if (!fitOnePage) {
+      (el.style as unknown as { zoom: string }).zoom = '1';
+      setScale(1);
+      return;
+    }
+    (el.style as unknown as { zoom: string }).zoom = '1';
+    const h = el.scrollHeight;
+    const next = h <= FIT_TARGET_HEIGHT ? 1 : Math.max(0.3, FIT_TARGET_HEIGHT / h);
+    setScale(next);
+  }, [fitOnePage, showFixed, showCustom, report]);
 
   const pageStyle: React.CSSProperties = { ...s.page };
   if (!isFirst) {
     pageStyle.pageBreakBefore = 'always';
     pageStyle.breakBefore = 'page';
   }
+  if (scale !== 1) {
+    (pageStyle as unknown as { zoom: number }).zoom = scale;
+  }
 
   return (
-    <div className="print-page" style={pageStyle}>
+    <div ref={pageRef} className="print-page" style={pageStyle}>
       <div style={s.titleBar}>أمر تشغيل — خطوة أمل</div>
       <div style={s.infoBar}>
         <div style={s.infoMain}>{arabicDate(order.date)}</div>
@@ -282,6 +308,8 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
   const [showCustom, setShowCustom] = useState(() =>
     typeof window !== 'undefined' ? localStorage.getItem('orderPrintShowCustom') !== '0' : true
   );
+  // Always start unchecked — user toggles per session, like single-order export.
+  const [fitOnePage, setFitOnePage] = useState(false);
   const pagesRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
@@ -346,6 +374,10 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
             <input type="checkbox" checked={showCustom} onChange={e => { setShowCustom(e.target.checked); localStorage.setItem('orderPrintShowCustom', e.target.checked ? '1' : '0'); }} style={{ cursor: 'pointer', accentColor: '#6d28d9' }} />
             إظهار التخصيصات
           </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 12, userSelect: 'none' }} title="يصغّر محتوى كل أمر تشغيل حتى يطبع في صفحة A4 واحدة">
+            <input type="checkbox" checked={fitOnePage} onChange={e => setFitOnePage(e.target.checked)} style={{ cursor: 'pointer', accentColor: '#10b981' }} />
+            احتواء كل أمر في صفحة واحدة
+          </label>
           <button
             onClick={() => { if (allLoaded && validReports.length > 0) handlePrint(); }}
             disabled={!allLoaded || validReports.length === 0}
@@ -389,6 +421,7 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
             showFixed={showFixed}
             showCustom={showCustom}
             isFirst={i === 0}
+            fitOnePage={fitOnePage}
           />
         ))}
       </div>
