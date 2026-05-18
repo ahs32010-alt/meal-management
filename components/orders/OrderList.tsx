@@ -13,6 +13,7 @@ import Pagination from '@/components/shared/Pagination';
 import { usePagination } from '@/lib/use-pagination';
 
 const OrderModal = dynamic(() => import('./OrderModal'), { ssr: false });
+const BulkOrderModal = dynamic(() => import('./BulkOrderModal'), { ssr: false });
 
 const MEAL_TYPE_STYLES: Record<string, string> = {
   breakfast: 'bg-yellow-100 text-yellow-700',
@@ -48,6 +49,9 @@ export default function OrderList() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const [search, setSearch] = useState('');
+  const [pickBulkEntityOpen, setPickBulkEntityOpen] = useState(false);
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const [bulkEntityType, setBulkEntityType] = useState<EntityType>('beneficiary');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -224,25 +228,51 @@ export default function OrderList() {
               : `${orders.length} أمر تشغيل`}
           </p>
         </div>
-        <button
-          onClick={() => {
-            setEditingOrder(null);
-            // لو الـmigration ما اتشغّل بعد، نخش مباشرة بنوع المستفيدين عشان ما نكسر شي
-            if (!hasEntityTypeColumn) {
-              setModalEntityType('beneficiary');
-              setIsModalOpen(true);
-              return;
-            }
-            // نطلب من المستخدم يختار: مستفيدين ولا مرافقين؟
-            setPickEntityOpen(true);
-          }}
-          className="btn-primary"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          إنشاء أمر تشغيل
-        </button>
+        <div className="flex items-center gap-2">
+          {/* تصدير بكج PDF للأوامر الظاهرة */}
+          {filteredOrders.length > 0 && (
+            <button
+              onClick={() => {
+                const ids = filteredOrders.map(o => o.id).join(',');
+                window.open(`/orders/bulk-print?ids=${ids}`, '_blank');
+              }}
+              className="btn-secondary"
+              title={`تصدير ${filteredOrders.length} أمر كـ PDF واحد`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              تصدير الكل ({filteredOrders.length})
+            </button>
+          )}
+          {/* إنشاء بكج أوامر */}
+          <button
+            onClick={() => {
+              if (!hasEntityTypeColumn) { setBulkEntityType('beneficiary'); setBulkModalOpen(true); return; }
+              setPickBulkEntityOpen(true);
+            }}
+            className="btn-secondary"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            إنشاء بكج أوامر
+          </button>
+          {/* إنشاء أمر واحد */}
+          <button
+            onClick={() => {
+              setEditingOrder(null);
+              if (!hasEntityTypeColumn) { setModalEntityType('beneficiary'); setIsModalOpen(true); return; }
+              setPickEntityOpen(true);
+            }}
+            className="btn-primary"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            إنشاء أمر تشغيل
+          </button>
+        </div>
       </div>
 
       {/* Search */}
@@ -504,6 +534,42 @@ export default function OrderList() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* اختيار نوع الكيان للبكج */}
+      {pickBulkEntityOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100">
+              <h3 className="font-bold text-slate-800">إنشاء بكج أوامر لمن؟</h3>
+              <p className="text-xs text-slate-500 mt-0.5">اختَر فئة المستهدفين — سيتم إنشاء الأوامر لهم فقط.</p>
+            </div>
+            <div className="p-4 grid grid-cols-2 gap-3">
+              {(['beneficiary', 'companion'] as EntityType[]).map(t => (
+                <button key={t} type="button"
+                  onClick={() => { setBulkEntityType(t); setPickBulkEntityOpen(false); setBulkModalOpen(true); }}
+                  className={`flex flex-col items-center gap-2 py-5 rounded-xl border-2 transition-all hover:shadow-md ${t === 'beneficiary' ? 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800' : 'border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800'}`}
+                >
+                  <span className="text-3xl">{t === 'beneficiary' ? '👥' : '🧑‍🤝‍🧑'}</span>
+                  <span className="font-bold text-sm">{ENTITY_TYPE_LABELS_PLURAL[t]}</span>
+                  <span className="text-[11px] opacity-70">{counts[t].total} مسجّل</span>
+                </button>
+              ))}
+            </div>
+            <div className="px-5 py-3 border-t border-slate-100 flex justify-end">
+              <button type="button" onClick={() => setPickBulkEntityOpen(false)} className="text-xs text-slate-500 hover:text-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-100">إلغاء</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bulkModalOpen && (
+        <BulkOrderModal
+          meals={meals}
+          entityType={bulkEntityType}
+          onClose={() => setBulkModalOpen(false)}
+          onSaved={() => { setBulkModalOpen(false); fetchData(); }}
+        />
       )}
 
       <ConfirmDialog

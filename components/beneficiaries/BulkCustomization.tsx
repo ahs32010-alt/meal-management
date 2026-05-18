@@ -20,7 +20,7 @@ interface Props {
   entityType: EntityType;
 }
 
-type Mode = 'exclusion' | 'unexclude' | 'fixed';
+type Mode = 'exclusion' | 'unexclude' | 'fixed' | 'unfixed';
 
 const CATEGORY_THEME: Record<ItemCategory, { icon: string; bg: string; textOn: string }> = {
   hot:   { icon: '🔥', bg: 'bg-red-500',   textOn: 'text-white' },
@@ -172,6 +172,10 @@ export default function BulkCustomization({ entityType }: Props) {
   const [fixedEntries, setFixedEntries] = useState<{ mealId: string; days: Set<number>; qty: number; category: ItemCategory; suppressIfMealIds: string[] }[]>(
     [{ mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealIds: [] }]
   );
+  // Unfixed — قائمة أصناف مراد حذف تثبيتها (days فارغة = كل الأيام)
+  const [unfixedEntries, setUnfixedEntries] = useState<{ mealId: string; days: Set<number> }[]>(
+    [{ mealId: '', days: new Set<number>() }]
+  );
 
   // ── Apply state ─────────────────────────────────────────────────────────────
   const [applying, setApplying] = useState(false);
@@ -318,6 +322,7 @@ export default function BulkCustomization({ entityType }: Props) {
     if (mode === 'exclusion')  return exclEntries.some(e => !!e.mealId);
     if (mode === 'unexclude')  return unexclMealIds.some(Boolean);
     if (mode === 'fixed')      return fixedEntries.some(e => !!e.mealId && e.days.size > 0 && e.qty > 0);
+    if (mode === 'unfixed')    return unfixedEntries.some(e => !!e.mealId);
     return false;
   }, [selectedIds.size, mode, exclEntries, unexclMealIds, fixedEntries]);
 
@@ -336,6 +341,15 @@ export default function BulkCustomization({ entityType }: Props) {
       const valid = unexclMealIds.filter(Boolean);
       const names = valid.map(id => `"${meals.find(x => x.id === id)?.name ?? ''}"`).join('، ');
       return `سيتم إزالة استبعاد ${names} من ${target}. من ما كان عنده الصنف يُتجاهل. متابعة؟`;
+    }
+    if (mode === 'unfixed') {
+      const valid = unfixedEntries.filter(e => !!e.mealId);
+      const names = valid.map(e => {
+        const m = meals.find(x => x.id === e.mealId);
+        const daysLabel = e.days.size === 0 ? 'كل الأيام' : `${e.days.size} يوم`;
+        return `"${m?.name ?? ''}" (${daysLabel})`;
+      }).join('، ');
+      return `سيتم حذف الصنف الثابت ${names} من ${target}. متابعة؟`;
     }
     const valid = fixedEntries.filter(e => !!e.mealId && e.days.size > 0);
     const names = valid.map(e => {
@@ -415,6 +429,36 @@ export default function BulkCustomization({ entityType }: Props) {
           message: `تم تطبيق ${validEntries.length} محظور${validEntries.length === 1 ? '' : 'ات'} على ${ids.length} ${entityLabel}${ids.length === 1 ? '' : 'اً'}.`,
         });
         setExclEntries([{ mealId: '', altId: '' }]);
+      } else if (mode === 'unfixed') {
+        const validEntries = unfixedEntries.filter(e => !!e.mealId);
+        let totalDeleted = 0;
+        for (const entry of validEntries) {
+          let q = supabase
+            .from('beneficiary_fixed_meals')
+            .delete()
+            .eq('meal_id', entry.mealId)
+            .in('beneficiary_id', ids);
+          if (entry.days.size > 0) {
+            q = q.in('day_of_week', Array.from(entry.days));
+          }
+          const { data, error } = await q.select('id');
+          if (error) throw error;
+          totalDeleted += (data ?? []).length;
+        }
+        const mealNames = validEntries.map(e => meals.find(m => m.id === e.mealId)?.name ?? '').join('، ');
+        void logActivity({
+          action: 'delete',
+          entity_type: entityType,
+          entity_name: `حذف جماعي — صنف ثابت [${mealNames}] (${totalDeleted})`,
+          details: { scope: 'bulk_unfixed', count: totalDeleted, entries: validEntries.map(e => ({ meal_id: e.mealId, days: Array.from(e.days) })), for_entity: entityType, beneficiary_ids: ids },
+        });
+        setResult({
+          ok: true,
+          message: totalDeleted === 0
+            ? `لا أحد من المختارين كان عنده هذه الأصناف ثابتة في الأيام المحددة.`
+            : `تم حذف ${totalDeleted} صنف ثابت من ${ids.length} ${entityLabel}${ids.length === 1 ? '' : 'اً'}.`,
+        });
+        setUnfixedEntries([{ mealId: '', days: new Set<number>() }]);
       } else {
         const validFixed = fixedEntries.filter(e => !!e.mealId && e.days.size > 0);
         let totalInserted = 0;
@@ -712,29 +756,23 @@ export default function BulkCustomization({ entityType }: Props) {
           <h2 className="font-bold text-slate-800 text-sm">التخصيص المراد تطبيقه</h2>
 
           {/* Mode toggle */}
-          <div className="grid grid-cols-3 gap-2">
-            {(['exclusion', 'unexclude', 'fixed'] as Mode[]).map(m => {
-              const active = mode === m;
-              const cls = active
-                ? m === 'exclusion'
-                    ? 'border-red-500 bg-red-50 text-red-700'
-                  : m === 'unexclude'
-                    ? 'border-amber-500 bg-amber-50 text-amber-700'
-                    : 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                : 'border-slate-200 text-slate-500 hover:border-slate-300';
-              const label = m === 'exclusion' ? 'إضافة محظور'
-                          : m === 'unexclude' ? 'حذف محظور'
-                          : 'إضافة صنف ثابت';
-              return (
-                <button
-                  key={m}
-                  onClick={() => { setMode(m); setResult(null); }}
-                  className={`py-2.5 rounded-xl border-2 font-semibold text-xs sm:text-sm transition-all ${cls}`}
-                >
-                  {label}
-                </button>
-              );
-            })}
+          <div className="grid grid-cols-2 gap-2">
+            {([
+              { m: 'exclusion', label: 'إضافة محظور',    active: 'border-red-500 bg-red-50 text-red-700' },
+              { m: 'unexclude', label: 'حذف محظور',      active: 'border-amber-500 bg-amber-50 text-amber-700' },
+              { m: 'fixed',     label: 'إضافة صنف ثابت', active: 'border-emerald-500 bg-emerald-50 text-emerald-700' },
+              { m: 'unfixed',   label: 'حذف صنف ثابت',   active: 'border-rose-500 bg-rose-50 text-rose-700' },
+            ] as { m: Mode; label: string; active: string }[]).map(({ m, label, active: activeCls }) => (
+              <button
+                key={m}
+                onClick={() => { setMode(m); setResult(null); }}
+                className={`py-2.5 rounded-xl border-2 font-semibold text-xs sm:text-sm transition-all ${
+                  mode === m ? activeCls : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
           {/* Exclusion form */}
@@ -824,6 +862,90 @@ export default function BulkCustomization({ entityType }: Props) {
               </button>
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800 leading-relaxed">
                 💡 سيُحذف كل صنف محدد من قائمة محظورات الأشخاص المختارين. من ما كان عنده الصنف أصلاً يُتجاهل.
+              </div>
+            </div>
+          )}
+
+          {/* Unfixed form */}
+          {mode === 'unfixed' && (
+            <div className="space-y-3">
+              <div className="space-y-2">
+                {unfixedEntries.map((entry, idx) => (
+                  <div key={idx} className="border border-slate-200 rounded-xl p-3 space-y-2.5 bg-rose-50/30">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-slate-500">
+                        {unfixedEntries.length > 1 ? `صنف ثابت #${idx + 1}` : 'الصنف الثابت المراد حذفه'}
+                      </span>
+                      {unfixedEntries.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setUnfixedEntries(prev => prev.filter((_, i) => i !== idx))}
+                          className="text-xs text-red-500 hover:text-red-700 font-semibold"
+                        >
+                          حذف
+                        </button>
+                      )}
+                    </div>
+                    <MealSearchPicker
+                      meals={meals}
+                      value={entry.mealId}
+                      onChange={id => setUnfixedEntries(prev => prev.map((e, i) => i === idx ? { ...e, mealId: id } : e))}
+                      placeholder="اختر الصنف الثابت المراد حذفه"
+                    />
+                    {entry.mealId && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-xs font-bold text-slate-500">
+                            الأيام <span className="text-xs font-normal text-slate-400">(فارغ = كل الأيام)</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setUnfixedEntries(prev => prev.map((e, i) => i === idx
+                              ? { ...e, days: e.days.size > 0 ? new Set<number>() : new Set<number>(DAYS_ORDER) }
+                              : e))}
+                            className="text-xs font-semibold text-rose-600 hover:underline"
+                          >
+                            {entry.days.size > 0 ? 'مسح (كل الأيام)' : 'تحديد كل الأيام'}
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {DAYS_ORDER.map(d => (
+                            <button
+                              key={d}
+                              type="button"
+                              onClick={() => setUnfixedEntries(prev => prev.map((e, i) => {
+                                if (i !== idx) return e;
+                                const next = new Set(e.days);
+                                if (next.has(d)) next.delete(d); else next.add(d);
+                                return { ...e, days: next };
+                              }))}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                                entry.days.has(d)
+                                  ? 'bg-rose-500 text-white shadow-sm'
+                                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                              }`}
+                            >
+                              {DAY_LABELS[d]}
+                            </button>
+                          ))}
+                        </div>
+                        {entry.days.size === 0 && (
+                          <p className="text-xs text-rose-600 mt-1.5">سيتم حذف الصنف من جميع الأيام</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setUnfixedEntries(prev => [...prev, { mealId: '', days: new Set<number>() }])}
+                className="text-xs font-semibold text-rose-600 hover:text-rose-700 flex items-center gap-1"
+              >
+                <span className="text-base leading-none">+</span> إضافة صنف آخر للحذف
+              </button>
+              <div className="bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 text-xs text-rose-800 leading-relaxed">
+                💡 سيتم حذف الصنف الثابت المحدد من الأيام المختارة. من ما كان عنده الصنف يُتجاهل. باقي أصنافه الثابتة لا تتأثر.
               </div>
             </div>
           )}
@@ -970,7 +1092,7 @@ export default function BulkCustomization({ entityType }: Props) {
               ? 'جاري التطبيق...'
               : selectedIds.size === 0
                 ? 'حدد الأشخاص أولاً'
-                : !((mode === 'exclusion' && exclEntries.some(e => !!e.mealId)) || (mode === 'unexclude' && unexclMealIds.some(Boolean)) || (mode === 'fixed' && fixedEntries.some(e => !!e.mealId && e.days.size > 0)))
+                : !((mode === 'exclusion' && exclEntries.some(e => !!e.mealId)) || (mode === 'unexclude' && unexclMealIds.some(Boolean)) || (mode === 'fixed' && fixedEntries.some(e => !!e.mealId && e.days.size > 0)) || (mode === 'unfixed' && unfixedEntries.some(e => !!e.mealId)))
                   ? 'أكمل تفاصيل التخصيص'
                   : `تطبيق على ${selectedIds.size} ${entityLabel}${selectedIds.size === 1 ? '' : 'اً'}`}
           </button>
