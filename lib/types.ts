@@ -108,7 +108,7 @@ export interface BeneficiaryFixedMeal {
   meal_id: string;
   quantity: number;
   category?: ItemCategory;
-  suppress_if_meal_id?: string | null;
+  suppress_if_meal_ids?: string[];
   meals?: Meal;
 }
 

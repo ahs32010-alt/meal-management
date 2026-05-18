@@ -126,7 +126,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               alternative_meal:meals!exclusions_alternative_meal_id_fkey(id, name)
             ),
             fixed_meals:beneficiary_fixed_meals(
-              id, beneficiary_id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category, suppress_if_meal_id' : ''},
+              id, beneficiary_id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category, suppress_if_meal_ids' : ''},
               meals!meal_id(id, name, type, is_snack)
             )
           `)

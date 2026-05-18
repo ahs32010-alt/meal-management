@@ -169,8 +169,8 @@ export default function BulkCustomization({ entityType }: Props) {
   // Unexclude — قائمة أصناف مراد إزالة استبعادها
   const [unexclMealIds, setUnexclMealIds] = useState<string[]>(['']);
   // Fixed — قائمة أصناف ثابتة، كل عنصر: صنف + أيام + كمية + تصنيف + شرط إلغاء
-  const [fixedEntries, setFixedEntries] = useState<{ mealId: string; days: Set<number>; qty: number; category: ItemCategory; suppressIfMealId: string }[]>(
-    [{ mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealId: '' }]
+  const [fixedEntries, setFixedEntries] = useState<{ mealId: string; days: Set<number>; qty: number; category: ItemCategory; suppressIfMealIds: string[] }[]>(
+    [{ mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealIds: [] }]
   );
 
   // ── Apply state ─────────────────────────────────────────────────────────────
@@ -438,7 +438,7 @@ export default function BulkCustomization({ entityType }: Props) {
           if (existingIds.length > 0) {
             const { error: upErr } = await supabase
               .from('beneficiary_fixed_meals')
-              .update({ quantity: entry.qty, category: entry.category, suppress_if_meal_id: entry.suppressIfMealId || null })
+              .update({ quantity: entry.qty, category: entry.category, suppress_if_meal_ids: entry.suppressIfMealIds })
               .in('id', existingIds);
             if (upErr) {
               if (/column/i.test(upErr.message)) {
@@ -454,7 +454,7 @@ export default function BulkCustomization({ entityType }: Props) {
           for (const bid of ids) {
             for (const day of days) {
               if (!existingKeys.has(`${bid}|${day}`)) {
-                newRows.push({ beneficiary_id: bid, day_of_week: day, meal_type: mealType, meal_id: entry.mealId, quantity: entry.qty, category: entry.category, suppress_if_meal_id: entry.suppressIfMealId || null });
+                newRows.push({ beneficiary_id: bid, day_of_week: day, meal_type: mealType, meal_id: entry.mealId, quantity: entry.qty, category: entry.category, suppress_if_meal_ids: entry.suppressIfMealIds });
               }
             }
           }
@@ -462,7 +462,7 @@ export default function BulkCustomization({ entityType }: Props) {
             const { error: insErr } = await supabase.from('beneficiary_fixed_meals').insert(newRows);
             if (insErr) {
               if (/column/i.test(insErr.message)) {
-                const fallback = newRows.map(r => Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'category' && k !== 'suppress_if_meal_id')));
+                const fallback = newRows.map(r => Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'category' && k !== 'suppress_if_meal_ids')));
                 const { error: insErr2 } = await supabase.from('beneficiary_fixed_meals').insert(fallback);
                 if (insErr2) throw insErr2;
               } else { throw insErr; }
@@ -492,7 +492,7 @@ export default function BulkCustomization({ entityType }: Props) {
             `تم تطبيق ${validFixed.length} صنف ثابت على ${ids.length} ${entityLabel}${ids.length === 1 ? '' : 'اً'} ` +
             `(${totalInserted} إضافة، ${totalUpdated} تحديث).`,
         });
-        setFixedEntries([{ mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealId: '' }]);
+        setFixedEntries([{ mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealIds: [] }]);
       }
     } catch (err) {
       setResult({ ok: false, message: err instanceof Error ? err.message : String(err) });
@@ -915,15 +915,24 @@ export default function BulkCustomization({ entityType }: Props) {
                             </div>
                           </div>
                           {/* Suppress if meal present */}
-                          <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
-                            <span className="text-xs text-slate-400 shrink-0 whitespace-nowrap">يُلغى إذا وُجد في الأمر:</span>
-                            <div className="flex-1">
+                          <div className="pt-1 border-t border-slate-100">
+                            <div className="flex items-center flex-wrap gap-1.5">
+                              <span className="text-xs text-slate-400 whitespace-nowrap shrink-0">يُلغى إذا وُجد:</span>
+                              {entry.suppressIfMealIds.map(sid => {
+                                const sm = meals.find(m => m.id === sid);
+                                return sm ? (
+                                  <div key={sid} className="flex items-center gap-1 bg-orange-50 border border-orange-200 text-orange-700 rounded-lg px-2 py-0.5 text-xs font-medium">
+                                    <span>{sm.name}</span>
+                                    <button type="button" onClick={() => setFixedEntries(prev => prev.map((e, i) => i === idx ? { ...e, suppressIfMealIds: e.suppressIfMealIds.filter(id => id !== sid) } : e))} className="text-slate-300 hover:text-red-500 leading-none font-bold">✕</button>
+                                  </div>
+                                ) : null;
+                              })}
                               <MealSearchPicker
-                                meals={meals}
-                                value={entry.suppressIfMealId}
-                                onChange={id => setFixedEntries(prev => prev.map((e, i) => i === idx ? { ...e, suppressIfMealId: id } : e))}
-                                placeholder="— بلا شرط —"
-                                allowClear
+                                meals={meals.filter(m => !entry.suppressIfMealIds.includes(m.id))}
+                                value=""
+                                onChange={id => { if (id) setFixedEntries(prev => prev.map((e, i) => i === idx ? { ...e, suppressIfMealIds: [...e.suppressIfMealIds, id] } : e)); }}
+                                placeholder="+ إضافة..."
+                                allowClear={false}
                               />
                             </div>
                           </div>
@@ -935,7 +944,7 @@ export default function BulkCustomization({ entityType }: Props) {
               </div>
               <button
                 type="button"
-                onClick={() => setFixedEntries(prev => [...prev, { mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealId: '' }])}
+                onClick={() => setFixedEntries(prev => [...prev, { mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealIds: [] }])}
                 className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 flex items-center gap-1"
               >
                 <span className="text-base leading-none">+</span> إضافة صنف ثابت آخر
