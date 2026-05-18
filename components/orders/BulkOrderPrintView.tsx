@@ -63,7 +63,7 @@ function SectionTable({ title, color, items, numLabel, numKey }: {
   title: string; color: { bg: string; text: string }; items: MealCount[]; numLabel: string; numKey: 'gets' | 'qty' | 'quantity';
 }) {
   return (
-    <div style={{ breakInside: 'avoid' }}>
+    <div className="print-section" style={{ breakInside: 'avoid' }}>
       <div style={{ ...s.secHeader, background: color.bg, color: color.text }}>{title}</div>
       <table style={s.table}>
         <thead><tr>
@@ -91,7 +91,7 @@ function CompactGrid({ title, color, items, numKey, columns = 4 }: {
   if (items.length === 0) return null;
   const rows = Math.ceil(items.length / columns);
   return (
-    <div style={{ breakInside: 'avoid', marginBottom: 8 }}>
+    <div className="print-section" style={{ breakInside: 'avoid', marginBottom: 8 }}>
       <div style={{ ...s.secHeader, background: color.bg, color: color.text }}>{title}</div>
       <table style={s.table}>
         <tbody>
@@ -120,14 +120,20 @@ function CompactGrid({ title, color, items, numKey, columns = 4 }: {
   );
 }
 
-function SingleOrderContent({ report, showFixed, showCustom }: { report: FullReport; showFixed: boolean; showCustom: boolean }) {
+function OrderPage({ report, showFixed, showCustom, isFirst }: { report: FullReport; showFixed: boolean; showCustom: boolean; isFirst: boolean }) {
   const { order, mainMealsSummary, snackMealsSummary, altSummary, snackAltSummary, fixedSummary, itemsSummary, beneficiaryDetails } = report;
   const mealLabel = MEAL_TYPE_LABELS[order.meal_type as keyof typeof MEAL_TYPE_LABELS] || order.meal_type;
   const withCustom = beneficiaryDetails.filter(d => d.excludedItems.length > 0 || d.fixedItems.length > 0);
   const wk = order.week_number ?? order.week_of_month;
 
+  const pageStyle: React.CSSProperties = { ...s.page };
+  if (!isFirst) {
+    pageStyle.pageBreakBefore = 'always';
+    pageStyle.breakBefore = 'page';
+  }
+
   return (
-    <div className="order-page" style={s.page}>
+    <div className="print-page" style={pageStyle}>
       <div style={s.titleBar}>أمر تشغيل — خطوة أمل</div>
       <div style={s.infoBar}>
         <div style={s.infoMain}>{arabicDate(order.date)}</div>
@@ -156,7 +162,7 @@ function SingleOrderContent({ report, showFixed, showCustom }: { report: FullRep
       {itemsSummary.length > 0 && <CompactGrid title="إحصاء الأصناف" color={PALETTE.stats} items={itemsSummary} numKey="quantity" columns={4} />}
 
       {showCustom && withCustom.length > 0 && (
-        <div style={{ breakInside: 'avoid' }}>
+        <div className="print-section" style={{ breakInside: 'avoid' }}>
           <div style={{ ...s.secHeader, fontSize: 12.5, background: PALETTE.bens.bg, color: PALETTE.bens.text }}>تخصيصات المستفيدين</div>
           <table style={s.table}>
             <thead><tr>
@@ -190,9 +196,36 @@ function SingleOrderContent({ report, showFixed, showCustom }: { report: FullRep
   );
 }
 
+const PRINT_CSS = `
+html, body { margin: 0; padding: 0; }
+body { background: #e2e8f0; }
+* { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+.print-page { background: #fff; }
+.print-section { page-break-inside: avoid; break-inside: avoid; }
+@keyframes bulk-spin { to { transform: rotate(360deg); } }
+@media print {
+  @page { size: A4 portrait; margin: 5mm; }
+  html, body {
+    background: #fff !important;
+    width: auto !important;
+    height: auto !important;
+  }
+  .no-print { display: none !important; }
+  .print-page {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+}
+`;
+
 export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] }) {
   const [reports, setReports] = useState<(FullReport | null)[]>([]);
   const [loaded, setLoaded] = useState(0);
+  const [errorCount, setErrorCount] = useState(0);
   const [showFixed, setShowFixed] = useState(() =>
     typeof window !== 'undefined' ? localStorage.getItem('orderPrintShowFixed') !== '0' : true
   );
@@ -202,24 +235,34 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
 
   useEffect(() => {
     if (orderIds.length === 0) return;
+    let cancelled = false;
     const results: (FullReport | null)[] = new Array(orderIds.length).fill(null);
     let done = 0;
+    let errors = 0;
 
     orderIds.forEach((id, i) => {
       fetch(`/api/orders/${id}/report`)
-        .then(r => r.ok ? r.json() : null)
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
         .then(data => {
+          if (cancelled) return;
           results[i] = data;
-          done++;
-          setLoaded(done);
-          if (done === orderIds.length) setReports([...results]);
         })
         .catch(() => {
+          if (cancelled) return;
+          errors++;
+        })
+        .finally(() => {
+          if (cancelled) return;
           done++;
           setLoaded(done);
-          if (done === orderIds.length) setReports([...results]);
+          if (done === orderIds.length) {
+            setReports([...results]);
+            setErrorCount(errors);
+          }
         });
     });
+
+    return () => { cancelled = true; };
   }, [orderIds]);
 
   const allLoaded = loaded === orderIds.length && reports.length === orderIds.length;
@@ -227,44 +270,15 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
 
   return (
     <>
-      <style dangerouslySetInnerHTML={{ __html: `
-        html, body { margin: 0; padding: 0; }
-        body { background: #e2e8f0; }
-        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-        .order-block { page-break-after: always; break-after: page; }
-        .order-block:last-child { page-break-after: avoid; break-after: avoid; }
-        .order-page { break-inside: auto; }
-        @media print {
-          @page { size: A4 portrait; margin: 5mm; }
-          html, body {
-            background: #fff !important;
-            width: auto !important;
-            height: auto !important;
-          }
-          .no-print { display: none !important; }
-          .order-block {
-            width: 100% !important;
-            max-width: 100% !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            box-shadow: none !important;
-          }
-          .order-page {
-            width: 100% !important;
-            max-width: 100% !important;
-            min-height: 0 !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            box-shadow: none !important;
-          }
-        }
-      ` }} />
+      <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
 
       {/* Toolbar */}
       <div className="no-print" style={{ background: '#1e293b', color: '#fff', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, fontFamily: 'sans-serif', direction: 'rtl', position: 'sticky', top: 0, zIndex: 100 }}>
         <span style={{ fontWeight: 600 }}>
           تصدير بكج أوامر التشغيل —{' '}
-          {allLoaded ? `${validReports.length} أمر` : `جاري التحميل... (${loaded} / ${orderIds.length})`}
+          {allLoaded
+            ? `${validReports.length} أمر${errorCount > 0 ? ` (فشل تحميل ${errorCount})` : ''}`
+            : `جاري التحميل... (${loaded} / ${orderIds.length})`}
         </span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 12, userSelect: 'none' }}>
@@ -276,9 +290,9 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
             إظهار التخصيصات
           </label>
           <button
-            onClick={() => { if (allLoaded) window.print(); }}
-            disabled={!allLoaded}
-            style={{ background: allLoaded ? '#10b981' : '#64748b', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: allLoaded ? 'pointer' : 'not-allowed', fontWeight: 600, fontFamily: 'inherit', fontSize: 13 }}
+            onClick={() => { if (allLoaded && validReports.length > 0) window.print(); }}
+            disabled={!allLoaded || validReports.length === 0}
+            style={{ background: (allLoaded && validReports.length > 0) ? '#10b981' : '#64748b', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: (allLoaded && validReports.length > 0) ? 'pointer' : 'not-allowed', fontWeight: 600, fontFamily: 'inherit', fontSize: 13 }}
           >
             ⬇ PDF الكل
           </button>
@@ -290,21 +304,34 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
 
       {/* Loading state */}
       {!allLoaded && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: 16, fontFamily: 'sans-serif', color: '#555' }}>
-          <div style={{ width: 36, height: 36, border: '3px solid #10b981', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+        <div className="no-print" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: 16, fontFamily: 'sans-serif', color: '#555' }}>
+          <div style={{ width: 36, height: 36, border: '3px solid #10b981', borderTopColor: 'transparent', borderRadius: '50%', animation: 'bulk-spin 0.8s linear infinite' }} />
           <p style={{ margin: 0 }}>جاري تحميل الأوامر... ({loaded} / {orderIds.length})</p>
           <div style={{ width: 280, background: '#e2e8f0', borderRadius: 99, overflow: 'hidden', height: 8 }}>
             <div style={{ width: `${orderIds.length ? (loaded / orderIds.length) * 100 : 0}%`, background: '#10b981', height: '100%', transition: 'width 0.3s' }} />
           </div>
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
+
+      {/* Empty state — when loaded but no valid reports */}
+      {allLoaded && validReports.length === 0 && (
+        <div className="no-print" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: 12, fontFamily: 'sans-serif', color: '#c00', textAlign: 'center', padding: 20 }}>
+          <p style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>تعذّر تحميل أي أمر تشغيل</p>
+          <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
+            تحقّق من اتصالك بالإنترنت ومن صلاحياتك، ثم أعد المحاولة.
+          </p>
         </div>
       )}
 
       {/* Orders */}
-      {allLoaded && validReports.map(report => (
-        <div key={report.order.id} className="order-block">
-          <SingleOrderContent report={report} showFixed={showFixed} showCustom={showCustom} />
-        </div>
+      {allLoaded && validReports.map((report, i) => (
+        <OrderPage
+          key={report.order.id}
+          report={report}
+          showFixed={showFixed}
+          showCustom={showCustom}
+          isFirst={i === 0}
+        />
       ))}
     </>
   );
