@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import type { Meal } from '@/lib/types';
 
@@ -200,7 +200,7 @@ const PRINT_CSS = `
 html, body { margin: 0; padding: 0; }
 body { background: #e2e8f0; }
 * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-.print-page { background: #fff; }
+.print-page { background: #fff; page-break-inside: avoid; break-inside: avoid; }
 .print-section { page-break-inside: avoid; break-inside: avoid; }
 @keyframes bulk-spin { to { transform: rotate(360deg); } }
 @media print {
@@ -222,6 +222,56 @@ body { background: #e2e8f0; }
 }
 `;
 
+// CSS used in the dedicated print window (isolated from app shell).
+// !important overrides the inline `width: 210mm` / `padding: 6mm 8mm` baked
+// into the React-rendered nodes so they conform to the @page printable area.
+const STANDALONE_PRINT_CSS = `
+@page { size: A4 portrait; margin: 5mm; }
+html, body { margin: 0; padding: 0; background: #fff; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
+* { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+.print-page {
+  background: #fff !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  box-sizing: border-box;
+}
+.print-section { page-break-inside: avoid; break-inside: avoid; }
+table { width: 100% !important; }
+`;
+
+function openPrintWindow(htmlBody: string) {
+  const w = window.open('', '_blank', 'width=900,height=1100');
+  if (!w) {
+    alert('متصفّحك حجب النافذة المنبثقة. فعّل النوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.');
+    return;
+  }
+  const doc = w.document;
+  doc.open();
+  doc.write(`<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>تصدير أوامر التشغيل</title>
+<style>${STANDALONE_PRINT_CSS}</style>
+</head>
+<body>${htmlBody}
+<script>
+  window.onload = function () {
+    setTimeout(function () {
+      window.focus();
+      window.print();
+    }, 200);
+  };
+</script>
+</body>
+</html>`);
+  doc.close();
+}
+
 export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] }) {
   const [reports, setReports] = useState<(FullReport | null)[]>([]);
   const [loaded, setLoaded] = useState(0);
@@ -232,6 +282,13 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
   const [showCustom, setShowCustom] = useState(() =>
     typeof window !== 'undefined' ? localStorage.getItem('orderPrintShowCustom') !== '0' : true
   );
+  const pagesRef = useRef<HTMLDivElement>(null);
+
+  const handlePrint = () => {
+    const container = pagesRef.current;
+    if (!container) return;
+    openPrintWindow(container.innerHTML);
+  };
 
   useEffect(() => {
     if (orderIds.length === 0) return;
@@ -290,7 +347,7 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
             إظهار التخصيصات
           </label>
           <button
-            onClick={() => { if (allLoaded && validReports.length > 0) window.print(); }}
+            onClick={() => { if (allLoaded && validReports.length > 0) handlePrint(); }}
             disabled={!allLoaded || validReports.length === 0}
             style={{ background: (allLoaded && validReports.length > 0) ? '#10b981' : '#64748b', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: (allLoaded && validReports.length > 0) ? 'pointer' : 'not-allowed', fontWeight: 600, fontFamily: 'inherit', fontSize: 13 }}
           >
@@ -323,16 +380,18 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
         </div>
       )}
 
-      {/* Orders */}
-      {allLoaded && validReports.map((report, i) => (
-        <OrderPage
-          key={report.order.id}
-          report={report}
-          showFixed={showFixed}
-          showCustom={showCustom}
-          isFirst={i === 0}
-        />
-      ))}
+      {/* Orders — wrapped so we can grab innerHTML for the print window */}
+      <div ref={pagesRef}>
+        {allLoaded && validReports.map((report, i) => (
+          <OrderPage
+            key={report.order.id}
+            report={report}
+            showFixed={showFixed}
+            showCustom={showCustom}
+            isFirst={i === 0}
+          />
+        ))}
+      </div>
     </>
   );
 }
