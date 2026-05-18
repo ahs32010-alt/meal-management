@@ -121,7 +121,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     (async () => {
       // المنيو منفصل لكل فئة (مستفيدين/مرافقين). نحاول الفلترة بـentity_type،
       // ولو العمود ما موجود (الـmigration ما اتشغّل) نرجع لاستعلام عام.
-      const baseSelect = 'meal_id, category, position, multiplier, meals(id, name, is_snack)';
+      const baseSelect = 'meal_id, category, position, multiplier, extra_quantity, meals(id, name, is_snack)';
       const tryFetch = async (withEntity: boolean) => {
         const q = supabase
           .from('menu_items')
@@ -159,7 +159,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       setSelected(sorted.map(({ it, effectiveCat }) => ({
         meal_id: it.meal_id,
         display_name: it.meals?.name ?? '',
-        extra_quantity: 0,
+        extra_quantity: (it as unknown as { extra_quantity?: number }).extra_quantity ?? 0,
         category: effectiveCat,
         multiplier: it.multiplier ?? 1,
       })));
@@ -181,7 +181,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       return;
     }
     if (selected.length > 0 && !confirm('سيتم استبدال الأصناف الحالية بأصناف المنيو لهذا اليوم. تأكيد؟')) return;
-    const refillSelect = 'meal_id, category, position, meals(id, name, is_snack)';
+    const refillSelect = 'meal_id, category, position, extra_quantity, meals(id, name, is_snack)';
     const tryRefill = async (withEntity: boolean) => {
       const q = supabase
         .from('menu_items')
@@ -214,7 +214,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
     setSelected(sorted.map(({ it, effectiveCat }) => ({
       meal_id: it.meal_id,
       display_name: it.meals?.name ?? '',
-      extra_quantity: 0,
+      extra_quantity: (it as unknown as { extra_quantity?: number }).extra_quantity ?? 0,
       category: effectiveCat,
       multiplier: it.multiplier ?? 1,
     })));

@@ -78,7 +78,7 @@ export default function BulkOrderModal({ meals, entityType, onClose, onSaved }: 
 
     // جلب كل عناصر المنيو للأسابيع المطلوبة دفعة واحدة
     const neededWeeks = [...new Set(slots.map(s => s.week))];
-    const baseSelect = 'meal_id, week_number, day_of_week, meal_type, category, position, multiplier, meals(id, name, is_snack)';
+    const baseSelect = 'meal_id, week_number, day_of_week, meal_type, category, position, multiplier, extra_quantity, meals(id, name, is_snack)';
 
     const tryFetchMenu = async (withEntity: boolean) => {
       const q = supabase
@@ -103,6 +103,7 @@ export default function BulkOrderModal({ meals, entityType, onClose, onSaved }: 
       category: ItemCategory;
       position: number;
       multiplier: number;
+      extra_quantity?: number;
       meals?: { id: string; name: string; is_snack?: boolean } | null;
     };
     const menuItems = (menuRes.data ?? []) as unknown as RawItem[];
@@ -138,7 +139,7 @@ export default function BulkOrderModal({ meals, entityType, onClose, onSaved }: 
         return {
           meal_id: it.meal_id,
           display_name: null as string | null,
-          extra_quantity: 0,
+          extra_quantity: it.extra_quantity ?? 0,
           category: cat,
           multiplier: it.multiplier ?? 1,
         };

@@ -35,6 +35,172 @@ const CATEGORY_THEME: Record<ItemCategory, { icon: string; bg: string; text: str
   snack: { icon: '🍿', bg: 'bg-amber-100', text: 'text-amber-700', ring: 'ring-amber-300' },
 };
 
+// ─── Cell ───────────────────────────────────────────────────────────────────
+// Defined OUTSIDE MenuView so its function reference is stable across re-renders.
+// If defined inline, React unmounts/remounts it on every parent state change,
+// losing input focus and any in-progress typed value.
+
+interface CellProps {
+  item: MenuItem | null;
+  pendingCreate: { mealId: string; multiplier: number } | null;
+  mealsById: Map<string, Meal>;
+  benTotal: number;
+  benExclusions: Record<string, number>;
+  search: string;
+  canEdit: boolean;
+  isSnack: boolean;
+  hasPendingDelete: boolean;
+  hasPendingUpdate: boolean;
+  onEdit: () => void;
+  onClear: () => void;
+  onSetMultiplier: (item: MenuItem, value: number) => void;
+  onSetExtraQty: (item: MenuItem, value: number) => void;
+}
+
+function Cell({
+  item, pendingCreate, mealsById, benTotal, benExclusions,
+  search, canEdit, isSnack,
+  hasPendingDelete, hasPendingUpdate,
+  onEdit, onClear, onSetMultiplier, onSetExtraQty,
+}: CellProps) {
+  const [countDraft, setCountDraft] = useState<string | null>(null);
+
+  if (!item) {
+    if (pendingCreate) {
+      const pcMeal = mealsById.get(pendingCreate.mealId);
+      const pcCat: ItemCategory = pcMeal?.category ?? (isSnack ? 'snack' : 'hot');
+      const pcTheme = CATEGORY_THEME[pcCat];
+      const pcMult = pendingCreate.multiplier;
+      return (
+        <div className="flex items-center gap-1 px-2 py-1.5" title="بانتظار موافقة الأدمن">
+          {!isSnack && (
+            <span className={`shrink-0 text-sm leading-none w-5 h-5 flex items-center justify-center rounded ${pcTheme.bg} ${pcTheme.text} opacity-60`}>
+              {pcTheme.icon}
+            </span>
+          )}
+          <span className="flex-1 text-right text-sm font-medium text-slate-400 truncate">{pcMeal?.name ?? '—'}</span>
+          <span className="shrink-0 text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1 leading-tight">⏳</span>
+          {pcMult > 1 && (
+            <span className="shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 text-violet-400 bg-violet-50/50 border border-violet-200">×{pcMult}</span>
+          )}
+        </div>
+      );
+    }
+    if (!canEdit) return <div className="w-full h-full min-h-[34px]" />;
+    return (
+      <button
+        type="button"
+        onClick={onEdit}
+        className="w-full h-full min-h-[34px] text-slate-300 hover:text-emerald-600 hover:bg-emerald-50/40 text-xs font-medium transition-colors"
+      >
+        +
+      </button>
+    );
+  }
+
+  const mealCat = (item.meals as { category?: ItemCategory } | null)?.category;
+  const effectiveCat: ItemCategory = mealCat ?? item.category ?? (item.meals?.is_snack ? 'snack' : 'hot');
+  const theme = CATEGORY_THEME[effectiveCat];
+  const mult = item.multiplier ?? 1;
+  const extraQty = item.extra_quantity ?? 0;
+  const directCount = Math.max(0, benTotal - (benExclusions[item.meal_id] ?? 0));
+  const totalCount = directCount * mult + extraQty;
+  const hasBenData = benTotal > 0;
+  const q = search.trim().toLowerCase();
+  const matches = !q || (item.meals?.name ?? '').toLowerCase().includes(q) || (item.meals?.english_name ?? '').toLowerCase().includes(q);
+  const highlightCls = q ? (matches ? 'bg-yellow-100 ring-2 ring-yellow-400' : 'opacity-25') : '';
+
+  const multInput = canEdit ? (
+    <input
+      type="number"
+      min={1}
+      max={100}
+      value={mult}
+      onChange={e => onSetMultiplier(item, parseInt(e.target.value) || 1)}
+      onClick={e => e.stopPropagation()}
+      title="مضاعف الكمية (×N)"
+      className={`shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 focus:outline-none focus:ring-1 ${
+        mult > 1
+          ? 'text-violet-700 bg-violet-50 border border-violet-300 focus:ring-violet-300'
+          : 'text-slate-400 bg-transparent border border-transparent hover:border-slate-200 focus:ring-slate-300'
+      }`}
+    />
+  ) : mult > 1 ? (
+    <span className="shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 text-violet-700 bg-violet-50 border border-violet-300">×{mult}</span>
+  ) : null;
+
+  return (
+    <div className={`flex items-center gap-1 px-2 py-1.5 group transition-all ${highlightCls} ${
+      hasPendingDelete ? 'pending-delete' : hasPendingUpdate ? 'pending-update' : ''
+    }`}>
+      {!isSnack && (
+        <span
+          title="الفئة تُؤخذ من الصنف نفسه — لتعديلها روح صفحة الأصناف"
+          className={`shrink-0 text-sm leading-none w-5 h-5 flex items-center justify-center rounded ${theme.bg} ${theme.text}`}
+        >
+          {theme.icon}
+        </span>
+      )}
+      {canEdit ? (
+        <button type="button" onClick={onEdit} className="flex-1 text-right text-sm font-medium text-slate-800 hover:text-emerald-700 truncate" title="اضغط للتغيير">
+          {item.meals?.name ?? '—'}
+        </button>
+      ) : (
+        <span className="flex-1 text-right text-sm font-medium text-slate-800 truncate" title="ما عندك صلاحية تعديل قائمة الطعام">
+          {item.meals?.name ?? '—'}
+        </span>
+      )}
+      {canEdit ? (
+        <>
+          <input
+            type="number"
+            value={countDraft ?? String(totalCount)}
+            onFocus={e => { setCountDraft(String(totalCount)); e.target.select(); }}
+            onChange={e => setCountDraft(e.target.value)}
+            onBlur={() => {
+              if (countDraft !== null) {
+                const desired = parseInt(countDraft);
+                if (!isNaN(desired) && desired !== totalCount)
+                  onSetExtraQty(item, desired - directCount * mult);
+                setCountDraft(null);
+              }
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+              if (e.key === 'Escape') { setCountDraft(null); e.currentTarget.blur(); }
+            }}
+            onClick={e => e.stopPropagation()}
+            title={hasBenData
+              ? `${directCount} × ${mult}${extraQty !== 0 ? ` + ${extraQty}` : ''} = ${totalCount}\nاضغط Enter للحفظ`
+              : 'اكتب الكمية واضغط Enter'}
+            className="shrink-0 w-14 text-center text-xs font-bold rounded py-0.5 text-emerald-700 bg-emerald-50 border border-emerald-300 focus:outline-none focus:ring-1 focus:ring-emerald-400"
+          />
+          {multInput}
+        </>
+      ) : hasBenData ? (
+        <>
+          <span className="shrink-0 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">
+            {totalCount}
+          </span>
+          {multInput}
+        </>
+      ) : (
+        multInput
+      )}
+      {canEdit && (
+        <button
+          type="button"
+          onClick={onClear}
+          className="shrink-0 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 text-xs transition-opacity"
+          title="حذف"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function MenuView() {
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.is_admin === true;
@@ -69,11 +235,11 @@ export default function MenuView() {
     setLoading(true);
     // نحاول الفلترة بـentity_type أولاً، ولو العمود ما موجود (الـmigration ما اتشغّل)
     // نرجع لجميع الصفوف. للمرافقين نظهر تنبيه.
-    const tryFetchItems = async (withEntity: boolean, withMealCategory: boolean) => {
+    const tryFetchItems = async (withEntity: boolean, withMealCategory: boolean, withExtraQty: boolean = true) => {
       const mealCols = `id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}${withMealCategory ? ', category' : ''}`;
       const q = supabase
         .from('menu_items')
-        .select(`id, week_number, day_of_week, meal_type, meal_id, category, position, multiplier${withEntity ? ', entity_type' : ''}, created_at, meals(${mealCols})`);
+        .select(`id, week_number, day_of_week, meal_type, meal_id, category, position, multiplier${withExtraQty ? ', extra_quantity' : ''}${withEntity ? ', entity_type' : ''}, created_at, meals(${mealCols})`);
       return withEntity ? q.eq('entity_type', entityType) : q;
     };
     const tryFetchMeals = async (withEntity: boolean, withCategory: boolean) => {
@@ -82,12 +248,16 @@ export default function MenuView() {
       return withEntity ? q.eq('entity_type', entityType) : q;
     };
 
-    let itemsRes = await tryFetchItems(true, true);
+    let itemsRes = await tryFetchItems(true, true, true);
     let mealsRes = await tryFetchMeals(true, true);
 
+    // إذا extra_quantity ما موجود (الـmigration ما اتشغّل) أعد المحاولة بدونه
+    if (itemsRes.error && /extra_quantity|column/i.test(itemsRes.error.message)) {
+      itemsRes = await tryFetchItems(true, true, false);
+    }
     // إذا meals.category ما موجود (الـmigration ما اتشغّل) أعد المحاولة بدونه
     if (itemsRes.error && /category|column/i.test(itemsRes.error.message)) {
-      itemsRes = await tryFetchItems(true, false);
+      itemsRes = await tryFetchItems(true, false, false);
     }
     if (mealsRes.error && /category|column/i.test(mealsRes.error.message)) {
       mealsRes = await tryFetchMeals(true, false);
@@ -310,6 +480,27 @@ export default function MenuView() {
     });
   };
 
+  const handleSetExtraQty = async (item: MenuItem, value: number) => {
+    const v = Math.floor(value) || 0;
+    if (v === (item.extra_quantity ?? 0)) return;
+    setAllItems(prev => prev.map(i => i.id === item.id ? { ...i, extra_quantity: v } : i));
+    const { error } = await supabase.from('menu_items').update({ extra_quantity: v }).eq('id', item.id);
+    if (error) {
+      setAllItems(prev => prev.map(i => i.id === item.id ? { ...i, extra_quantity: item.extra_quantity ?? 0 } : i));
+      if (/extra_quantity|column/i.test(error.message)) {
+        alert('عمود extra_quantity غير موجود — شغّل menu-extra-qty-migration.sql في Supabase SQL Editor');
+      }
+      return;
+    }
+    void logActivity({
+      action: 'update',
+      entity_type: 'meal',
+      entity_id: item.id,
+      entity_name: `قائمة الطعام — ${WEEK_TITLES[item.week_number as WeekNumber]}`,
+      details: { extra_quantity_to: v, source: 'menu_extra_qty' },
+    });
+  };
+
   const handleClearWeek = async () => {
     if (!confirm(`حذف كل أصناف ${WEEK_TITLES[activeWeek]} (${ENTITY_TYPE_LABELS_PLURAL[entityType]})؟`)) return;
     // ⚠️ مهم: المسح مقيّد بـentity_type عشان ما نمسح منيو الفئة الأخرى بالخطأ.
@@ -378,172 +569,6 @@ export default function MenuView() {
       setImportStatus('error');
       setImportMsg(`حدث خطأ أثناء الاستيراد: ${err instanceof Error ? err.message : String(err)}`);
     }
-  };
-
-  // Cell renderer: shows meal name (with category icon for mains) or "+ إضافة" placeholder
-  const Cell = ({
-    week, day, mealType, rowIndex, isSnack,
-  }: { week: WeekNumber; day: number; mealType: MealType; rowIndex: number; isSnack: boolean }) => {
-    const { mains, snacks } = slotMainsAndSnacks(week, day, mealType);
-    const list = isSnack ? snacks : mains;
-    const item = list[rowIndex] ?? null;
-
-    if (!item) {
-      // خلية فاضية — أولاً نتفقد لو فيها طلب إضافة معلّق للمستخدم الحالي.
-      // لو فيه، نعرض اسم الصنف بخط رمادي بدل علامة "+" حتى يقبل الأدمن.
-      const pendingKey = `${week}|${day}|${mealType}|${isSnack ? 's' : 'm'}|${rowIndex}`;
-      const pendingCreate = pendingCreateBySlot.get(pendingKey);
-      if (pendingCreate) {
-        const pcMeal = mealsById.get(pendingCreate.mealId);
-        const pcCat: ItemCategory = pcMeal?.category ?? (isSnack ? 'snack' : 'hot');
-        const pcTheme = CATEGORY_THEME[pcCat];
-        const pcMult = pendingCreate.multiplier;
-        return (
-          <div className="flex items-center gap-1 px-2 py-1.5" title="بانتظار موافقة الأدمن">
-            {!isSnack && (
-              <span className={`shrink-0 text-sm leading-none w-5 h-5 flex items-center justify-center rounded ${pcTheme.bg} ${pcTheme.text} opacity-60`}>
-                {pcTheme.icon}
-              </span>
-            )}
-            <span className="flex-1 text-right text-sm font-medium text-slate-400 truncate">
-              {pcMeal?.name ?? '—'}
-            </span>
-            <span className="shrink-0 text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1 leading-tight">
-              ⏳
-            </span>
-            {pcMult > 1 && (
-              <span className="shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 text-violet-400 bg-violet-50/50 border border-violet-200">
-                ×{pcMult}
-              </span>
-            )}
-          </div>
-        );
-      }
-
-      // ما فيه طلب معلّق: لو ما عند المستخدم صلاحية تعديل المنيو، تظهر فاضية ساكتة
-      if (!canEdit) {
-        return <div className="w-full h-full min-h-[34px]" />;
-      }
-      return (
-        <button
-          type="button"
-          onClick={() => setEditing({ week, day, meal_type: mealType, isSnack, rowIndex })}
-          className="w-full h-full min-h-[34px] text-slate-300 hover:text-emerald-600 hover:bg-emerald-50/40 text-xs font-medium transition-colors"
-        >
-          +
-        </button>
-      );
-    }
-
-    // الفئة من meals.category (المصدر الوحيد). للسناك تُعرض بدون تبديل.
-    const mealCat = (item.meals as { category?: ItemCategory } | null)?.category;
-    const effectiveCat: ItemCategory = mealCat ?? item.category ?? (item.meals?.is_snack ? 'snack' : 'hot');
-    const theme = CATEGORY_THEME[effectiveCat];
-    const mult = item.multiplier ?? 1;
-    const directCount = Math.max(0, benTotal - (benExclusions[item.meal_id] ?? 0));
-    const totalCount = directCount * mult;
-    const hasBenData = benTotal > 0;
-    const q = search.trim().toLowerCase();
-    const itemName = item.meals?.name ?? '';
-    const itemEnglish = item.meals?.english_name ?? '';
-    const matches = !q || itemName.toLowerCase().includes(q) || itemEnglish.toLowerCase().includes(q);
-    const highlightCls = q
-      ? matches
-        ? 'bg-yellow-100 ring-2 ring-yellow-400'
-        : 'opacity-25'
-      : '';
-    return (
-      <div className={`flex items-center gap-1 px-2 py-1.5 group transition-all ${highlightCls} ${
-        myPending.hasDelete(item.id) ? 'pending-delete'
-        : myPending.hasUpdate(item.id) ? 'pending-update' : ''
-      }`}>
-        {!isSnack && (
-          <span
-            title="الفئة تُؤخذ من الصنف نفسه — لتعديلها روح صفحة الأصناف"
-            className={`shrink-0 text-sm leading-none w-5 h-5 flex items-center justify-center rounded ${theme.bg} ${theme.text}`}
-          >
-            {theme.icon}
-          </span>
-        )}
-        {canEdit ? (
-          <button
-            type="button"
-            onClick={() => setEditing({ week, day, meal_type: mealType, isSnack, rowIndex })}
-            className="flex-1 text-right text-sm font-medium text-slate-800 hover:text-emerald-700 truncate"
-            title="اضغط للتغيير"
-          >
-            {item.meals?.name ?? '—'}
-          </button>
-        ) : (
-          <span
-            className="flex-1 text-right text-sm font-medium text-slate-800 truncate"
-            title="ما عندك صلاحية تعديل قائمة الطعام"
-          >
-            {item.meals?.name ?? '—'}
-          </span>
-        )}
-        {hasBenData ? (
-          <>
-            {canEdit ? (
-              <input
-                type="number"
-                min={0}
-                value={totalCount}
-                onChange={e => {
-                  const desired = parseInt(e.target.value) || 0;
-                  const newMult = directCount > 0 ? Math.max(1, Math.round(desired / directCount)) : 1;
-                  handleSetMultiplier(item, newMult);
-                }}
-                onClick={e => e.stopPropagation()}
-                title={`${directCount} مستفيد × ${mult}${mult > 1 ? ` = ${totalCount}` : ''}\nغيّر الرقم لتعديل المضاعف تلقائياً`}
-                className="shrink-0 w-14 text-center text-xs font-bold rounded py-0.5 text-emerald-700 bg-emerald-50 border border-emerald-300 focus:outline-none focus:ring-1 focus:ring-emerald-400"
-              />
-            ) : (
-              <span className="shrink-0 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">
-                {totalCount}
-              </span>
-            )}
-            {mult > 1 && (
-              <span className="shrink-0 text-[10px] font-bold text-violet-500" title={`مضاعف ×${mult}`}>
-                ×{mult}
-              </span>
-            )}
-          </>
-        ) : (
-          // لا يوجد بيانات مستفيدين — يرجع لعرض المضاعف
-          canEdit ? (
-            <input
-              type="number"
-              min={1}
-              max={100}
-              value={mult}
-              onChange={e => handleSetMultiplier(item, parseInt(e.target.value) || 1)}
-              onClick={e => e.stopPropagation()}
-              title="مضاعف الكمية (×N)"
-              className={`shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 focus:outline-none focus:ring-1 ${
-                mult > 1
-                  ? 'text-violet-700 bg-violet-50 border border-violet-300 focus:ring-violet-300'
-                  : 'text-slate-400 bg-transparent border border-transparent hover:border-slate-200 focus:ring-slate-300'
-              }`}
-            />
-          ) : mult > 1 ? (
-            <span className="shrink-0 w-9 text-center text-xs font-bold rounded py-0.5 text-violet-700 bg-violet-50 border border-violet-300">
-              ×{mult}
-            </span>
-          ) : null
-        )}
-        {canEdit && (
-          <button
-            type="button"
-            onClick={() => handleSetCell(week, day, mealType, rowIndex, isSnack, null)}
-            className="shrink-0 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 text-xs transition-opacity"
-            title="حذف"
-          >
-            ✕
-          </button>
-        )}
-      </div>
-    );
   };
 
   return (
@@ -691,11 +716,31 @@ export default function MenuView() {
                   // Main rows (5)
                   ...Array.from({ length: MAIN_ROWS_PER_MEAL }, (_, rowIdx) => (
                     <tr key={`${section.meal_type}-main-${rowIdx}`} className="hover:bg-slate-50/40">
-                      {MENU_DAYS.map(d => (
-                        <td key={d.value} className="border border-slate-200 align-middle p-0">
-                          <Cell week={activeWeek} day={d.value} mealType={section.meal_type} rowIndex={rowIdx} isSnack={false} />
-                        </td>
-                      ))}
+                      {MENU_DAYS.map(d => {
+                        const { mains } = slotMainsAndSnacks(activeWeek, d.value, section.meal_type);
+                        const cellItem = mains[rowIdx] ?? null;
+                        const pKey = `${activeWeek}|${d.value}|${section.meal_type}|m|${rowIdx}`;
+                        return (
+                          <td key={d.value} className="border border-slate-200 align-middle p-0">
+                            <Cell
+                              item={cellItem}
+                              pendingCreate={pendingCreateBySlot.get(pKey) ?? null}
+                              mealsById={mealsById}
+                              benTotal={benTotal}
+                              benExclusions={benExclusions}
+                              search={search}
+                              canEdit={canEdit}
+                              isSnack={false}
+                              hasPendingDelete={cellItem ? myPending.hasDelete(cellItem.id) : false}
+                              hasPendingUpdate={cellItem ? myPending.hasUpdate(cellItem.id) : false}
+                              onEdit={() => setEditing({ week: activeWeek, day: d.value, meal_type: section.meal_type, isSnack: false, rowIndex: rowIdx })}
+                              onClear={() => handleSetCell(activeWeek, d.value, section.meal_type, rowIdx, false, null)}
+                              onSetMultiplier={handleSetMultiplier}
+                              onSetExtraQty={handleSetExtraQty}
+                            />
+                          </td>
+                        );
+                      })}
                       {rowIdx === 0 && (
                         <td
                           rowSpan={MAIN_ROWS_PER_MEAL}
@@ -710,11 +755,31 @@ export default function MenuView() {
                   // Snack rows (2) — yellow background
                   ...Array.from({ length: SNACK_ROWS_PER_MEAL }, (_, rowIdx) => (
                     <tr key={`${section.meal_type}-snack-${rowIdx}`} className="bg-amber-50/60">
-                      {MENU_DAYS.map(d => (
-                        <td key={d.value} className="border border-slate-200 align-middle p-0">
-                          <Cell week={activeWeek} day={d.value} mealType={section.meal_type} rowIndex={rowIdx} isSnack={true} />
-                        </td>
-                      ))}
+                      {MENU_DAYS.map(d => {
+                        const { snacks } = slotMainsAndSnacks(activeWeek, d.value, section.meal_type);
+                        const cellItem = snacks[rowIdx] ?? null;
+                        const pKey = `${activeWeek}|${d.value}|${section.meal_type}|s|${rowIdx}`;
+                        return (
+                          <td key={d.value} className="border border-slate-200 align-middle p-0">
+                            <Cell
+                              item={cellItem}
+                              pendingCreate={pendingCreateBySlot.get(pKey) ?? null}
+                              mealsById={mealsById}
+                              benTotal={benTotal}
+                              benExclusions={benExclusions}
+                              search={search}
+                              canEdit={canEdit}
+                              isSnack={true}
+                              hasPendingDelete={cellItem ? myPending.hasDelete(cellItem.id) : false}
+                              hasPendingUpdate={cellItem ? myPending.hasUpdate(cellItem.id) : false}
+                              onEdit={() => setEditing({ week: activeWeek, day: d.value, meal_type: section.meal_type, isSnack: true, rowIndex: rowIdx })}
+                              onClear={() => handleSetCell(activeWeek, d.value, section.meal_type, rowIdx, true, null)}
+                              onSetMultiplier={handleSetMultiplier}
+                              onSetExtraQty={handleSetExtraQty}
+                            />
+                          </td>
+                        );
+                      })}
                       {rowIdx === 0 && (
                         <td
                           rowSpan={SNACK_ROWS_PER_MEAL}

@@ -135,6 +135,7 @@ export interface MenuItem {
   category: ItemCategory;  // 'hot' | 'cold' | 'snack'
   position: number;
   multiplier: number;      // default 1 — copied to order_items on auto-fill
+  extra_quantity?: number; // additional count beyond (total - exclusions) × multiplier
   // اختياري للحفاظ على التوافق قبل تشغيل companions-meals-migration.sql
   entity_type?: EntityType;
   created_at: string;
