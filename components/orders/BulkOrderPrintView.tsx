@@ -127,7 +127,7 @@ function SingleOrderContent({ report, showFixed, showCustom }: { report: FullRep
   const wk = order.week_number ?? order.week_of_month;
 
   return (
-    <div style={s.page}>
+    <div className="order-page" style={s.page}>
       <div style={s.titleBar}>أمر تشغيل — خطوة أمل</div>
       <div style={s.infoBar}>
         <div style={s.infoMain}>{arabicDate(order.date)}</div>
@@ -227,13 +227,13 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
 
   return (
     <>
-      <style>{`
+      <style dangerouslySetInnerHTML={{ __html: `
         html, body { margin: 0; padding: 0; }
         body { background: #e2e8f0; }
         * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         .order-block { page-break-after: always; break-after: page; }
         .order-block:last-child { page-break-after: avoid; break-after: avoid; }
-        .order-block > div { break-inside: auto; }
+        .order-page { break-inside: auto; }
         @media print {
           @page { size: A4 portrait; margin: 5mm; }
           html, body {
@@ -249,7 +249,7 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
             padding: 0 !important;
             box-shadow: none !important;
           }
-          .order-block > div {
+          .order-page {
             width: 100% !important;
             max-width: 100% !important;
             min-height: 0 !important;
@@ -258,7 +258,7 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
             box-shadow: none !important;
           }
         }
-      `}</style>
+      ` }} />
 
       {/* Toolbar */}
       <div className="no-print" style={{ background: '#1e293b', color: '#fff', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, fontFamily: 'sans-serif', direction: 'rtl', position: 'sticky', top: 0, zIndex: 100 }}>
