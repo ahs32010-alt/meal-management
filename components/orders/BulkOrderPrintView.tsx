@@ -233,10 +233,30 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
         * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         .order-block { page-break-after: always; break-after: page; }
         .order-block:last-child { page-break-after: avoid; break-after: avoid; }
+        .order-block > div { break-inside: auto; }
         @media print {
           @page { size: A4 portrait; margin: 5mm; }
-          html, body { background: #fff !important; }
+          html, body {
+            background: #fff !important;
+            width: auto !important;
+            height: auto !important;
+          }
           .no-print { display: none !important; }
+          .order-block {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            box-shadow: none !important;
+          }
+          .order-block > div {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            box-shadow: none !important;
+          }
         }
       `}</style>
 
@@ -281,7 +301,7 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
       )}
 
       {/* Orders */}
-      {allLoaded && validReports.map((report, i) => (
+      {allLoaded && validReports.map(report => (
         <div key={report.order.id} className="order-block">
           <SingleOrderContent report={report} showFixed={showFixed} showCustom={showCustom} />
         </div>
