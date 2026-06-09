@@ -548,7 +548,21 @@ export default function MenuView() {
         // نختم كل صف بـentity_type الحالي قبل الإدراج
         const stamped = rows.map(r => ({ ...r, entity_type: entityType }));
         const { error } = await supabase.from('menu_items').insert(stamped);
-        if (error) throw error;
+        if (error) {
+          // لو عمود extra_quantity ما موجود (الـmigration ما اتشغّل)، أعد المحاولة بدونه
+          // عشان الاستيراد ينجح والكميات الإضافية تُتجاهل بدل ما يتعطّل كل شيء.
+          if (/extra_quantity|column/i.test(error.message)) {
+            const fallback = stamped.map(row => {
+              const r = { ...row };
+              delete (r as Record<string, unknown>).extra_quantity;
+              return r;
+            });
+            const { error: e2 } = await supabase.from('menu_items').insert(fallback);
+            if (e2) throw e2;
+          } else {
+            throw error;
+          }
+        }
       }
 
       void logActivity({

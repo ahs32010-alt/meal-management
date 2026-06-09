@@ -7,8 +7,8 @@ import type { ItemCategory, MealType, EntityType } from '@/lib/types';
 
 interface MealRow {
   id: string; name: string; english_name?: string | null;
-  type: MealType; is_snack: boolean; entity_type?: EntityType;
-  created_at?: string;
+  type: MealType; is_snack: boolean; category?: ItemCategory | null;
+  entity_type?: EntityType; created_at?: string;
 }
 
 interface BeneficiaryRow {
@@ -26,12 +26,14 @@ interface ExclusionRow {
 interface FixedMealRow {
   beneficiary_id: string; day_of_week: number; meal_type: MealType;
   meal_id: string; quantity: number; category?: ItemCategory;
+  suppress_if_meal_ids?: string[] | null;
 }
 
 interface MenuRow {
   week_number: number; day_of_week: number; meal_type: MealType;
   meal_id: string; category: ItemCategory; position: number;
-  multiplier?: number; entity_type?: EntityType;
+  multiplier?: number; extra_quantity?: number | null;
+  entity_type?: EntityType;
 }
 
 interface OrderRow {
@@ -111,23 +113,34 @@ function buildBeneficiariesSheet(
 
   const buildFixedStr = (benId: string, type: MealType, isSnack: boolean) => {
     const sectionDefault: ItemCategory = isSnack ? 'snack' : 'hot';
-    const map = new Map<string, { name: string; days: number[]; quantity: number; category: ItemCategory }>();
+    const map = new Map<string, { name: string; days: number[]; quantity: number; category: ItemCategory; suppressIds: string[] }>();
     for (const fm of fixed.filter(f => f.beneficiary_id === benId && f.meal_type === type)) {
       const m = mealsById.get(fm.meal_id);
       if (!m || m.is_snack !== isSnack) continue;
       const cat = (fm.category ?? sectionDefault) as ItemCategory;
       const key = `${fm.meal_id}|${cat}`;
+      const suppressIds = Array.isArray(fm.suppress_if_meal_ids) ? [...fm.suppress_if_meal_ids] : [];
       if (!map.has(key)) {
-        map.set(key, { name: m.name, days: [], quantity: fm.quantity ?? 1, category: cat });
+        map.set(key, {
+          name: m.name,
+          days: [],
+          quantity: fm.quantity ?? 1,
+          category: cat,
+          suppressIds,
+        });
       }
       map.get(key)!.days.push(fm.day_of_week);
     }
     return Array.from(map.values())
-      .map(({ name, days, quantity, category }) => {
+      .map(({ name, days, quantity, category, suppressIds }) => {
         const nameStr = quantity > 1 ? `${name}×${quantity}` : name;
         const daysStr = days.map(d => DAY_SHORT[d]).join(' ');
         const catSuffix = category !== sectionDefault ? `@${CAT_AR[category]}` : '';
-        return `${nameStr}؛${daysStr}${catSuffix}`;
+        const suppressNames = suppressIds
+          .map(id => mealsById.get(id)?.name ?? '')
+          .filter(Boolean);
+        const suppressSuffix = suppressNames.length ? `↛${suppressNames.join(',')}` : '';
+        return `${nameStr}؛${daysStr}${catSuffix}${suppressSuffix}`;
       })
       .join(' - ');
   };
@@ -158,12 +171,16 @@ function buildBeneficiariesSheet(
 function buildMealsSheet(meals: MealRow[], entityType: EntityType): Record<string, string>[] {
   return meals
     .filter(m => (m.entity_type ?? 'beneficiary') === entityType)
-    .map(m => ({
-      'الاسم': m.name,
-      'الاسم الإنجليزي': m.english_name ?? '',
-      'نوع الوجبة': MEAL_TYPE_AR[m.type] ?? m.type,
-      'سناك': m.is_snack ? 'نعم' : 'لا',
-    }));
+    .map(m => {
+      const cat: ItemCategory = (m.category as ItemCategory | undefined) ?? (m.is_snack ? 'snack' : 'hot');
+      return {
+        'الاسم': m.name,
+        'الاسم الإنجليزي': m.english_name ?? '',
+        'نوع الوجبة': MEAL_TYPE_AR[m.type] ?? m.type,
+        'سناك': m.is_snack ? 'نعم' : 'لا',
+        'الفئة': CAT_AR[cat],
+      };
+    });
 }
 
 function buildMenuSheets(
@@ -174,7 +191,7 @@ function buildMenuSheets(
   const mealsById = new Map(meals.map(m => [m.id, m] as const));
   const filtered = menu.filter(mi => (mi.entity_type ?? 'beneficiary') === entityType);
 
-  // ورقة لكل أسبوع — جدول مسطّح (أسبوع/يوم/وجبة/تصنيف/صنف/مضاعف)
+  // ورقة لكل أسبوع — جدول مسطّح (أسبوع/يوم/وجبة/تصنيف/صنف/مضاعف/كمية إضافية)
   // أبسط من إعادة بناء التصميم البصري الشبكي في export الأصلي،
   // لكن مفصّل ويُستورد مرة ثانية يدوياً عند الحاجة.
   const out: Array<{ title: string; rows: Record<string, string>[] }> = [];
@@ -189,6 +206,7 @@ function buildMenuSheets(
         'التصنيف': CAT_AR[item.category] ?? item.category,
         'الصنف': m?.name ?? `(محذوف: ${item.meal_id})`,
         'المضاعف': String(item.multiplier ?? 1),
+        'الكمية الإضافية': String(item.extra_quantity ?? 0),
         'الترتيب': String(item.position),
       });
     }

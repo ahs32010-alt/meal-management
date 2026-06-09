@@ -127,7 +127,11 @@ function buildWeekSheet(XLSX: typeof import('xlsx'), weekItems: MenuItem[], week
         if (!item) continue;
         const name = item.meals?.name ?? '';
         const mult = item.multiplier ?? 1;
-        matrix[s.startRow + r][colIdx] = mult > 1 ? `${name} ×${mult}` : name;
+        const extra = item.extra_quantity ?? 0;
+        const parts = [name];
+        if (mult > 1) parts.push(`×${mult}`);
+        if (extra !== 0) parts.push(`${extra > 0 ? '+' : ''}${extra}`);
+        matrix[s.startRow + r][colIdx] = parts.join(' ');
       }
     }
   }
@@ -186,13 +190,14 @@ function buildWeekSheet(XLSX: typeof import('xlsx'), weekItems: MenuItem[], week
 // ─── Import ─────────────────────────────────────────────────────────────────
 
 interface ImportedRow {
-  week_number: number;
-  day_of_week: number;
-  meal_type:   MealType;
-  meal_id:     string;
-  category:    ItemCategory;
-  position:    number;
-  multiplier:  number;
+  week_number:    number;
+  day_of_week:    number;
+  meal_type:      MealType;
+  meal_id:        string;
+  category:       ItemCategory;
+  position:       number;
+  multiplier:     number;
+  extra_quantity: number;
 }
 
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
@@ -255,6 +260,17 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
             cellText = cellText.replace(catMatch[0], '').trim();
           }
 
+          // Extra quantity: "+N" or "-N" — extracted first because it can
+          // appear anywhere (typically after the multiplier). Range allows
+          // negatives so users can "reduce" the auto-computed count.
+          let extra_quantity = 0;
+          const extraMatch = cellText.match(/\s*([+\-])\s*(\d+)\b/);
+          if (extraMatch && extraMatch.index !== undefined) {
+            const n = parseInt(extraMatch[2], 10);
+            if (n >= 0 && n <= 9999) extra_quantity = extraMatch[1] === '-' ? -n : n;
+            cellText = (cellText.slice(0, extraMatch.index) + cellText.slice(extraMatch.index + extraMatch[0].length)).trim();
+          }
+
           // Multiplier: " ×N" or " *N" or " xN"
           let multiplier = 1;
           const multMatch = cellText.match(/[\s ]*[×x*]\s*(\d+)\s*$/i);
@@ -287,6 +303,7 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<{
             category,
             position:    r,
             multiplier,
+            extra_quantity,
           });
         }
       }

@@ -290,11 +290,14 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     // العمود "ثابتة الفطور" مثلاً افتراضه "حار"، أما "ثابتة سناكات الفطور" فافتراضه "سناك".
     // نضيف لاحقة `@بارد/@حار/@سناك` فقط لو فئة الصف تختلف عن افتراض العمود،
     // عشان الملفات القديمة تبقى مقروءة، والجديد يحفظ الفئة بدقة.
+    // لاحقة `↛اسم1,اسم2` تحفظ "أصناف تُلغي هذا الصنف الثابت" عند وجودها بالأمر.
     const CAT_AR: Record<ItemCategory, string> = { hot: 'حار', cold: 'بارد', snack: 'سناك' };
+    const mealsById = new Map<string, Meal>();
+    for (const m of meals) mealsById.set(m.id, m);
     const buildFixedStr = (fixedMeals: Beneficiary['fixed_meals'], type: string, isSnack: boolean) => {
       const sectionDefault: ItemCategory = isSnack ? 'snack' : 'hot';
       // نُجمع حسب (meal_id, category) — صفوف نفس الصنف بفئتين مختلفتين تظهر منفصلة.
-      const map = new Map<string, { name: string; days: number[]; quantity: number; category: ItemCategory }>();
+      const map = new Map<string, { name: string; days: number[]; quantity: number; category: ItemCategory; suppressIds: string[] }>();
       for (const fm of fixedMeals ?? []) {
         const mealInfo = (fm as any).meals;
         if (mealInfo?.type !== type || mealInfo?.is_snack !== isSnack) continue;
@@ -302,17 +305,28 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         if (!mealName) continue;
         const cat = ((fm as any).category as ItemCategory | undefined) ?? sectionDefault;
         const key = `${fm.meal_id}|${cat}`;
+        const suppressIds = (fm as unknown as { suppress_if_meal_ids?: string[] }).suppress_if_meal_ids ?? [];
         if (!map.has(key)) {
-          map.set(key, { name: mealName, days: [], quantity: (fm as any).quantity ?? 1, category: cat });
+          map.set(key, {
+            name: mealName,
+            days: [],
+            quantity: (fm as any).quantity ?? 1,
+            category: cat,
+            suppressIds: Array.isArray(suppressIds) ? [...suppressIds] : [],
+          });
         }
         map.get(key)!.days.push(fm.day_of_week);
       }
       return Array.from(map.values())
-        .map(({ name, days, quantity, category }) => {
+        .map(({ name, days, quantity, category, suppressIds }) => {
           const nameStr = quantity > 1 ? `${name}×${quantity}` : name;
           const daysStr = days.map(d => DAY_SHORT[d]).join(' ');
           const catSuffix = category !== sectionDefault ? `@${CAT_AR[category]}` : '';
-          return `${nameStr}؛${daysStr}${catSuffix}`;
+          const suppressNames = suppressIds
+            .map(id => mealsById.get(id)?.name ?? '')
+            .filter(Boolean);
+          const suppressSuffix = suppressNames.length ? `↛${suppressNames.join(',')}` : '';
+          return `${nameStr}؛${daysStr}${catSuffix}${suppressSuffix}`;
         })
         .join(' - ');
     };
@@ -717,8 +731,11 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
             'فول؛كبدة - شكشوكة؛تونة', '',
             '', '',
             '', '',
-            // مثال صنف ثابت بتصنيف افتراضي (حار) + مثال آخر مُحدَّد كـ"بارد" بإضافة @بارد
-            'فول؛سبت احد اربعاء - سلطة؛سبت احد@بارد', '',
+            // أمثلة الأصناف الثابتة:
+            //   فول×2؛سبت احد اربعاء  → كمية 2 (تصنيف افتراضي حار)
+            //   سلطة؛سبت احد@بارد       → فئة بارد بدل الافتراضي
+            //   مكرونة؛سبت↛فول,بيض     → تُلغى لو وُجد "فول" أو "بيض" في نفس الأمر
+            'فول×2؛سبت احد اربعاء - سلطة؛سبت احد@بارد - مكرونة؛سبت↛فول,بيض', '',
             '', '',
             '', '',
             '',
@@ -782,6 +799,20 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
             );
             const lookupMeal = (name: string, type: string, isSnack: boolean) =>
               mealByKey.get(`${name}|${type}|${String(isSnack)}`);
+
+            // البحث بالاسم فقط — يُستخدم في suppress_if_meal_ids اللي يقبل أي صنف
+            // باسم معيّن بغض النظر عن نوعه (لأن الـsuppress_if منطقياً عابر للأنواع).
+            const mealsByName = new Map<string, typeof mealsData>();
+            for (const m of mealsData) {
+              const key = m.name.trim();
+              const list = mealsByName.get(key) ?? [];
+              list.push(m);
+              mealsByName.set(key, list);
+            }
+            const lookupSuppressIds = (name: string): string[] => {
+              const list = mealsByName.get(name.trim()) ?? [];
+              return list.map(m => m.id);
+            };
 
             // ② تحليل الصفوف
             type ParsedRow = {
@@ -900,6 +931,25 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                     part = part.replace(catMatch[0], '').trim();
                   }
 
+                  // نستخرج لاحقة `↛اسم1,اسم2` (أصناف يلغي بوجودها). اللاحقة اختيارية —
+                  // الملفات القديمة بدون اللاحقة لا تتأثّر.
+                  let suppress_if_meal_ids: string[] = [];
+                  const suppressMatch = part.match(/↛\s*([^@]+?)\s*$/);
+                  if (suppressMatch) {
+                    const names = suppressMatch[1].split(/[,،]/).map(s => s.trim()).filter(Boolean);
+                    const seenIds = new Set<string>();
+                    for (const n of names) {
+                      const ids = lookupSuppressIds(n);
+                      if (ids.length === 0) {
+                        errors.push(`صف ${i + 2}: الصنف الـ"↛${n}" غير موجود — سيُتجاهل`);
+                        continue;
+                      }
+                      for (const id of ids) seenIds.add(id);
+                    }
+                    suppress_if_meal_ids = Array.from(seenIds);
+                    part = part.replace(suppressMatch[0], '').trim();
+                  }
+
                   const [mealPart, daysStr] = part.split('؛').map(s => s.trim());
                   if (!mealPart || !daysStr) continue;
                   // اسم الصنف قد يحتوي على كمية: فول×2
@@ -911,7 +961,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                   for (const dayStr of daysStr.split(/[\s،,]+/).filter(Boolean)) {
                     const dayNum = DAY_MAP[dayStr];
                     if (dayNum === undefined) { errors.push(`صف ${i + 2}: اليوم "${dayStr}" غير معروف`); continue; }
-                    fixedRows.push({ beneficiary_id: benId, day_of_week: dayNum, meal_type: meal.type, meal_id: meal.id, quantity, category });
+                    fixedRows.push({ beneficiary_id: benId, day_of_week: dayNum, meal_type: meal.type, meal_id: meal.id, quantity, category, suppress_if_meal_ids });
                   }
                 }
               }
@@ -929,10 +979,15 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                 const slice = fixedRows.slice(c, c + CHUNK);
                 const { error } = await supabase.from('beneficiary_fixed_meals').insert(slice);
                 if (error) {
-                  // لو عمود category غير موجود (fixed-meals-category-migration.sql ما اتشغّل)،
-                  // نعيد المحاولة بدونه عشان الاستيراد يكمل ويُحفظ على الأقل ما عدا الفئة.
-                  if (/category|column/i.test(error.message)) {
-                    const fallback = slice.map(({ category: _omit, ...rest }) => rest);
+                  // إذا أعمدة category أو suppress_if_meal_ids غير موجودة (الـmigrations
+                  // ما اتشغّلت)، نعيد المحاولة بدونها عشان الاستيراد يكمل ويحفظ بقية الحقول.
+                  if (/category|suppress_if|column/i.test(error.message)) {
+                    const fallback = slice.map(row => {
+                      const r = { ...row };
+                      delete (r as Record<string, unknown>).category;
+                      delete (r as Record<string, unknown>).suppress_if_meal_ids;
+                      return r;
+                    });
                     const { error: e2 } = await supabase.from('beneficiary_fixed_meals').insert(fallback);
                     if (e2) errors.push(`خطأ في الأصناف الثابتة: ${e2.message}`);
                   } else {
