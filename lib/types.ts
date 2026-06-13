@@ -70,6 +70,10 @@ export interface Beneficiary {
   diet_type?: string;
   fixed_items?: string;
   notes?: string;
+  // خيارات الستيكر — تظهر كرموز في ستيكرات الغداء والعشاء (انظر lib/sticker-flags.ts)
+  no_fish?: boolean;
+  no_pasta_sandwich?: boolean;
+  low_carb?: boolean;
   created_at: string;
   // اختياري للحفاظ على التوافق مع البيانات القديمة قبل تشغيل الـ migration
   entity_type?: EntityType;

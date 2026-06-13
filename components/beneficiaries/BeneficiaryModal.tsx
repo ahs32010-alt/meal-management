@@ -8,6 +8,7 @@ import { needsApproval } from '@/lib/permissions';
 import { enqueueCreate, enqueueUpdate, type CreatePayload } from '@/lib/pending-actions';
 import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS } from '@/lib/types';
+import { STICKER_FLAGS } from '@/lib/sticker-flags';
 
 interface Props {
   beneficiary: Beneficiary | null;
@@ -287,6 +288,9 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const [villa, setVilla] = useState(beneficiary?.villa ?? '');
   const [dietType, setDietType] = useState(beneficiary?.diet_type ?? '');
   const [notes, setNotes] = useState(beneficiary?.notes ?? '');
+  const [noFish, setNoFish] = useState(beneficiary?.no_fish ?? false);
+  const [noPastaSandwich, setNoPastaSandwich] = useState(beneficiary?.no_pasta_sandwich ?? false);
+  const [lowCarb, setLowCarb] = useState(beneficiary?.low_carb ?? false);
 
   const [exclusions, setExclusions] = useState<ExclusionEntry[]>(
     beneficiary?.exclusions?.map(e => ({
@@ -379,6 +383,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
       code: code.trim(), category: category.trim(),
       villa: villa.trim() || null, diet_type: dietType.trim() || null,
       notes: notes.trim() || null,
+      no_fish: noFish, no_pasta_sandwich: noPastaSandwich, low_carb: lowCarb,
     };
     // فقط نضيف entity_type عند الإنشاء — التعديل ما يغيّر النوع.
     if (!beneficiary) payload.entity_type = entityType;
@@ -583,6 +588,28 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
               </div>
               <div><label className="label">ملاحظات</label>
                 <textarea value={notes} onChange={e => setNotes(e.target.value)} className="input-field h-20 resize-none" placeholder="أي ملاحظات إضافية..." /></div>
+
+              {/* خيارات الستيكر — تظهر كرموز في ستيكرات الغداء والعشاء */}
+              <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
+                <p className="font-semibold text-sm text-slate-700 mb-2">خيارات ستيكر الغداء والعشاء</p>
+                <div className="space-y-2">
+                  {([
+                    { state: noFish,          set: setNoFish,          key: 'no_fish' },
+                    { state: noPastaSandwich, set: setNoPastaSandwich, key: 'no_pasta_sandwich' },
+                    { state: lowCarb,         set: setLowCarb,         key: 'low_carb' },
+                  ] as const).map(({ state, set, key }) => {
+                    const flag = STICKER_FLAGS.find(f => f.key === key)!;
+                    return (
+                      <label key={key} className="flex items-center gap-2.5 cursor-pointer select-none">
+                        <input type="checkbox" checked={state} onChange={e => set(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                        <span className="text-lg leading-none w-5 text-center">{flag.symbol}</span>
+                        <span className="text-sm text-slate-700">{flag.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
 

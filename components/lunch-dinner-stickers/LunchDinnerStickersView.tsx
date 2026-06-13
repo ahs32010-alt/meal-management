@@ -1,11 +1,26 @@
 'use client';
 
-import { useState, useEffect, useCallback, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useCallback, useLayoutEffect, useRef, useMemo } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import type { Beneficiary } from '@/lib/types';
+import { STICKER_FLAGS } from '@/lib/sticker-flags';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
 const HEADER_KEY = 'ldStickerHeaderUrl';
+const DIET_COLORS_KEY = 'ldDietColors';
+
+// لوحة ألوان واضحة وفاتحة (النص الأسود يبقى مقروءاً فوقها)
+const COLOR_PALETTE = [
+  '#fecaca', // أحمر فاتح
+  '#fed7aa', // برتقالي فاتح
+  '#fef08a', // أصفر
+  '#bbf7d0', // أخضر فاتح
+  '#a5f3fc', // سماوي
+  '#bfdbfe', // أزرق فاتح
+  '#ddd6fe', // بنفسجي فاتح
+  '#fbcfe8', // وردي
+  '#e2e8f0', // رمادي فاتح
+];
 
 // ترجمة إنجليزية لأنواع الأنظمة الغذائية الشائعة — تُعرض كسطر ثانٍ تحت العربي.
 const DIET_TYPE_EN: Record<string, string> = {
@@ -85,30 +100,31 @@ function DefaultHeader({ s }: { s: number }) {
       </div>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src="/logo.png"
-        alt="مركز خطوة أمل"
+        src="/logo-hope.png"
+        alt="خطوة أمل"
         className="absolute object-contain"
-        style={{ right: 4 * s, top: 2 * s, height: 42 * s, width: 'auto' }}
+        style={{ right: 4 * s, top: 2 * s, height: 40 * s, width: 'auto' }}
       />
     </div>
   );
 }
 
 // ── ستيكر واحد بمقاس ثابت (widthCm × heightCm) ───────────────────────────────
-function StickerCard({ ben, headerUrl, widthCm, heightCm, innerRef }: {
+function StickerCard({ ben, headerUrl, widthCm, heightCm, bgColor, innerRef }: {
   ben: Beneficiary; headerUrl: string | null; widthCm: number; heightCm: number;
-  innerRef?: (el: HTMLDivElement | null) => void;
+  bgColor?: string; innerRef?: (el: HTMLDivElement | null) => void;
 }) {
   const diet = dietLines(ben.diet_type);
   const s = Math.min(widthCm, heightCm) / 10; // معامل تحجيم نسبةً لـ10سم
   const pad = 8 * s;
+  const flags = STICKER_FLAGS.filter(f => ben[f.key]);
 
   return (
     <div
       ref={innerRef}
       data-ld-sticker
-      className="ld-sticker bg-white border border-black flex flex-col overflow-hidden shrink-0"
-      style={{ width: `${widthCm}cm`, height: `${heightCm}cm` }}
+      className="ld-sticker border border-black flex flex-col overflow-hidden shrink-0"
+      style={{ width: `${widthCm}cm`, height: `${heightCm}cm`, background: bgColor || '#ffffff' }}
     >
       {/* الهيدر */}
       <div
@@ -131,10 +147,22 @@ function StickerCard({ ben, headerUrl, widthCm, heightCm, innerRef }: {
           {diet.en && <AutoFitText text={diet.en} maxPx={13 * s} bold underline dir="ltr" />}
         </div>
 
-        {/* Code / Villa — يسار، تحت صف النظام الغذائي بمسافة بسيطة */}
-        <div dir="ltr" className="shrink-0 text-left font-bold leading-tight whitespace-nowrap" style={{ fontSize: 12 * s, marginTop: 4 * s }}>
-          <div>Code No.:{ben.code}</div>
-          {ben.villa && <div>Villa No.:{ben.villa}</div>}
+        {/* صف: Code/Villa (يسار) + رموز الخيارات المؤشّرة (يمين).
+            الصفحة RTL فأول عنصر يروح يمين — نضع الرموز أولاً (يمين) وCode/Villa أخيراً (يسار). */}
+        <div className="flex items-start justify-between shrink-0" style={{ gap: 6 * s, marginTop: 4 * s }}>
+          {flags.length > 0 ? (
+            <div dir="rtl" className="text-right leading-tight" style={{ fontSize: 10 * s }}>
+              {flags.map(f => (
+                <div key={f.key} className="font-semibold whitespace-nowrap">
+                  <span style={{ fontSize: 13 * s }}>{f.symbol}</span> {f.label}
+                </div>
+              ))}
+            </div>
+          ) : <span />}
+          <div dir="ltr" className="text-left font-bold leading-tight whitespace-nowrap shrink-0" style={{ fontSize: 12 * s }}>
+            <div>Code No.:{ben.code}</div>
+            {ben.villa && <div>Villa No.:{ben.villa}</div>}
+          </div>
         </div>
 
         {/* صندوق الاسم — حدّ مزدوج (يتمدد عمودياً ويتوسّط) */}
@@ -188,23 +216,54 @@ export default function LunchDinnerStickersView() {
   const [headerUrl, setHeaderUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [sizeWidth, setSizeWidth] = useState('10');
   const [sizeHeight, setSizeHeight] = useState('10');
+  const [dietColors, setDietColors] = useState<Record<string, string>>({});
+  const [hideColored, setHideColored] = useState(false);
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
 
-  // مراجع لعُقد الستيكرات المعروضة — نلتقطها كصور مطابقة تماماً للصفحة
+  // مراجع لعُقد الستيكرات المعروضة — نلتقطها كصور مطابقة تماماً للـPDF
   const nodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const setNode = useCallback((id: string, el: HTMLDivElement | null) => {
     if (el) nodesRef.current.set(id, el);
     else nodesRef.current.delete(id);
   }, []);
 
+  // كل الأنظمة الغذائية المسجّلة (قيم diet_type المميّزة)
+  const dietTypes = useMemo(() => {
+    const set = new Set<string>();
+    beneficiaries.forEach(b => { const d = b.diet_type?.trim(); if (d) set.add(d); });
+    return [...set].sort((a, b) => a.localeCompare(b, 'ar'));
+  }, [beneficiaries]);
+
+  const setDietColor = (diet: string, color: string | null) => {
+    setDietColors(prev => {
+      const next = { ...prev };
+      if (color) next[diet] = color; else delete next[diet];
+      try { localStorage.setItem(DIET_COLORS_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  // هل الستيكر ملوّن (نظامه الغذائي له لون)؟
+  const isColored = (b: Beneficiary) => !!(b.diet_type?.trim() && dietColors[b.diet_type.trim()]);
+  // القائمة المرئية للعرض والتصدير — عند تفعيل الإخفاء نستبعد الملوّنة
+  const visibleBeneficiaries = useMemo(
+    () => (hideColored ? beneficiaries.filter(b => !isColored(b)) : beneficiaries),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [beneficiaries, hideColored, dietColors],
+  );
+
   useEffect(() => {
     try {
       const saved = localStorage.getItem(HEADER_KEY);
       if (saved) setHeaderUrl(saved);
+      const colors = localStorage.getItem(DIET_COLORS_KEY);
+      if (colors) setDietColors(JSON.parse(colors) as Record<string, string>);
     } catch {}
   }, []);
 
@@ -212,23 +271,20 @@ export default function LunchDinnerStickersView() {
     setLoading(true);
     setError('');
     const cols = 'id, name, english_name, code, category, villa, diet_type, notes, created_at';
-    let data: unknown[] | null = null;
-    let errMsg: string | null = null;
+    const flagCols = 'no_fish, no_pasta_sandwich, low_carb';
 
-    const withEntity = await supabase
-      .from('beneficiaries')
-      .select(`${cols}, entity_type`)
-      .eq('entity_type', 'beneficiary')
-      .order('name');
+    const attempt = (select: string, useEntity: boolean) => {
+      const q = supabase.from('beneficiaries').select(select);
+      return (useEntity ? q.eq('entity_type', 'beneficiary') : q).order('name');
+    };
 
-    if (withEntity.error && /entity_type|column/i.test(withEntity.error.message)) {
-      const fallback = await supabase.from('beneficiaries').select(cols).order('name');
-      data = fallback.data;
-      errMsg = fallback.error?.message ?? null;
-    } else {
-      data = withEntity.data;
-      errMsg = withEntity.error?.message ?? null;
-    }
+    // تدرّج: مع الأعمدة الجديدة → بدونها (الـmigration ما اشتغل) → بدون entity_type
+    let res = await attempt(`${cols}, ${flagCols}, entity_type`, true);
+    if (res.error) res = await attempt(`${cols}, entity_type`, true);
+    if (res.error) res = await attempt(cols, false);
+
+    const data = res.data;
+    const errMsg = res.error?.message ?? null;
 
     if (errMsg) {
       setError(errMsg);
@@ -264,20 +320,38 @@ export default function LunchDinnerStickersView() {
   };
 
   const handleExport = async () => {
-    if (!beneficiaries.length) return;
+    if (!visibleBeneficiaries.length) return;
     setExporting(true);
     try {
-      // نلتقط عُقد الستيكرات المعروضة بالترتيب — التصدير يطابق الصفحة بالضبط
-      const nodes = beneficiaries
-        .map(b => nodesRef.current.get(b.id))
-        .filter((el): el is HTMLDivElement => !!el);
-      if (!nodes.length) { alert('لا توجد ستيكرات للتصدير'); return; }
       const { exportLunchDinnerStickers } = await import('./ld-word-export');
-      await exportLunchDinnerStickers(nodes, w, h);
+      await exportLunchDinnerStickers(visibleBeneficiaries, headerUrl, w, h, dietColors);
     } catch (e) {
       alert(`تعذّر التصدير: ${e instanceof Error ? e.message : 'خطأ غير معروف'}`);
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleExportPdf = async () => {
+    if (!visibleBeneficiaries.length) return;
+    setExportingPdf(true);
+    setProgress({ done: 0, total: visibleBeneficiaries.length });
+    try {
+      // نلتقط عُقد الستيكرات المرئية بالترتيب — الـPDF طبق الأصل من الصفحة
+      const nodes = visibleBeneficiaries
+        .map(b => nodesRef.current.get(b.id))
+        .filter((el): el is HTMLDivElement => !!el);
+      if (!nodes.length) { alert('لا توجد ستيكرات للتصدير — انتظر تحميل الصفحة كاملة ثم أعد المحاولة'); return; }
+      const { exportLunchDinnerStickersPdf } = await import('./ld-pdf-export');
+      const res = await exportLunchDinnerStickersPdf(nodes, w, h, (done, total) => setProgress({ done, total }));
+      if (res.failed > 0) {
+        alert(`تم التصدير: ${res.captured} ستيكر. تعذّر التقاط ${res.failed}.`);
+      }
+    } catch (e) {
+      alert(`تعذّر تصدير PDF: ${e instanceof Error ? e.message : 'خطأ غير معروف'}`);
+    } finally {
+      setExportingPdf(false);
+      setProgress(null);
     }
   };
 
@@ -289,10 +363,26 @@ export default function LunchDinnerStickersView() {
           <div>
             <h1 className="text-2xl font-bold text-slate-800">ستيكرات الغداء والعشاء</h1>
             <p className="text-slate-500 text-sm mt-0.5">
-              ستيكر ثابت لكل مستفيد — {beneficiaries.length} مستفيد
+              ستيكر ثابت لكل مستفيد — {visibleBeneficiaries.length}
+              {hideColored && beneficiaries.length !== visibleBeneficiaries.length
+                ? ` ظاهر (مخفي ${beneficiaries.length - visibleBeneficiaries.length} ملوّن)`
+                : ' مستفيد'}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setHideColored(v => !v)}
+              className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                hideColored ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {hideColored
+                  ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.542 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />}
+              </svg>
+              {hideColored ? 'إظهار الكل' : 'إخفاء الستيكرات الملوّنة'}
+            </button>
             <label className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 text-sm font-semibold">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
@@ -336,9 +426,15 @@ export default function LunchDinnerStickersView() {
                 </button>
               ))}
             </div>
-            <button onClick={handleExport} disabled={exporting || !beneficiaries.length}
+            <button onClick={handleExportPdf} disabled={exportingPdf || exporting || !visibleBeneficiaries.length}
               className="btn-primary text-sm disabled:opacity-50">
-              {exporting ? 'جاري التصدير...' : `تصدير Word (${beneficiaries.length} ستيكر)`}
+              {exportingPdf
+                ? (progress ? `جاري التصدير ${progress.done}/${progress.total}...` : 'جاري التصدير...')
+                : `تصدير PDF (${visibleBeneficiaries.length} ستيكر)`}
+            </button>
+            <button onClick={handleExport} disabled={exporting || exportingPdf || !visibleBeneficiaries.length}
+              className="btn-secondary text-sm disabled:opacity-50">
+              {exporting ? 'جاري التصدير...' : 'تصدير Word'}
             </button>
           </div>
           <p className="text-[11px] text-slate-400 mt-3">
@@ -358,18 +454,61 @@ export default function LunchDinnerStickersView() {
         <div className="py-16 text-center text-slate-400 text-sm">جاري التحميل...</div>
       ) : beneficiaries.length === 0 ? (
         <div className="py-16 text-center text-slate-400 text-sm">لا يوجد مستفيدون.</div>
+      ) : visibleBeneficiaries.length === 0 ? (
+        <div className="py-16 text-center text-slate-400 text-sm">كل الستيكرات ملوّنة ومخفيّة. اضغط «إظهار الكل».</div>
       ) : (
         <div className="flex flex-wrap gap-4 justify-center md:justify-start">
-          {beneficiaries.map(ben => (
-            <StickerCard
-              key={ben.id}
-              ben={ben}
-              headerUrl={headerUrl}
-              widthCm={w}
-              heightCm={h}
-              innerRef={el => setNode(ben.id, el)}
-            />
+          {visibleBeneficiaries.map(ben => (
+            <StickerCard key={ben.id} ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
+              bgColor={ben.diet_type?.trim() ? dietColors[ben.diet_type.trim()] : undefined}
+              innerRef={el => setNode(ben.id, el)} />
           ))}
+        </div>
+      )}
+
+      {/* ألوان الأنظمة الغذائية — أسفل الصفحة، تلوين الستيكرات حسب النظام */}
+      {dietTypes.length > 0 && (
+        <div className="no-print card p-4 mt-8">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-slate-800 text-sm">ألوان الأنظمة الغذائية</h3>
+            <p className="text-xs text-slate-500">اختر لوناً لكل نظام — تتلوّن ستيكراته تلقائياً</p>
+          </div>
+          <div className="space-y-2.5">
+            {dietTypes.map(diet => {
+              const selected = dietColors[diet];
+              return (
+                <div key={diet} className="flex items-center gap-3 flex-wrap">
+                  <span className="font-medium text-sm text-slate-700 w-44 truncate" title={diet}>{diet}</span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {COLOR_PALETTE.map(c => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setDietColor(diet, c)}
+                        title="اختر هذا اللون"
+                        className={`w-7 h-7 rounded-lg border transition-transform hover:scale-110 ${
+                          selected === c ? 'ring-2 ring-offset-1 ring-slate-700 border-slate-700' : 'border-slate-300'
+                        }`}
+                        style={{ background: c }}
+                      />
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setDietColor(diet, null)}
+                      title="بدون لون"
+                      className={`w-7 h-7 rounded-lg border flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-50 ${
+                        !selected ? 'ring-2 ring-offset-1 ring-slate-700 border-slate-700' : 'border-slate-300'
+                      }`}
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
