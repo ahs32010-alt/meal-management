@@ -165,8 +165,8 @@ function StickerCard({ ben, headerUrl, widthCm, heightCm, bgColor, innerRef }: {
           </div>
         </div>
 
-        {/* صندوق الاسم — حدّ مزدوج (يتمدد عمودياً ويتوسّط) */}
-        <div className="flex-1 min-h-0 flex items-center">
+        {/* صندوق الاسم — حدّ مزدوج. يأخذ المساحة المتبقية ويتقلّص لصالح الملاحظات الطويلة */}
+        <div className="flex-1 min-h-0 overflow-hidden flex items-center">
           <div className="w-full border-2 border-black" style={{ padding: 3 * s }}>
             <div className="border border-black text-center" style={{ paddingInline: 8 * s, paddingBlock: 8 * s }}>
               <AutoFitText text={ben.name} maxPx={22 * s} bold dir="rtl" />
@@ -193,7 +193,7 @@ function StickerCard({ ben, headerUrl, widthCm, heightCm, bgColor, innerRef }: {
           <span className="underline font-bold" style={{ fontSize: 13 * s }}>Notes - الملاحظات</span>
         </div>
         {ben.notes && (
-          <div className="text-center text-slate-700 line-clamp-2 shrink-0" style={{ fontSize: 11 * s }}>
+          <div className="text-center text-slate-700 shrink-0 whitespace-pre-wrap break-words" style={{ fontSize: 11 * s }}>
             {ben.notes}
           </div>
         )}
