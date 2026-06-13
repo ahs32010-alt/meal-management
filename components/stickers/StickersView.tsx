@@ -705,7 +705,7 @@ export default function StickersView() {
       <div className="flex items-center justify-between no-print">
         <div className="flex items-center gap-2 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold text-slate-800">الستيكرات</h1>
+            <h1 className="text-2xl font-bold text-slate-800">ستيكرات الفطور</h1>
             <p className="text-slate-500 text-sm mt-0.5">طباعة ستيكر لكل عنده استبعاد</p>
           </div>
           {report && (() => {

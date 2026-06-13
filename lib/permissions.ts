@@ -15,6 +15,7 @@ export type PageKey =
   | 'delivery_orders'
   | 'reports'
   | 'stickers'
+  | 'lunch_dinner_stickers'
   | 'settings';
 
 export type PermissionAction = 'view' | 'add' | 'edit' | 'delete';
@@ -51,7 +52,8 @@ export const PAGES: { key: PageKey; label: string; href: string }[] = [
   { key: 'orders',          label: 'أوامر التشغيل', href: '/orders' },
   { key: 'delivery_orders', label: 'أوامر التسليم', href: '/delivery-orders' },
   { key: 'reports',         label: 'التقارير',     href: '/reports' },
-  { key: 'stickers',      label: 'الستيكرات',    href: '/stickers' },
+  { key: 'stickers',      label: 'ستيكرات الفطور', href: '/stickers' },
+  { key: 'lunch_dinner_stickers', label: 'ستيكرات الغداء والعشاء', href: '/lunch-dinner-stickers' },
   { key: 'settings',      label: 'الإعدادات',    href: '/settings' },
 ];
 
@@ -76,6 +78,7 @@ export const PAGE_AVAILABLE_ACTIONS: Record<PageKey, PermissionAction[]> = {
   delivery_orders: ['view', 'add', 'edit', 'delete'],
   reports:         ['view'],
   stickers:      ['view'],
+  lunch_dinner_stickers: ['view'],
   settings:      ['view', 'edit'],
 };
 

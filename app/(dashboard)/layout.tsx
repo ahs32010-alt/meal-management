@@ -17,7 +17,8 @@ const PAGE_TITLES: Record<string, string> = {
   '/orders':          'أوامر التشغيل',
   '/delivery-orders': 'أوامر التسليم',
   '/reports':         'التقارير',
-  '/stickers':      'الستيكرات',
+  '/stickers':      'ستيكرات الفطور',
+  '/lunch-dinner-stickers': 'ستيكرات الغداء والعشاء',
   '/approvals':     'الموافقات',
   '/settings':      'الإعدادات',
 };

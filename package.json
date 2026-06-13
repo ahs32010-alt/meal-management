@@ -16,6 +16,7 @@
     "@supabase/ssr": "^0.5.0",
     "@supabase/supabase-js": "^2.104.0",
     "docx": "^9.6.1",
+    "html-to-image": "^1.11.13",
     "next": "^14.2.33",
     "react": "^18",
     "react-dom": "^18",
