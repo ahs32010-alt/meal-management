@@ -114,12 +114,13 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       // Also tries to filter by entity_type — if that column doesn't exist yet
       // (companions migration not run), falls back to unfiltered query but
       // refuses to render companions data (we only want beneficiaries view safely).
-      const fetchBens = (withFixedCategory: boolean, withEntityType: boolean) => {
+      const fetchBens = (withFixedCategory: boolean, withEntityType: boolean, withFlags: boolean) => {
+        const flagCols = withFlags ? ', no_fish, no_pasta_sandwich, low_carb' : '';
         const q = supabase
           .from('beneficiaries')
           .select(`
             id, name, english_name, code, category, villa, diet_type,
-            fixed_items, notes, created_at${withEntityType ? ', entity_type' : ''},
+            fixed_items, notes, created_at${withEntityType ? ', entity_type' : ''}${flagCols},
             exclusions(
               id, beneficiary_id, meal_id, alternative_meal_id,
               meals:meals!exclusions_meal_id_fkey(id, name, type, is_snack),
@@ -134,7 +135,13 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         return withEntityType ? q.eq('entity_type', entityType) : q;
       };
 
-      let bensResult = await fetchBens(true, true);
+      // أعمدة خيارات الستيكر (no_fish...) غير موجودة → نعيد بدونها
+      let withFlags = true;
+      let bensResult = await fetchBens(true, true, withFlags);
+      if (bensResult.error && /no_fish|no_pasta_sandwich|low_carb/i.test(bensResult.error.message)) {
+        withFlags = false;
+        bensResult = await fetchBens(true, true, false);
+      }
       // entity_type column missing → migration not yet run.
       if (bensResult.error && /entity_type|column/i.test(bensResult.error.message)) {
         // Companions view requires the migration. Show an empty state with hint.
@@ -148,12 +155,12 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
           setLoading(false);
           return;
         }
-        bensResult = await fetchBens(true, false);
+        bensResult = await fetchBens(true, false, withFlags);
       }
       if (bensResult.error && /category|column/i.test(bensResult.error.message)) {
-        bensResult = await fetchBens(false, true);
+        bensResult = await fetchBens(false, true, withFlags);
         if (bensResult.error && /entity_type|column/i.test(bensResult.error.message)) {
-          bensResult = await fetchBens(false, false);
+          bensResult = await fetchBens(false, false, withFlags);
         }
       }
 
