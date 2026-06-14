@@ -223,6 +223,7 @@ export default function LunchDinnerStickersView() {
   const [sizeHeight, setSizeHeight] = useState('10');
   const [dietColors, setDietColors] = useState<Record<string, string>>({});
   const [hideColored, setHideColored] = useState(false);
+  const [openColorFor, setOpenColorFor] = useState<string | null>(null);
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
@@ -491,59 +492,75 @@ export default function LunchDinnerStickersView() {
 
       {/* ألوان الأنظمة الغذائية — أسفل الصفحة، تلوين الستيكرات حسب النظام */}
       {dietTypes.length > 0 && (
-        <div className="no-print card p-5 mt-8">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-9 h-9 rounded-xl bg-indigo-100 flex items-center justify-center text-indigo-600">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
-              </svg>
-            </div>
-            <div>
-              <h3 className="font-bold text-slate-800 text-sm">ألوان الأنظمة الغذائية</h3>
-              <p className="text-xs text-slate-500">اختر لوناً لكل نظام — تتلوّن ستيكراته وتُحفظ تلقائياً في قاعدة البيانات</p>
-            </div>
+        <div className="no-print card p-4 mt-6 max-w-xl">
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <h3 className="font-bold text-slate-800 text-sm">ألوان الأنظمة الغذائية</h3>
+            <span className="text-[11px] text-slate-400">تُحفظ تلقائياً</span>
           </div>
-          <div className="space-y-2">
+          <div className="divide-y divide-slate-100">
             {dietTypes.map(diet => {
               const selected = dietColors[diet];
+              const open = openColorFor === diet;
               return (
-                <div
-                  key={diet}
-                  className="flex items-center gap-3 flex-wrap rounded-xl border border-slate-150 px-3 py-2.5 transition-colors"
-                  style={{ background: selected ? `${selected}22` : '#f8fafc', borderColor: selected ? `${selected}` : '#eef2f7' }}
-                >
-                  <span className="flex items-center gap-2 font-semibold text-sm text-slate-800 flex-1 min-w-[9rem]">
-                    <span className="w-3.5 h-3.5 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: selected || '#e5e7eb' }} />
+                <div key={diet} className="flex items-center justify-between gap-3 py-1.5">
+                  <span className="flex items-center gap-2.5 font-medium text-sm text-slate-700 min-w-0">
+                    <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: selected || '#e5e7eb' }} />
                     <span className="truncate" title={diet}>{diet}</span>
                   </span>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {COLOR_PALETTE.map(c => (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => setDietColor(diet, c)}
-                        title="اختر هذا اللون"
-                        className="w-8 h-8 rounded-lg flex items-center justify-center transition-transform hover:scale-110 shadow-sm"
-                        style={{ background: c, outline: selected === c ? '2.5px solid #0f172a' : '1px solid rgba(0,0,0,0.08)', outlineOffset: selected === c ? '2px' : '0' }}
-                      >
-                        {selected === c && (
-                          <svg className="w-4 h-4 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                          </svg>
-                        )}
-                      </button>
-                    ))}
+
+                  <div className="relative shrink-0">
                     <button
                       type="button"
-                      onClick={() => setDietColor(diet, null)}
-                      title="بدون لون"
-                      className="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                      style={{ outline: !selected ? '2.5px solid #0f172a' : '1px solid #e2e8f0', outlineOffset: !selected ? '2px' : '0' }}
+                      onClick={() => setOpenColorFor(open ? null : diet)}
+                      className="flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-xs font-medium text-slate-600 transition-colors"
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      <span
+                        className="w-4 h-4 rounded shrink-0"
+                        style={selected
+                          ? { background: selected, boxShadow: '0 0 0 1px rgba(0,0,0,0.08)' }
+                          : { border: '1.5px dashed #cbd5e1' }}
+                      />
+                      <span>{selected ? 'اللون' : 'بدون لون'}</span>
+                      <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                       </svg>
                     </button>
+
+                    {open && (
+                      <>
+                        <div className="fixed inset-0 z-10" onClick={() => setOpenColorFor(null)} />
+                        <div className="absolute z-20 left-0 mt-2 p-3 bg-white rounded-2xl shadow-xl border border-slate-100">
+                          <div className="grid grid-cols-5 gap-2">
+                            {COLOR_PALETTE.map(c => (
+                              <button
+                                key={c}
+                                type="button"
+                                onClick={() => { setDietColor(diet, c); setOpenColorFor(null); }}
+                                title="اختر هذا اللون"
+                                className="w-7 h-7 rounded-lg flex items-center justify-center transition-transform hover:scale-110"
+                                style={{ background: c, outline: selected === c ? '2.5px solid #0f172a' : '1px solid rgba(0,0,0,0.08)', outlineOffset: selected === c ? '2px' : '0' }}
+                              >
+                                {selected === c && (
+                                  <svg className="w-3.5 h-3.5 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => { setDietColor(diet, null); setOpenColorFor(null); }}
+                            className="mt-2.5 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                            بدون لون
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               );
