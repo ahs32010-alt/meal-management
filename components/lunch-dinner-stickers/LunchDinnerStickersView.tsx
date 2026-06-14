@@ -9,19 +9,45 @@ import { STICKER_FLAGS } from '@/lib/sticker-flags';
 const HEADER_KEY = 'ldStickerHeaderUrl';
 const DIET_COLORS_KEY = 'ldDietColors';
 
-// لوحة ألوان واضحة ومتمايزة (النص الأسود يبقى مقروءاً فوقها)
-const COLOR_PALETTE = [
-  '#f87171', // أحمر
-  '#fb923c', // برتقالي
-  '#facc15', // أصفر
-  '#4ade80', // أخضر
-  '#2dd4bf', // فيروزي
-  '#38bdf8', // أزرق
-  '#818cf8', // بنفسجي
-  '#e879f9', // أرجواني
-  '#f472b6', // وردي
-  '#a8a29e', // رمادي
-];
+// ── لوحة ألوان بنمط Microsoft Word ──────────────────────────────────────────
+function hexToRgb(h: string): [number, number, number] {
+  const x = h.replace('#', '');
+  return [parseInt(x.slice(0, 2), 16), parseInt(x.slice(2, 4), 16), parseInt(x.slice(4, 6), 16)];
+}
+function toHex2(n: number) { return Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0'); }
+function mixColor(hex: string, target: string, amt: number) {
+  const a = hexToRgb(hex), b = hexToRgb(target);
+  return '#' + [0, 1, 2].map(i => toHex2(a[i] + (b[i] - a[i]) * amt)).join('');
+}
+// تدرّج عمودي لكل لون: من الفاتح (أعلى) إلى الغامق (أسفل)
+function colorRamp(base: string): string[] {
+  return [
+    mixColor(base, '#ffffff', 0.8),
+    mixColor(base, '#ffffff', 0.6),
+    mixColor(base, '#ffffff', 0.35),
+    base,
+    mixColor(base, '#000000', 0.3),
+    mixColor(base, '#000000', 0.55),
+  ];
+}
+// صف الألوان القياسية (زي شريط Word)
+const STANDARD_COLORS = ['#C00000', '#FF0000', '#FFC000', '#FFFF00', '#92D050', '#00B050', '#00B0F0', '#0070C0', '#002060', '#7030A0'];
+// أعمدة التدرّجات — كل عمود لون أساسي بدرجاته
+const RAMP_BASES = ['#808080', '#C0504D', '#F79646', '#FFC000', '#9BBB59', '#4BACC6', '#4F81BD', '#1F497D', '#8064A2', '#D63384'];
+const RAMP_COLUMNS = RAMP_BASES.map(colorRamp);
+
+function ColorSwatch({ color, selected, onPick }: { color: string; selected?: string; onPick: (c: string) => void }) {
+  const sel = !!selected && selected.toLowerCase() === color.toLowerCase();
+  return (
+    <button
+      type="button"
+      onClick={() => onPick(color)}
+      title={color}
+      className="rounded-[4px] transition-transform hover:scale-125"
+      style={{ width: 18, height: 18, background: color, outline: sel ? '2px solid #0f172a' : '1px solid rgba(0,0,0,0.12)', outlineOffset: sel ? '1px' : '0' }}
+    />
+  );
+}
 
 // ترجمة إنجليزية لأنواع الأنظمة الغذائية الشائعة — تُعرض كسطر ثانٍ تحت العربي.
 const DIET_TYPE_EN: Record<string, string> = {
@@ -521,29 +547,27 @@ export default function LunchDinnerStickersView() {
                         {open && (
                           <>
                             <div className="fixed inset-0 z-10" onClick={() => setOpenColorFor(null)} />
-                            <div className="absolute z-20 left-0 mt-2 p-3 bg-white rounded-2xl shadow-xl border border-slate-100">
-                              <div className="grid grid-cols-5 gap-2">
-                                {COLOR_PALETTE.map(c => (
-                                  <button
-                                    key={c}
-                                    type="button"
-                                    onClick={() => { setDietColor(diet, c); setOpenColorFor(null); }}
-                                    title="اختر هذا اللون"
-                                    className="w-7 h-7 rounded-lg flex items-center justify-center transition-transform hover:scale-110"
-                                    style={{ background: c, outline: selected === c ? '2.5px solid #0f172a' : '1px solid rgba(0,0,0,0.08)', outlineOffset: selected === c ? '2px' : '0' }}
-                                  >
-                                    {selected === c && (
-                                      <svg className="w-3.5 h-3.5 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                                      </svg>
-                                    )}
-                                  </button>
+                            <div className="absolute z-20 left-0 mt-2 p-3 bg-white rounded-2xl shadow-xl border border-slate-100" style={{ width: 'max-content' }}>
+                              <div className="text-[10px] font-semibold text-slate-400 mb-1">ألوان قياسية</div>
+                              <div className="flex gap-1 mb-3">
+                                {STANDARD_COLORS.map(c => (
+                                  <ColorSwatch key={c} color={c} selected={selected} onPick={(col) => { setDietColor(diet, col); setOpenColorFor(null); }} />
+                                ))}
+                              </div>
+                              <div className="text-[10px] font-semibold text-slate-400 mb-1">تدرّجات</div>
+                              <div className="flex gap-1">
+                                {RAMP_COLUMNS.map((col, ci) => (
+                                  <div key={ci} className="flex flex-col gap-1">
+                                    {col.map(c => (
+                                      <ColorSwatch key={c} color={c} selected={selected} onPick={(picked) => { setDietColor(diet, picked); setOpenColorFor(null); }} />
+                                    ))}
+                                  </div>
                                 ))}
                               </div>
                               <button
                                 type="button"
                                 onClick={() => { setDietColor(diet, null); setOpenColorFor(null); }}
-                                className="mt-2.5 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                                className="mt-3 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
                               >
                                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

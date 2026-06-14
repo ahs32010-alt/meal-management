@@ -395,7 +395,7 @@ export async function exportStickersPerPageDocx(
   dayOfWeek?: number | null,
 ) {
   const minDim = Math.min(widthCm, heightCm);
-  // Conservative scale: small stickers stay readable, large ones don't get jumbo fonts
+  // مقياس محافظ يضمن أن كل ستيكر في صفحة واحدة فقط (بلا فيض/تداخل)
   const scale = Math.max(0.7, Math.min(1.5, minDim / 11));
   const orderInfo = orderDate ? { date: orderDate, mealTypeAr, weekNumber, dayOfWeek } : undefined;
 
