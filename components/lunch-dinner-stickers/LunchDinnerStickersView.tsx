@@ -224,6 +224,7 @@ export default function LunchDinnerStickersView() {
   const [dietColors, setDietColors] = useState<Record<string, string>>({});
   const [hideColored, setHideColored] = useState(false);
   const [openColorFor, setOpenColorFor] = useState<string | null>(null);
+  const [colorsOpen, setColorsOpen] = useState(false);
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
@@ -466,6 +467,100 @@ export default function LunchDinnerStickersView() {
             المعاينة بالأسفل بنفس المقاس.
           </p>
         </div>
+
+        {/* ألوان الأنظمة الغذائية — قسم قابل للطيّ */}
+        {dietTypes.length > 0 && (
+          <div className="card overflow-hidden max-w-xl">
+            <button
+              type="button"
+              onClick={() => setColorsOpen(v => !v)}
+              className="w-full flex items-center justify-between gap-2 px-4 py-3 hover:bg-slate-50 transition-colors"
+            >
+              <span className="flex items-center gap-2 font-bold text-slate-800 text-sm">
+                <svg className="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343" />
+                </svg>
+                ألوان الأنظمة الغذائية
+              </span>
+              <span className="flex items-center gap-2">
+                <span className="text-[11px] text-slate-400">{colorsOpen ? 'تُحفظ تلقائياً' : `${dietTypes.length} نظام`}</span>
+                <svg className={`w-4 h-4 text-slate-400 transition-transform ${colorsOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </span>
+            </button>
+
+            {colorsOpen && (
+              <div className="px-4 pb-3 border-t border-slate-100 divide-y divide-slate-100">
+                {dietTypes.map(diet => {
+                  const selected = dietColors[diet];
+                  const open = openColorFor === diet;
+                  return (
+                    <div key={diet} className="flex items-center justify-between gap-3 py-1.5">
+                      <span className="flex items-center gap-2.5 font-medium text-sm text-slate-700 min-w-0">
+                        <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: selected || '#e5e7eb' }} />
+                        <span className="truncate" title={diet}>{diet}</span>
+                      </span>
+                      <div className="relative shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setOpenColorFor(open ? null : diet)}
+                          className="flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-xs font-medium text-slate-600 transition-colors"
+                        >
+                          <span
+                            className="w-4 h-4 rounded shrink-0"
+                            style={selected
+                              ? { background: selected, boxShadow: '0 0 0 1px rgba(0,0,0,0.08)' }
+                              : { border: '1.5px dashed #cbd5e1' }}
+                          />
+                          <span>{selected ? 'اللون' : 'بدون لون'}</span>
+                          <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                        {open && (
+                          <>
+                            <div className="fixed inset-0 z-10" onClick={() => setOpenColorFor(null)} />
+                            <div className="absolute z-20 left-0 mt-2 p-3 bg-white rounded-2xl shadow-xl border border-slate-100">
+                              <div className="grid grid-cols-5 gap-2">
+                                {COLOR_PALETTE.map(c => (
+                                  <button
+                                    key={c}
+                                    type="button"
+                                    onClick={() => { setDietColor(diet, c); setOpenColorFor(null); }}
+                                    title="اختر هذا اللون"
+                                    className="w-7 h-7 rounded-lg flex items-center justify-center transition-transform hover:scale-110"
+                                    style={{ background: c, outline: selected === c ? '2.5px solid #0f172a' : '1px solid rgba(0,0,0,0.08)', outlineOffset: selected === c ? '2px' : '0' }}
+                                  >
+                                    {selected === c && (
+                                      <svg className="w-3.5 h-3.5 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                      </svg>
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => { setDietColor(diet, null); setOpenColorFor(null); }}
+                                className="mt-2.5 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                                بدون لون
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {error && (
@@ -490,84 +585,6 @@ export default function LunchDinnerStickersView() {
         </div>
       )}
 
-      {/* ألوان الأنظمة الغذائية — أسفل الصفحة، تلوين الستيكرات حسب النظام */}
-      {dietTypes.length > 0 && (
-        <div className="no-print card p-4 mt-6 max-w-xl">
-          <div className="flex items-center justify-between gap-2 mb-1.5">
-            <h3 className="font-bold text-slate-800 text-sm">ألوان الأنظمة الغذائية</h3>
-            <span className="text-[11px] text-slate-400">تُحفظ تلقائياً</span>
-          </div>
-          <div className="divide-y divide-slate-100">
-            {dietTypes.map(diet => {
-              const selected = dietColors[diet];
-              const open = openColorFor === diet;
-              return (
-                <div key={diet} className="flex items-center justify-between gap-3 py-1.5">
-                  <span className="flex items-center gap-2.5 font-medium text-sm text-slate-700 min-w-0">
-                    <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: selected || '#e5e7eb' }} />
-                    <span className="truncate" title={diet}>{diet}</span>
-                  </span>
-
-                  <div className="relative shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setOpenColorFor(open ? null : diet)}
-                      className="flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-xs font-medium text-slate-600 transition-colors"
-                    >
-                      <span
-                        className="w-4 h-4 rounded shrink-0"
-                        style={selected
-                          ? { background: selected, boxShadow: '0 0 0 1px rgba(0,0,0,0.08)' }
-                          : { border: '1.5px dashed #cbd5e1' }}
-                      />
-                      <span>{selected ? 'اللون' : 'بدون لون'}</span>
-                      <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </button>
-
-                    {open && (
-                      <>
-                        <div className="fixed inset-0 z-10" onClick={() => setOpenColorFor(null)} />
-                        <div className="absolute z-20 left-0 mt-2 p-3 bg-white rounded-2xl shadow-xl border border-slate-100">
-                          <div className="grid grid-cols-5 gap-2">
-                            {COLOR_PALETTE.map(c => (
-                              <button
-                                key={c}
-                                type="button"
-                                onClick={() => { setDietColor(diet, c); setOpenColorFor(null); }}
-                                title="اختر هذا اللون"
-                                className="w-7 h-7 rounded-lg flex items-center justify-center transition-transform hover:scale-110"
-                                style={{ background: c, outline: selected === c ? '2.5px solid #0f172a' : '1px solid rgba(0,0,0,0.08)', outlineOffset: selected === c ? '2px' : '0' }}
-                              >
-                                {selected === c && (
-                                  <svg className="w-3.5 h-3.5 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                                  </svg>
-                                )}
-                              </button>
-                            ))}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => { setDietColor(diet, null); setOpenColorFor(null); }}
-                            className="mt-2.5 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                            بدون لون
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
