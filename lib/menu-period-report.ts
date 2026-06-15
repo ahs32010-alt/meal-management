@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
 import { MEAL_SECTIONS, slotKey } from '@/lib/menu-utils';
+import { fetchInactiveBeneficiaryIds } from '@/lib/inactive-beneficiaries';
 
 type MenuItemRow = {
   week_number: number;
@@ -121,7 +122,9 @@ export async function buildMenuPeriodReport(
   }
 
   const rawItems = (itemsRes.data as unknown as MenuItemRow[]) || [];
-  const beneficiaries = (bensRes.data as unknown as BenRow[]) || [];
+  // استبعاد المعطّلين مؤقتاً
+  const inactive = await fetchInactiveBeneficiaryIds(supabase);
+  const beneficiaries = ((bensRes.data as unknown as BenRow[]) || []).filter(b => !inactive.has(b.id));
 
   if (beneficiaries.length === 0) return null;
 

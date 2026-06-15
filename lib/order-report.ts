@@ -98,9 +98,11 @@ export async function buildOrderReport(
     exclusions: { id: string; meal_id: string; alternative_meal_id: string | null }[];
     fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; category?: string; suppress_if_meal_ids?: string[] }[];
   };
-  const beneficiaries = bensRes.data as unknown as BenRow[] | null;
+  // نستبعد المعطّلين مؤقتاً (is_active = false) — لا يدخلون التقارير/الستيكرات/العدّ
+  const beneficiaries = ((bensRes.data as unknown as BenRow[] | null) ?? [])
+    .filter(b => (b as { is_active?: boolean }).is_active !== false);
 
-  if (!beneficiaries || beneficiaries.length === 0) return null;
+  if (beneficiaries.length === 0) return null;
 
   const altIds = new Set<string>();
   beneficiaries.forEach((ben: { exclusions: { alternative_meal_id: string | null }[] }) => {

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
+import { fetchInactiveBeneficiaryIds } from '@/lib/inactive-beneficiaries';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
@@ -292,19 +293,21 @@ export default function MenuView() {
 
     // جلب إجمالي المستفيدين والمحظورات لعرض الأعداد الفعلية في الخلايا
     try {
-      const [bensRes, exclRes] = await Promise.all([
+      const [bensRes, exclRes, inactiveSet] = await Promise.all([
         supabase.from('beneficiaries').select('id, entity_type'),
-        supabase.from('exclusions').select('meal_id, beneficiaries!inner(entity_type)'),
+        supabase.from('exclusions').select('beneficiary_id, meal_id, beneficiaries!inner(entity_type)'),
+        fetchInactiveBeneficiaryIds(supabase),
       ]);
       if (!bensRes.error && bensRes.data) {
         setBenTotal(
-          (bensRes.data as Array<{ entity_type?: string }>)
-            .filter(b => (b.entity_type ?? 'beneficiary') === entityType).length
+          (bensRes.data as Array<{ id: string; entity_type?: string }>)
+            .filter(b => (b.entity_type ?? 'beneficiary') === entityType && !inactiveSet.has(b.id)).length
         );
       }
       if (!exclRes.error && exclRes.data) {
         const counts: Record<string, number> = {};
-        for (const ex of exclRes.data as Array<{ meal_id: string; beneficiaries?: { entity_type?: string } | { entity_type?: string }[] }>) {
+        for (const ex of exclRes.data as Array<{ beneficiary_id?: string; meal_id: string; beneficiaries?: { entity_type?: string } | { entity_type?: string }[] }>) {
+          if (ex.beneficiary_id && inactiveSet.has(ex.beneficiary_id)) continue;
           const ben = Array.isArray(ex.beneficiaries) ? ex.beneficiaries[0] : ex.beneficiaries;
           if ((ben?.entity_type ?? 'beneficiary') !== entityType) continue;
           counts[ex.meal_id] = (counts[ex.meal_id] ?? 0) + 1;

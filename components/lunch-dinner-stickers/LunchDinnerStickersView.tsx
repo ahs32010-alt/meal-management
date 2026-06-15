@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useLayoutEffect, useRef, useMemo } fr
 import { supabase } from '@/lib/supabase-client';
 import type { Beneficiary } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
+import { fetchInactiveBeneficiaryIds } from '@/lib/inactive-beneficiaries';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
 const HEADER_KEY = 'ldStickerHeaderUrl';
@@ -341,7 +342,9 @@ export default function LunchDinnerStickersView() {
       setError(errMsg);
       setBeneficiaries([]);
     } else {
-      setBeneficiaries((data ?? []) as unknown as Beneficiary[]);
+      // استبعاد المعطّلين مؤقتاً — لا ستيكر لهم
+      const inactive = await fetchInactiveBeneficiaryIds(supabase);
+      setBeneficiaries(((data ?? []) as unknown as Beneficiary[]).filter(b => !inactive.has(b.id)));
     }
     setLoading(false);
   }, []);
@@ -523,9 +526,9 @@ export default function LunchDinnerStickersView() {
                   const open = openColorFor === diet;
                   return (
                     <div key={diet} className="flex items-center justify-between gap-3 py-1.5">
-                      <span className="flex items-center gap-2.5 font-medium text-sm text-slate-700 min-w-0">
-                        <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: selected || '#e5e7eb' }} />
-                        <span className="truncate" title={diet}>{diet}</span>
+                      <span className="flex items-start gap-2.5 font-medium text-sm text-slate-700 flex-1 min-w-0">
+                        <span className="w-3 h-3 mt-1 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: selected || '#e5e7eb' }} />
+                        <span className="break-words" title={diet}>{diet}</span>
                       </span>
                       <div className="relative shrink-0">
                         <button

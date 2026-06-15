@@ -115,7 +115,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       // (companions migration not run), falls back to unfiltered query but
       // refuses to render companions data (we only want beneficiaries view safely).
       const fetchBens = (withFixedCategory: boolean, withEntityType: boolean, withFlags: boolean) => {
-        const flagCols = withFlags ? ', no_fish, no_pasta_sandwich, low_carb' : '';
+        const flagCols = withFlags ? ', no_fish, no_pasta_sandwich, low_carb, is_active' : '';
         const q = supabase
           .from('beneficiaries')
           .select(`
@@ -138,7 +138,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       // أعمدة خيارات الستيكر (no_fish...) غير موجودة → نعيد بدونها
       let withFlags = true;
       let bensResult = await fetchBens(true, true, withFlags);
-      if (bensResult.error && /no_fish|no_pasta_sandwich|low_carb/i.test(bensResult.error.message)) {
+      if (bensResult.error && /no_fish|no_pasta_sandwich|low_carb|is_active/i.test(bensResult.error.message)) {
         withFlags = false;
         bensResult = await fetchBens(true, true, false);
       }
@@ -609,14 +609,16 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                   : myPending.hasUpdate(b.id)
                   ? { cls: 'pending-badge-update', label: '⏳ تعديل بانتظار الموافقة' }
                   : null;
+                const disabled = (b as { is_active?: boolean }).is_active === false;
                 return (
-                <tr key={b.id} className={`hover:bg-slate-50 transition-colors border-t border-slate-100 ${pendingCls}`}>
+                <tr key={b.id} className={`hover:bg-slate-50 transition-colors border-t border-slate-100 ${pendingCls} ${disabled ? 'opacity-60' : ''}`}>
                   <td className="table-cell text-slate-400 text-xs">
                     {(pagination.page - 1) * pagination.pageSize + idx + 1}
                   </td>
                   <td className="table-cell">
                     <div className="font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
                       {b.name}
+                      {disabled && <span className="text-[11px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">معطّل مؤقتاً</span>}
                       {pendingBadge && <span className={`pending-badge ${pendingBadge.cls}`}>{pendingBadge.label}</span>}
                     </div>
                     {b.english_name && <div className="text-xs text-slate-400">{b.english_name}</div>}

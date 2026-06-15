@@ -291,6 +291,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const [noFish, setNoFish] = useState(beneficiary?.no_fish ?? false);
   const [noPastaSandwich, setNoPastaSandwich] = useState(beneficiary?.no_pasta_sandwich ?? false);
   const [lowCarb, setLowCarb] = useState(beneficiary?.low_carb ?? false);
+  const [isActive, setIsActive] = useState(beneficiary?.is_active ?? true);
 
   const [exclusions, setExclusions] = useState<ExclusionEntry[]>(
     beneficiary?.exclusions?.map(e => ({
@@ -384,6 +385,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
       villa: villa.trim() || null, diet_type: dietType.trim() || null,
       notes: notes.trim() || null,
       no_fish: noFish, no_pasta_sandwich: noPastaSandwich, low_carb: lowCarb,
+      is_active: isActive,
     };
     // فقط نضيف entity_type عند الإنشاء — التعديل ما يغيّر النوع.
     if (!beneficiary) payload.entity_type = entityType;
@@ -568,6 +570,26 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           {/* ── Tab: Info ── */}
           {activeTab === 'info' && (
             <div className="p-6 space-y-4">
+              {/* التعطيل المؤقت */}
+              <div className={`border rounded-xl p-4 flex items-center justify-between gap-3 ${isActive ? 'border-slate-200 bg-slate-50/50' : 'border-amber-300 bg-amber-50'}`}>
+                <div className="min-w-0">
+                  <p className={`font-semibold text-sm ${isActive ? 'text-slate-700' : 'text-amber-700'}`}>
+                    {isActive ? `${entitySingular} مفعّل` : `معطّل مؤقتاً (مسافر)`}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-0.5">عند التعطيل لا يُحتسب في أوامر التشغيل ولا الستيكرات ولا التقارير</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={isActive}
+                  onClick={() => setIsActive(v => !v)}
+                  className={`relative shrink-0 w-12 h-6 rounded-full transition-colors ${isActive ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                  title={isActive ? 'اضغط للتعطيل المؤقت' : 'اضغط للتفعيل'}
+                >
+                  <span className="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all" style={{ insetInlineStart: isActive ? 2 : 26 }} />
+                </button>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div><label className="label">الاسم (عربي) *</label>
                   <input value={name} onChange={e => setName(e.target.value)} className="input-field" placeholder="الاسم الكامل" /></div>

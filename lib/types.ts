@@ -74,6 +74,8 @@ export interface Beneficiary {
   no_fish?: boolean;
   no_pasta_sandwich?: boolean;
   low_carb?: boolean;
+  // التعطيل المؤقت — عند false لا يُحتسب في الأوامر/الستيكرات/التقارير
+  is_active?: boolean;
   created_at: string;
   // اختياري للحفاظ على التوافق مع البيانات القديمة قبل تشغيل الـ migration
   entity_type?: EntityType;

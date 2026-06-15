@@ -5,6 +5,7 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { fetchInactiveBeneficiaryIds } from '@/lib/inactive-beneficiaries';
 import type { DailyOrder, Meal, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, DAY_LABELS } from '@/lib/types';
 import { formatDate, formatDateTime } from '@/lib/date-utils';
@@ -92,8 +93,8 @@ export default function OrderList() {
       // نعتبر الكل مستفيدين.
       const bensSelect = entityTypeOk ? 'id, entity_type' : 'id';
       const exclSelect = entityTypeOk
-        ? 'meal_id, alternative_meal_id, beneficiaries!inner(entity_type)'
-        : 'meal_id, alternative_meal_id';
+        ? 'beneficiary_id, meal_id, alternative_meal_id, beneficiaries!inner(entity_type)'
+        : 'beneficiary_id, meal_id, alternative_meal_id';
 
       // الأصناف نجلبها كاملة مع عمود entity_type/category عشان OrderModal يفلتر
       // حسب النوع ويعرف الفئة. لو أي عمود ما موجود نرجع للسلوك القديم.
@@ -111,10 +112,11 @@ export default function OrderList() {
         return r;
       };
 
-      const [mealsResult, bensResult, exclusionsResult] = await Promise.all([
+      const [mealsResult, bensResult, exclusionsResult, inactiveSet] = await Promise.all([
         fetchMealsList(),
         supabase.from('beneficiaries').select(bensSelect),
         supabase.from('exclusions').select(exclSelect),
+        fetchInactiveBeneficiaryIds(supabase),
       ]);
 
       if (ordersResult.error) {
@@ -130,7 +132,8 @@ export default function OrderList() {
       };
 
       if (bensResult.data) {
-        for (const b of bensResult.data as Array<{ entity_type?: string }>) {
+        for (const b of bensResult.data as unknown as Array<{ id: string; entity_type?: string }>) {
+          if (inactiveSet.has(b.id)) continue; // معطّل مؤقتاً — لا يُحتسب
           const t: EntityType = (b.entity_type === 'companion' ? 'companion' : 'beneficiary');
           nextCounts[t].total++;
         }
@@ -138,11 +141,13 @@ export default function OrderList() {
 
       if (exclusionsResult.data) {
         const rows = exclusionsResult.data as unknown as Array<{
+          beneficiary_id?: string;
           meal_id: string;
           alternative_meal_id?: string | null;
           beneficiaries?: { entity_type?: string } | { entity_type?: string }[] | null;
         }>;
         for (const ex of rows) {
+          if (ex.beneficiary_id && inactiveSet.has(ex.beneficiary_id)) continue; // معطّل — تجاهل محظوراته
           const ben = Array.isArray(ex.beneficiaries) ? ex.beneficiaries[0] : ex.beneficiaries;
           const t: EntityType = (ben?.entity_type === 'companion' ? 'companion' : 'beneficiary');
           // عدّاد المحظورات المباشرة
