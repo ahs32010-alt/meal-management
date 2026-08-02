@@ -751,7 +751,8 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
           ]}
           onClose={() => setImportOpen(false)}
           onDone={() => { setImportOpen(false); fetchData(); }}
-          onImport={async (rows) => {
+          replaceWarning={`سيتم حذف كل ${entityPlural} الحاليين (وما يرتبط بهم من محظورات وأصناف ثابتة) قبل إضافة بيانات الملف.`}
+          onImport={async (rows, mode) => {
             const errors: string[] = [];
 
             const DAY_MAP: Record<string, number> = {
@@ -782,8 +783,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               { col: 'ثابتة سناكات العشاء',  type: 'dinner',    isSnack: true  },
             ] as const;
 
-            // ① حذف بيانات هذا النوع فقط (مستفيدين أو مرافقين) + جلب الأصناف — بالتوازي
+            // ① (في وضع الاستبدال فقط) حذف بيانات هذا النوع + جلب الأصناف — بالتوازي
             // ⚠️ مهم جداً: الـdelete مقيّد بـentity_type عشان استيراد المرافقين ما يمسح المستفيدين والعكس.
+            // في وضع الإضافة نُبقي على الموجود ونضيف صفوف الملف فوقه (الأكواد المكررة تُبلّغ كأخطاء).
             // وجلب الأصناف مقيّد بنفس الـentity_type عشان أسماء المحظورات/الثوابت تُربط
             // بأصناف الفئة الصحيحة فقط.
             const fetchImportMeals = async () => {
@@ -797,7 +799,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               return r;
             };
             const [, mealsResult] = await Promise.all([
-              supabase.from('beneficiaries').delete().eq('entity_type', entityType),
+              mode === 'replace'
+                ? supabase.from('beneficiaries').delete().eq('entity_type', entityType)
+                : Promise.resolve(),
               fetchImportMeals(),
             ]);
             const mealsData = mealsResult.data ?? [];

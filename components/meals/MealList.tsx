@@ -11,6 +11,7 @@ import { useMyPending } from '@/lib/use-my-pending';
 import type { Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
+import type { ImportMode } from '@/components/shared/ImportModeDialog';
 import { exportXLSX } from '@/lib/xlsx-utils';
 
 const MealModal = dynamic(() => import('./MealModal'), { ssr: false });
@@ -696,7 +697,7 @@ export default function MealList() {
   };
 
   // ── Import ──────────────────────────────────────────────────────────────
-  const handleImport = async (rows: Record<string, string>[]) => {
+  const handleImport = async (rows: Record<string, string>[], mode: ImportMode) => {
     let imported = 0;
     const errors: string[] = [];
     const typeRevMap: Record<string, string> = { 'فطور': 'breakfast', 'غداء': 'lunch', 'عشاء': 'dinner', breakfast: 'breakfast', lunch: 'lunch', dinner: 'dinner' };
@@ -704,6 +705,17 @@ export default function MealList() {
       'حار': 'hot', 'بارد': 'cold', 'سناك': 'snack',
       hot: 'hot', cold: 'cold', snack: 'snack',
     };
+
+    // وضع الاستبدال: نحذف كل أصناف هذا النوع أولاً (الحذف متسلسل فيمسح ما يرتبط بها
+    // من محظورات/أصناف ثابتة/منيو/عناصر أوامر) ثم نُدرج أصناف الملف فقط.
+    if (mode === 'replace') {
+      const del = await supabase.from('meals').delete().eq('entity_type', entityType);
+      if (del.error && /entity_type|column/i.test(del.error.message)) {
+        await supabase.from('meals').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      } else if (del.error) {
+        return { imported: 0, errors: [`تعذّر حذف الأصناف الحالية: ${del.error.message}`] };
+      }
+    }
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -932,6 +944,7 @@ export default function MealList() {
           templateHeaders={['الاسم', 'الاسم الإنجليزي', 'نوع الوجبة', 'سناك', 'الفئة']}
           templateRow={['أرز بالدجاج', 'Rice with Chicken', 'غداء', 'لا', 'حار']}
           onImport={handleImport}
+          replaceWarning="سيتم حذف كل الأصناف الحالية لهذه الفئة — وبسبب الربط المتسلسل سيُحذف معها ما يعتمد عليها من محظورات وأصناف ثابتة وعناصر منيو وأوامر."
           onClose={() => setImportOpen(false)}
           onDone={() => { setImportOpen(false); fetchMeals(); }}
         />

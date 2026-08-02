@@ -2,19 +2,23 @@
 
 import { useState, useRef } from 'react';
 import { parseXLSX, exportTemplate } from '@/lib/xlsx-utils';
+import type { ImportMode } from './ImportModeDialog';
 
 interface Props {
   title: string;
   templateHeaders: string[];
   templateRow: (string | number)[];
-  onImport: (rows: Record<string, string>[]) => Promise<{ imported: number; errors: string[] }>;
+  onImport: (rows: Record<string, string>[], mode: ImportMode) => Promise<{ imported: number; errors: string[] }>;
   onClose: () => void;
   onDone: () => void;
+  /** نص تحذيري إضافي يظهر عند اختيار "استبدال" (مثلاً تنبيه الحذف المتسلسل). */
+  replaceWarning?: string;
 }
 
-export default function ImportModal({ title, templateHeaders, templateRow, onImport, onClose, onDone }: Props) {
+export default function ImportModal({ title, templateHeaders, templateRow, onImport, onClose, onDone, replaceWarning }: Props) {
   const [rows, setRows] = useState<Record<string, string>[] | null>(null);
   const [fileName, setFileName] = useState('');
+  const [mode, setMode] = useState<ImportMode>('append');
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<{ imported: number; errors: string[] } | null>(null);
   const [parseError, setParseError] = useState('');
@@ -43,7 +47,7 @@ export default function ImportModal({ title, templateHeaders, templateRow, onImp
   const handleImport = async () => {
     if (!rows) return;
     setImporting(true);
-    const res = await onImport(rows);
+    const res = await onImport(rows, mode);
     setResult(res);
     setImporting(false);
     if (res.errors.length === 0) setTimeout(onDone, 1200);
@@ -96,6 +100,28 @@ export default function ImportModal({ title, templateHeaders, templateRow, onImp
 
           {parseError && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{parseError}</div>
+          )}
+
+          {/* Mode selector — يظهر بعد اختيار ملف صالح */}
+          {rows && !result && (
+            <div>
+              <label className="label">طريقة الاستيراد</label>
+              <div className="grid grid-cols-2 gap-3">
+                <button type="button" onClick={() => setMode('append')}
+                  className={`text-right rounded-xl border-2 p-3 transition-colors ${mode === 'append' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                  <p className={`text-sm font-bold ${mode === 'append' ? 'text-emerald-700' : 'text-slate-700'}`}>إضافة للموجود</p>
+                  <p className="text-xs text-slate-500 mt-0.5">إبقاء البيانات الحالية وإضافة بيانات الملف إليها</p>
+                </button>
+                <button type="button" onClick={() => setMode('replace')}
+                  className={`text-right rounded-xl border-2 p-3 transition-colors ${mode === 'replace' ? 'border-amber-500 bg-amber-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                  <p className={`text-sm font-bold ${mode === 'replace' ? 'text-amber-700' : 'text-slate-700'}`}>استبدال الكل</p>
+                  <p className="text-xs text-slate-500 mt-0.5">حذف البيانات الحالية ووضع بيانات الملف فقط</p>
+                </button>
+              </div>
+              {mode === 'replace' && replaceWarning && (
+                <p className="text-xs text-red-600 mt-2 font-medium leading-relaxed">⚠️ {replaceWarning}</p>
+              )}
+            </div>
           )}
 
           {/* Preview */}
@@ -153,7 +179,7 @@ export default function ImportModal({ title, templateHeaders, templateRow, onImp
         <div className="flex gap-3 px-6 pb-6 pt-2">
           {rows && !result && (
             <button onClick={handleImport} disabled={importing} className="btn-primary flex-1 justify-center">
-              {importing ? 'جاري الاستيراد...' : `استيراد ${rows.length} سجل`}
+              {importing ? 'جاري الاستيراد...' : `${mode === 'replace' ? 'استبدال بـ' : 'استيراد'} ${rows.length} سجل`}
             </button>
           )}
           <button onClick={result ? onDone : onClose} className="btn-secondary flex-1 justify-center">

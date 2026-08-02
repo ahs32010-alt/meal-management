@@ -21,6 +21,7 @@ import {
   slotKey,
   type WeekNumber,
 } from '@/lib/menu-utils';
+import ImportModeDialog, { type ImportMode } from '@/components/shared/ImportModeDialog';
 
 interface CellEditState {
   week: WeekNumber;
@@ -222,6 +223,7 @@ export default function MenuView() {
   const [editing, setEditing] = useState<CellEditState | null>(null);
   const [importStatus, setImportStatus] = useState<'idle' | 'importing' | 'done' | 'error'>('idle');
   const [importMsg, setImportMsg] = useState('');
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [search, setSearch] = useState('');
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -522,10 +524,15 @@ export default function MenuView() {
     await exportMenuXLSX(allItems, meals);
   };
 
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // اختيار الملف لا ينفّذ الاستيراد مباشرة — بل يفتح حوار اختيار الطريقة (إضافة/استبدال).
+  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
+    setPendingFile(file);
+  };
+
+  const handleImport = async (file: File, mode: ImportMode) => {
     setImportStatus('importing');
     setImportMsg('');
     try {
@@ -538,9 +545,10 @@ export default function MenuView() {
         return;
       }
 
-      // Replace data for each touched week atomically — scoped to current entity_type
-      // عشان استيراد منيو المرافقين ما يمسح منيو المستفيدين والعكس.
-      if (weeks.length > 0) {
+      // وضع الاستبدال: نمسح أصناف كل أسبوع موجود في الملف (مقيّد بـentity_type الحالي
+      // عشان استيراد منيو المرافقين ما يمسح منيو المستفيدين والعكس) قبل الإدراج.
+      // وضع الإضافة: نُبقي على المنيو الحالي ونضيف أصناف الملف فوقه.
+      if (mode === 'replace' && weeks.length > 0) {
         await supabase
           .from('menu_items')
           .delete()
@@ -622,7 +630,7 @@ export default function MenuView() {
                 type="file"
                 accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 className="hidden"
-                onChange={handleImport}
+                onChange={handleFilePick}
               />
               <button onClick={handleClearWeek} className="btn-secondary text-sm text-red-600 hover:bg-red-50 border-red-200">
                 مسح أصناف هذا الأسبوع
@@ -638,6 +646,19 @@ export default function MenuView() {
           {importMsg}
         </div>
       )}
+
+      {/* اختيار طريقة استيراد المنيو */}
+      <ImportModeDialog
+        isOpen={pendingFile !== null}
+        description="كيف تريد التعامل مع المنيو الحالي للأسابيع الموجودة في الملف؟"
+        replaceWarning="سيتم حذف أصناف المنيو الحالية للأسابيع الموجودة في الملف قبل الإضافة."
+        onChoose={(mode) => {
+          const file = pendingFile;
+          setPendingFile(null);
+          if (file) void handleImport(file, mode);
+        }}
+        onCancel={() => setPendingFile(null)}
+      />
 
       {/* Entity tabs: مستفيدين / مرافقين — كل منيو معزول عن الآخر */}
       <div className="flex items-center gap-1 border-b border-slate-200">

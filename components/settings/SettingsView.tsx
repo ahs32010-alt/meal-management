@@ -12,6 +12,7 @@ import BackupRestoreView from './BackupRestoreView';
 import ExtrasView from './ExtrasView';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { logActivity } from '@/lib/activity-log';
+import ImportModeDialog, { type ImportMode } from '@/components/shared/ImportModeDialog';
 
 type Tab = 'translit' | 'users' | 'activity' | 'extras' | 'backup';
 
@@ -66,6 +67,7 @@ export default function SettingsView() {
   const [search, setSearch] = useState('');
   const [importStatus, setImportStatus] = useState<'idle' | 'importing' | 'done' | 'error'>('idle');
   const [importMsg, setImportMsg] = useState('');
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState<Tab>('translit');
   const { user: currentUser } = useCurrentUser();
@@ -158,10 +160,15 @@ export default function SettingsView() {
     await exportXLSX(data, `الترجمة_الحرفية_${new Date().toISOString().slice(0, 10)}.xlsx`, 'الترجمة الحرفية');
   };
 
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // اختيار الملف يفتح حوار الطريقة بدل التنفيذ المباشر.
+  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
+    setPendingFile(file);
+  };
+
+  const handleImport = async (file: File, mode: ImportMode) => {
     setImportStatus('importing');
     setImportMsg('');
     try {
@@ -193,6 +200,7 @@ export default function SettingsView() {
       };
 
       const errors: string[] = [];
+      const seenNames = new Set<string>(); // الأسماء التي ظهرت في الملف — تُستخدم في وضع الاستبدال
       let translitsUpdated = 0;
       let translitsRemoved = 0;
       let typesUpdated = 0;
@@ -211,6 +219,7 @@ export default function SettingsView() {
         const row = parsed[i];
         const name = normalize(pick(row, NAME_KEYS));
         if (!name) continue;
+        seenNames.add(name);
 
         const typeRaw = normalize(pick(row, TYPE_KEYS));
         const translitRaw = pick(row, TRANSLIT_KEYS).trim();
@@ -262,6 +271,18 @@ export default function SettingsView() {
           translitsRemoved++;
         } else {
           unchanged++;
+        }
+      }
+
+      // وضع الاستبدال: نحذف أي ترجمة حرفية مخصّصة لأصناف لم تَرِد في الملف،
+      // بحيث تعكس الترجمات المخصّصة محتوى الملف فقط. (أنواع الوجبات لا تُلمس — فهي خاصية للصنف نفسه.)
+      if (mode === 'replace') {
+        const toRemove = rows.filter(r => r.customId && !seenNames.has(normalize(r.name)));
+        const removeIds = toRemove.map(r => r.customId).filter((id): id is string => Boolean(id));
+        if (removeIds.length > 0) {
+          const { error } = await supabase.from('custom_transliterations').delete().in('id', removeIds);
+          if (error) errors.push(`تعذّر حذف ترجمات غير موجودة في الملف: ${error.message}`);
+          else translitsRemoved += removeIds.length;
         }
       }
 
@@ -411,9 +432,21 @@ export default function SettingsView() {
               type="file"
               accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
               className="hidden"
-              onChange={handleImport}
+              onChange={handleFilePick}
             />
           </div>
+
+          <ImportModeDialog
+            isOpen={pendingFile !== null}
+            description="كيف تريد التعامل مع الترجمات الحرفية الحالية؟"
+            replaceWarning="سيتم حذف أي ترجمة حرفية مخصّصة لأصناف غير موجودة في الملف."
+            onChoose={(mode) => {
+              const file = pendingFile;
+              setPendingFile(null);
+              if (file) void handleImport(file, mode);
+            }}
+            onCancel={() => setPendingFile(null)}
+          />
         </div>
         {(importStatus === 'done' || importStatus === 'error') && (
           <div className={`px-5 py-2.5 text-sm font-medium ${importStatus === 'done' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
