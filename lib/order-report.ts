@@ -67,15 +67,24 @@ export async function buildOrderReport(
   // Try with the category column on fixed_meals first; if the migration hasn't
   // been run yet, fall back to the older shape so the report still works.
   // Same fallback strategy for the entity_type filter on beneficiaries.
+  // علامة «صنف بديل» على الصنف الثابت — عمود اختياري (fixed-meals-is-alternative-migration).
+  // نجرّبه أولاً وحده، ولو ما كان موجود نكمل بباقي سلسلة الإسقاط بدونه.
+  let withFixedAlt = true;
+
   const fetchBens = async (withFixedCategory: boolean, withEntityType: boolean, withMealCategory: boolean) => {
     const mealCols = `id, name, english_name, type, is_snack${withMealCategory ? ', category' : ''}`;
-    const sel = `*, exclusions(id, meal_id, alternative_meal_id, meals:meals!exclusions_meal_id_fkey(${mealCols})), fixed_meals:beneficiary_fixed_meals(id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category, suppress_if_meal_ids' : ''}, meals!meal_id(${mealCols}))`;
+    const fixedCols = `id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category, suppress_if_meal_ids' : ''}${withFixedAlt ? ', is_alternative' : ''}`;
+    const sel = `*, exclusions(id, meal_id, alternative_meal_id, meals:meals!exclusions_meal_id_fkey(${mealCols})), fixed_meals:beneficiary_fixed_meals(${fixedCols}, meals!meal_id(${mealCols}))`;
     const q = supabase.from('beneficiaries').select(sel).order('name');
     return withEntityType ? q.eq('entity_type', orderEntityType) : q;
   };
 
   // نحاول كل الأعمدة، ثم نسقط واحدة بواحدة عند ظهور أخطاء العمود/الترقية
   let bensRes = await fetchBens(true, true, true);
+  if (bensRes.error && /is_alternative/i.test(bensRes.error.message)) {
+    withFixedAlt = false;
+    bensRes = await fetchBens(true, true, true);
+  }
   if (bensRes.error && /category|column/i.test(bensRes.error.message)) {
     // إما fixed_meals.category أو meals.category — جرّب الإسقاط بالترتيب
     bensRes = await fetchBens(false, true, true);
@@ -96,7 +105,7 @@ export async function buildOrderReport(
     category: string; villa?: string; diet_type?: string;
     fixed_items?: string; notes?: string; created_at: string;
     exclusions: { id: string; meal_id: string; alternative_meal_id: string | null }[];
-    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; category?: string; suppress_if_meal_ids?: string[] }[];
+    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; category?: string; suppress_if_meal_ids?: string[]; is_alternative?: boolean }[];
   };
   // نستبعد المعطّلين مؤقتاً (is_active = false) — لا يدخلون التقارير/الستيكرات/العدّ
   const beneficiaries = ((bensRes.data as unknown as BenRow[] | null) ?? [])
@@ -131,7 +140,7 @@ export async function buildOrderReport(
     category: string; villa?: string; diet_type?: string;
     fixed_items?: string; notes?: string; created_at: string;
     exclusions: { id: string; meal_id: string; alternative_meal_id: string | null }[];
-    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; suppress_if_meal_ids?: string[] }[];
+    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; suppress_if_meal_ids?: string[]; is_alternative?: boolean }[];
   }) => {
     const excludedIds = new Set((ben.exclusions || []).map(e => e.meal_id));
 
@@ -147,7 +156,7 @@ export async function buildOrderReport(
         return { meal, alternative, category };
       });
 
-    const todayFixed: { meal: Meal; quantity: number; category: ItemCategory }[] = (ben.fixed_meals || [])
+    const todayFixed: { meal: Meal; quantity: number; category: ItemCategory; is_alternative: boolean }[] = (ben.fixed_meals || [])
       .filter(fm =>
         fm.day_of_week === orderDayOfWeek &&
         fm.meal_type === order.meal_type &&
@@ -166,6 +175,7 @@ export async function buildOrderReport(
           meal: fm.meals,
           quantity: fm.quantity ?? 1,
           category: mealCat ?? stored ?? categoryMap[fm.meal_id] ?? (fm.meals.is_snack ? 'snack' : 'hot'),
+          is_alternative: fm.is_alternative === true,
         };
       });
 
@@ -184,8 +194,14 @@ export async function buildOrderReport(
         allMealDetails[alternative.id] = alternative;
       }
     });
-    todayFixed.forEach(({ meal, quantity }) => {
-      fixedQty[meal.id] = (fixedQty[meal.id] || 0) + quantity;
+    todayFixed.forEach(({ meal, quantity, is_alternative }) => {
+      // الصنف الثابت المعلَّم كـ«بديل» يُحتسب مع البدائل (altQty) بدل الأصناف
+      // اليومية الثابتة (fixedQty). المجموع في إحصاء الأصناف واحد في الحالتين.
+      if (is_alternative) {
+        altQty[meal.id] = (altQty[meal.id] || 0) + quantity;
+      } else {
+        fixedQty[meal.id] = (fixedQty[meal.id] || 0) + quantity;
+      }
       allMealDetails[meal.id] = meal;
     });
 

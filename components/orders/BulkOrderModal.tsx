@@ -78,20 +78,28 @@ export default function BulkOrderModal({ meals, entityType, onClose, onSaved }: 
 
     // جلب كل عناصر المنيو للأسابيع المطلوبة دفعة واحدة
     const neededWeeks = [...new Set(slots.map(s => s.week))];
-    const baseSelect = 'meal_id, week_number, day_of_week, meal_type, category, position, multiplier, extra_quantity, meals(id, name, is_snack)';
-
-    const tryFetchMenu = async (withEntity: boolean) => {
+    // entity_type و extra_quantity أعمدة اختيارية (حسب الترقيات المشغّلة) —
+    // نسقط كل واحد لوحده بدل ما يفشل الاستعلام كله ويطلع المنيو فاضي.
+    const tryFetchMenu = async (withEntity: boolean, withExtraQty: boolean) => {
       const q = supabase
         .from('menu_items')
-        .select(baseSelect)
+        .select(
+          `meal_id, week_number, day_of_week, meal_type, category, position, multiplier${withExtraQty ? ', extra_quantity' : ''}, meals(id, name, is_snack)`,
+        )
         .in('week_number', neededWeeks)
         .eq('meal_type', mealType);
       return withEntity ? q.eq('entity_type', entityType) : q;
     };
 
-    let menuRes = await tryFetchMenu(true);
+    let menuRes = await tryFetchMenu(true, true);
+    if (menuRes.error && /extra_quantity/i.test(menuRes.error.message)) {
+      menuRes = await tryFetchMenu(true, false);
+    }
     if (menuRes.error && /entity_type|column/i.test(menuRes.error.message)) {
-      menuRes = await tryFetchMenu(false);
+      menuRes = await tryFetchMenu(false, true);
+      if (menuRes.error && /extra_quantity/i.test(menuRes.error.message)) {
+        menuRes = await tryFetchMenu(false, false);
+      }
     }
 
     // خريطة: `${week}|${day}` ← عناصر المنيو

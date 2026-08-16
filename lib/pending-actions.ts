@@ -40,6 +40,9 @@ export interface CreatePayload {
     meal_id: string;
     quantity: number;
     category?: string;
+    suppress_if_meal_ids?: string[];
+    // معلَّم كـ«بديل» → يُحتسب ضمن الأصناف البديلة في أمر التشغيل
+    is_alternative?: boolean;
   }>;
 }
 
@@ -259,7 +262,7 @@ export async function approveAction(
         const rows = cp.fixed_meals.map(fm => ({ ...fm, beneficiary_id: newId }));
         let { error: fmErr } = await supabase.from('beneficiary_fixed_meals').insert(rows);
         if (fmErr && /category|column/i.test(fmErr.message)) {
-          const fallback = rows.map(({ category: _c, ...rest }) => rest);
+          const fallback = rows.map(({ category: _c, suppress_if_meal_ids: _s, is_alternative: _a, ...rest }) => rest);
           ({ error: fmErr } = await supabase.from('beneficiary_fixed_meals').insert(fallback));
         }
         if (fmErr) return { ok: false, error: `تم إنشاء المستفيد لكن الأصناف الثابتة فشلت: ${fmErr.message}` };
@@ -289,7 +292,7 @@ export async function approveAction(
         const rows = cp.fixed_meals.map(fm => ({ ...fm, beneficiary_id: id }));
         let { error: fmErr } = await supabase.from('beneficiary_fixed_meals').insert(rows);
         if (fmErr && /category|column/i.test(fmErr.message)) {
-          const fallback = rows.map(({ category: _c, ...rest }) => rest);
+          const fallback = rows.map(({ category: _c, suppress_if_meal_ids: _s, is_alternative: _a, ...rest }) => rest);
           ({ error: fmErr } = await supabase.from('beneficiary_fixed_meals').insert(fallback));
         }
         if (fmErr) return { ok: false, error: `إضافة الأصناف الثابتة فشلت: ${fmErr.message}` };

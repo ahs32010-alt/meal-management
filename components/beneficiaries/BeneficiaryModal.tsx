@@ -26,7 +26,13 @@ interface ExclusionEntry {
   alternative_meal_id: string;
 }
 
-type FixedEntry = { meal_id: string; meal_type: MealType; days: Set<number>; quantity: number; category: ItemCategory; suppress_if_meal_ids: string[] };
+type FixedEntry = {
+  meal_id: string; meal_type: MealType; days: Set<number>; quantity: number;
+  category: ItemCategory; suppress_if_meal_ids: string[];
+  // معلَّم كـ«بديل» → يُحتسب في أمر التشغيل ضمن جدول الأصناف البديلة
+  // بدل جدول الأصناف اليومية الثابتة (الإحصاء الكلي ما يتغيّر).
+  is_alternative: boolean;
+};
 
 function buildFixedEntries(fixedMeals: Beneficiary['fixed_meals'], allMeals?: Meal[]): FixedEntry[] {
   const mealById = new Map((allMeals ?? []).map(m => [m.id, m]));
@@ -48,6 +54,7 @@ function buildFixedEntries(fixedMeals: Beneficiary['fixed_meals'], allMeals?: Me
         quantity: fm.quantity ?? 1,
         category: masterCat ?? (fm.category as ItemCategory) ?? inferred,
         suppress_if_meal_ids: Array.isArray(suppressIds) ? suppressIds : [],
+        is_alternative: (fm as unknown as { is_alternative?: boolean }).is_alternative === true,
       };
     }
     map[key].days.add(fm.day_of_week);
@@ -336,10 +343,16 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
     const exists = fixedEntries.find(fe => fe.meal_id === meal.id && fe.meal_type === newFixedMealType);
     if (!exists) {
       const category: ItemCategory = (meal.category as ItemCategory | undefined) ?? (meal.is_snack ? 'snack' : 'hot');
-      setFixedEntries(prev => [...prev, { meal_id: meal.id, meal_type: newFixedMealType, days: new Set(), quantity: 1, category, suppress_if_meal_ids: [] }]);
+      setFixedEntries(prev => [...prev, { meal_id: meal.id, meal_type: newFixedMealType, days: new Set(), quantity: 1, category, suppress_if_meal_ids: [], is_alternative: false }]);
     }
     setAddingFixed(false);
   };
+  const toggleFixedEntryIsAlternative = (meal_id: string, meal_type: MealType) =>
+    setFixedEntries(prev => prev.map(fe =>
+      fe.meal_id === meal_id && fe.meal_type === meal_type
+        ? { ...fe, is_alternative: !fe.is_alternative }
+        : fe
+    ));
   const addFixedEntrySuppressIf = (meal_id: string, meal_type: MealType, suppress_id: string) =>
     setFixedEntries(prev => prev.map(fe =>
       fe.meal_id === meal_id && fe.meal_type === meal_type && !fe.suppress_if_meal_ids.includes(suppress_id)
@@ -425,6 +438,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
             quantity: fe.quantity,
             category: fe.category,
             suppress_if_meal_ids: fe.suppress_if_meal_ids,
+            is_alternative: fe.is_alternative,
           }))
         ),
       });
@@ -481,6 +495,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           quantity: fe.quantity,
           category: fe.category,
           suppress_if_meal_ids: fe.suppress_if_meal_ids,
+          is_alternative: fe.is_alternative,
         }))
       );
       if (fixedRows.length > 0) {
@@ -488,14 +503,15 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
         if (fixedErr) {
           if (/column/i.test(fixedErr.message)) {
             // One or more migration columns missing — fall back to base columns only
-            const fallback = fixedRows.map(({ category: _c, suppress_if_meal_ids: _s, ...rest }) => rest);
+            const fallback = fixedRows.map(({ category: _c, suppress_if_meal_ids: _s, is_alternative: _a, ...rest }) => rest);
             const { error: fallbackErr } = await supabase.from('beneficiary_fixed_meals').insert(fallback);
             if (fallbackErr) { throw fallbackErr; }
             alert(
-              'تنبيه: تم حفظ المستفيد لكن بعض الخصائص (التصنيف / شرط الإلغاء) لم تُحفظ للأصناف الثابتة.\n\n' +
+              'تنبيه: تم حفظ المستفيد لكن بعض الخصائص (التصنيف / شرط الإلغاء / علامة البديل) لم تُحفظ للأصناف الثابتة.\n\n' +
               'الحل: شغّل ملفات الـmigration في Supabase SQL Editor:\n' +
               '• supabase/fixed-meals-category-migration.sql\n' +
-              '• supabase/fixed-meals-suppress-if-migration.sql'
+              '• supabase/fixed-meals-suppress-if-migration.sql\n' +
+              '• supabase/fixed-meals-is-alternative-migration.sql'
             );
           } else {
             throw fixedErr;
@@ -742,7 +758,10 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           {activeTab === 'fixed' && (
             <div className="p-6 space-y-4">
               <div className="flex items-center justify-between">
-                <p className="text-xs text-slate-500">أضف صنف ثابت واختر الوجبة ثم حدّد الأيام.</p>
+                <p className="text-xs text-slate-500">
+                  أضف صنف ثابت واختر الوجبة ثم حدّد الأيام.
+                  <span className="text-slate-400"> — علّم «صنف بديل» لو الصنف بديل مو زيادة، يطلع في جدول الأصناف البديلة بأمر التشغيل.</span>
+                </p>
                 {/* Add button */}
                 <div className="flex items-center gap-2">
                   {addingFixed ? (
@@ -821,6 +840,22 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${labelColor}`}>
                               {isSnackEntry ? 'سناك' : MEAL_TYPE_LABELS[fe.meal_type]}
                             </span>
+                            {/* علامة «صنف بديل» — تنقل الصنف من جدول الأصناف اليومية
+                                الثابتة إلى جدول الأصناف البديلة في أمر التشغيل */}
+                            <button
+                              type="button"
+                              onClick={() => toggleFixedEntryIsAlternative(fe.meal_id, fe.meal_type)}
+                              title={fe.is_alternative
+                                ? 'مُحتسب مع الأصناف البديلة في أمر التشغيل — اضغط لإرجاعه للأصناف اليومية الثابتة'
+                                : 'اضغط لتعليمه كصنف بديل — ينتقل لجدول الأصناف البديلة في أمر التشغيل'}
+                              className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${
+                                fe.is_alternative
+                                  ? 'bg-emerald-500 border-emerald-500 text-white shadow-sm'
+                                  : 'bg-white border-dashed border-slate-300 text-slate-400 hover:border-emerald-400 hover:text-emerald-600'
+                              }`}
+                            >
+                              {fe.is_alternative ? '✓ صنف بديل' : 'صنف بديل'}
+                            </button>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-slate-400">{fe.days.size} يوم</span>

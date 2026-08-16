@@ -28,7 +28,7 @@ export interface ExecuteOutcome {
  * عند فشل الكتابة بسبب عمود ناقص نُعيد المحاولة بدونها بدل ما ينهار الأمر.
  */
 const OPTIONAL_COLUMNS: Record<string, string[]> = {
-  beneficiary_fixed_meals: ['category', 'suppress_if_meal_ids'],
+  beneficiary_fixed_meals: ['category', 'suppress_if_meal_ids', 'is_alternative'],
   menu_items: ['entity_type', 'multiplier', 'extra_quantity'],
   meals: ['category', 'entity_type'],
   beneficiaries: ['is_active', 'entity_type', 'no_fish', 'no_pasta_sandwich', 'low_carb'],

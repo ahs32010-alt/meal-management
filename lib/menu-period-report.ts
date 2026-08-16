@@ -10,6 +10,7 @@ type MenuItemRow = {
   meal_id: string;
   category?: string;
   multiplier?: number;
+  extra_quantity?: number;
   entity_type?: string;
   meals: Meal;
 };
@@ -24,6 +25,7 @@ type BenRow = {
     quantity: number;
     meals: Meal;
     category?: string;
+    is_alternative?: boolean;
   }>;
 };
 
@@ -72,12 +74,17 @@ export async function buildMenuPeriodReport(
     : MEAL_SECTIONS.map(s => s.meal_type);
 
   // ── 1. Fetch menu items + beneficiaries in parallel ───────────────────────
+  // extra_quantity عمود اختياري (menu-extra-qty-migration) — نجرّبه أولاً
+  // ونسقطه لوحده لو ما كان موجود. لازم يدخل في الحساب وإلا تقرير المنيو يطلع
+  // أقل من العدد المكتوب في خلية قائمة الطعام ومن أمر التشغيل.
+  let withExtraQty = true;
+
   const fetchItems = async (withEntityType: boolean, withMealCategory: boolean) => {
     const mealCols = `id, name, english_name, type, is_snack${withMealCategory ? ', category' : ''}`;
     let q = supabase
       .from('menu_items')
       .select(
-        `week_number, day_of_week, meal_type, meal_id, category, multiplier${withEntityType ? ', entity_type' : ''}, meals(${mealCols})`,
+        `week_number, day_of_week, meal_type, meal_id, category, multiplier${withExtraQty ? ', extra_quantity' : ''}${withEntityType ? ', entity_type' : ''}, meals(${mealCols})`,
       )
       .in('week_number', weekNumbers)
       .in('meal_type', mealTypes);
@@ -85,22 +92,37 @@ export async function buildMenuPeriodReport(
     return q;
   };
 
+  // علامة «صنف بديل» على الصنف الثابت — عمود اختياري
+  // (fixed-meals-is-alternative-migration). نسقطه لوحده لو ما كان موجود.
+  let withFixedAlt = true;
+
   const fetchBens = async (
     withEntityTypeFilter: boolean,
     withFixedCategory: boolean,
     withMealCategory: boolean,
   ) => {
     const mealCols = `id, name, english_name, type, is_snack${withMealCategory ? ', category' : ''}`;
+    const fixedCols =
+      `day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category' : ''}${withFixedAlt ? ', is_alternative' : ''}`;
     const sel =
       `id, exclusions(meal_id, alternative_meal_id), ` +
-      `fixed_meals:beneficiary_fixed_meals(day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category' : ''}, meals(${mealCols}))`;
+      `fixed_meals:beneficiary_fixed_meals(${fixedCols}, meals(${mealCols}))`;
     const q = supabase.from('beneficiaries').select(sel);
     return withEntityTypeFilter && params.entity_type ? q.eq('entity_type', params.entity_type) : q;
   };
 
   let [itemsRes, bensRes] = await Promise.all([fetchItems(true, true), fetchBens(true, true, true)]);
 
+  if (bensRes.error && /is_alternative/i.test(bensRes.error.message)) {
+    withFixedAlt = false;
+    bensRes = await fetchBens(true, true, true);
+  }
+
   // Fallback for missing optional columns — applied per-query only if needed
+  if (itemsRes.error && /extra_quantity/i.test(itemsRes.error.message)) {
+    withExtraQty = false;
+    itemsRes = await fetchItems(true, true);
+  }
   if (itemsRes.error && /entity_type|column/i.test(itemsRes.error.message)) {
     itemsRes = await fetchItems(false, true);
   }
@@ -180,12 +202,12 @@ export async function buildMenuPeriodReport(
     const altByMealId: Record<string, string | null> = {};
     (ben.exclusions || []).forEach(ex => { altByMealId[ex.meal_id] = ex.alternative_meal_id; });
     // index fixed meals by "day|mealType" key
-    const fixedBySlot = new Map<string, Array<{ meal: Meal; quantity: number }>>();
+    const fixedBySlot = new Map<string, Array<{ meal: Meal; quantity: number; isAlt: boolean }>>();
     (ben.fixed_meals || []).forEach(fm => {
       if (!fm.meals) return;
       const k = `${fm.day_of_week}|${fm.meal_type}`;
       const list = fixedBySlot.get(k) ?? [];
-      list.push({ meal: fm.meals, quantity: fm.quantity ?? 1 });
+      list.push({ meal: fm.meals, quantity: fm.quantity ?? 1, isAlt: fm.is_alternative === true });
       fixedBySlot.set(k, list);
     });
     return { excludedIds, altByMealId, fixedBySlot };
@@ -213,10 +235,12 @@ export async function buildMenuPeriodReport(
     processedSlots++;
 
     const multiplierMap: Record<string, number> = {};
+    const extraQtyMap: Record<string, number> = {};
     const displayMealMap: Record<string, Meal> = {};
 
     slotItems.forEach(item => {
       multiplierMap[item.meal_id] = Math.max(1, item.multiplier ?? 1);
+      extraQtyMap[item.meal_id] = item.extra_quantity ?? 0;
       displayMealMap[item.meal_id] = item.meals;
     });
 
@@ -244,22 +268,31 @@ export async function buildMenuPeriodReport(
         }
       });
 
-      (fixedBySlot.get(fixedSlotKey) ?? []).forEach(({ meal, quantity }) => {
-        fixedQty[meal.id] = (fixedQty[meal.id] || 0) + quantity;
+      (fixedBySlot.get(fixedSlotKey) ?? []).forEach(({ meal, quantity, isAlt }) => {
+        // الصنف الثابت المعلَّم كـ«بديل» يُحتسب مع البدائل بدل الأصناف الثابتة
+        if (isAlt) {
+          altQty[meal.id] = (altQty[meal.id] || 0) + quantity;
+        } else {
+          fixedQty[meal.id] = (fixedQty[meal.id] || 0) + quantity;
+        }
         localMeals[meal.id] = meal;
       });
     });
 
     // Merge into aggregated — one pass over allQtyIds covers slot total too
-    const allQtyIds = new Set([...Object.keys(mainQty), ...Object.keys(altQty), ...Object.keys(fixedQty)]);
+    // نضم أصناف الخانة كلها حتى لو mainQty=0 (الكل مستثنى) لأن extra_quantity
+    // قد يخليها بكمية موجبة.
+    const allQtyIds = new Set([...slotMealIds, ...Object.keys(mainQty), ...Object.keys(altQty), ...Object.keys(fixedQty)]);
     let slotTotal = 0;
 
     allQtyIds.forEach(id => {
       const meal = localMeals[id];
       if (!meal) return;
       const mult = multiplierMap[id] ?? 1;
-      const mainCooked = (mainQty[id] || 0) * mult;
+      // نفس معادلة أمر التشغيل: (العدد المباشر × المضاعف) + الكمية الإضافية
+      const mainCooked = (mainQty[id] || 0) * mult + (extraQtyMap[id] ?? 0);
       const quantity = mainCooked + (altQty[id] || 0) + (fixedQty[id] || 0);
+      if (quantity <= 0) return;
       slotTotal += quantity;
 
       const ex = aggItems.get(id);
@@ -269,7 +302,7 @@ export async function buildMenuPeriodReport(
 
     slotItems.forEach(item => {
       const mult = multiplierMap[item.meal_id] ?? 1;
-      const gets = (mainQty[item.meal_id] || 0) * mult;
+      const gets = (mainQty[item.meal_id] || 0) * mult + (extraQtyMap[item.meal_id] ?? 0);
       if (item.meals.is_snack) {
         const ex = aggSnack.get(item.meal_id);
         if (ex) ex.gets += gets; else aggSnack.set(item.meal_id, { meal: displayMealMap[item.meal_id], gets });

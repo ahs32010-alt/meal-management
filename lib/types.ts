@@ -115,6 +115,12 @@ export interface BeneficiaryFixedMeal {
   quantity: number;
   category?: ItemCategory;
   suppress_if_meal_ids?: string[];
+  /**
+   * صنف ثابت معلَّم كـ«بديل»: يُحتسب في أمر التشغيل ضمن جدول الأصناف البديلة
+   * (أو بدائل السناكات) بدل جدول الأصناف اليومية الثابتة. الكمية الكلية
+   * في إحصاء الأصناف لا تتغيّر — فقط مكان ظهورها.
+   */
+  is_alternative?: boolean;
   meals?: Meal;
 }
 
@@ -167,7 +173,8 @@ export interface OrderItem {
 export interface BeneficiaryReportDetail {
   beneficiary: Beneficiary;
   excludedItems: { meal: Meal; alternative: Meal | null; category: ItemCategory }[];
-  fixedItems: { meal: Meal; quantity: number; category: ItemCategory }[];
+  // is_alternative = الصنف الثابت محسوب ضمن البدائل في ملخّصات الأمر
+  fixedItems: { meal: Meal; quantity: number; category: ItemCategory; is_alternative?: boolean }[];
 }
 
 export interface ReportData {

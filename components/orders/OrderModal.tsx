@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import type { DailyOrder, Meal, MealType, OrderItem, ItemCategory, MenuItem, EntityType } from '@/lib/types';
@@ -109,6 +109,69 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
 
   const itemsByCategory = (cat: ItemCategory) => selected.filter(s => s.category === cat);
 
+  // ── جلب أصناف المنيو لخانة (أسبوع | يوم | وجبة) وتحويلها لأصناف أمر تشغيل ──
+  // مصدر واحد تستخدمه التعبئة التلقائية وزر «إعادة التعبئة من المنيو». كانت
+  // نسختين منفصلتين ونسيت وحدة منها عمود multiplier، فكان أي صنف مضاعَف في
+  // المنيو (سناكات غالباً: ميني بيتزا، فطيرة زعتر) ينزل بالكمية الأساسية بدون
+  // المضاعف — مثلاً ٥٥ تصير ٣٠.
+  const fetchMenuSelection = useCallback(async (
+    week: WeekNumber,
+    day: number,
+    type: MealType,
+  ): Promise<SelectedItem[]> => {
+    // المنيو منفصل لكل فئة (مستفيدين/مرافقين). نحاول الفلترة بـentity_type،
+    // ولو العمود ما موجود (الـmigration ما اتشغّل) نرجع لاستعلام عام. ونفس
+    // الشيء لعمود extra_quantity — نسقطه لوحده بدل ما يفشل الاستعلام كله.
+    const tryFetch = async (withEntity: boolean, withExtraQty: boolean) => {
+      const q = supabase
+        .from('menu_items')
+        .select(
+          `meal_id, category, position, multiplier${withExtraQty ? ', extra_quantity' : ''}, meals(id, name, is_snack)`,
+        )
+        .eq('week_number', week)
+        .eq('day_of_week', day)
+        .eq('meal_type', type);
+      return withEntity ? q.eq('entity_type', entityType) : q;
+    };
+
+    let res = await tryFetch(true, true);
+    if (res.error && /extra_quantity/i.test(res.error.message)) {
+      res = await tryFetch(true, false);
+    }
+    if (res.error && /entity_type|column/i.test(res.error.message)) {
+      res = await tryFetch(false, true);
+      if (res.error && /extra_quantity/i.test(res.error.message)) {
+        res = await tryFetch(false, false);
+      }
+    }
+
+    const items = (res.data as unknown as MenuItem[] | null) ?? [];
+    // الفئة الفعلية تُؤخذ من meals.category (المصدر الموحد) — menu_items.category
+    // قد يحمل قيمة قديمة (مثلاً 'hot' افتراضي) ما تعكس تصنيف الصنف الحالي.
+    const itemsWithCat = items.map(it => {
+      const fullMeal = meals.find(m => m.id === it.meal_id);
+      const effectiveCat: ItemCategory =
+        (fullMeal?.category as ItemCategory | undefined) ??
+        (it.category as ItemCategory | undefined) ??
+        (fullMeal?.is_snack || it.meals?.is_snack ? 'snack' : 'hot');
+      return { it, effectiveCat };
+    });
+    // Sort: hot, cold, snack — then position
+    const sorted = itemsWithCat.sort((a, b) => {
+      const r = (c: ItemCategory) => c === 'hot' ? 0 : c === 'cold' ? 1 : 2;
+      if (a.effectiveCat !== b.effectiveCat) return r(a.effectiveCat) - r(b.effectiveCat);
+      return a.it.position - b.it.position;
+    });
+
+    return sorted.map(({ it, effectiveCat }) => ({
+      meal_id: it.meal_id,
+      display_name: it.meals?.name ?? '',
+      extra_quantity: it.extra_quantity ?? 0,
+      category: effectiveCat,
+      multiplier: Math.max(1, it.multiplier ?? 1),
+    }));
+  }, [entityType, meals]);
+
   // Auto-fill from menu when (week, day, meal_type) changes — only for NEW orders
   // (preserves edits to existing orders).
   useEffect(() => {
@@ -119,55 +182,14 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
 
     let cancelled = false;
     (async () => {
-      // المنيو منفصل لكل فئة (مستفيدين/مرافقين). نحاول الفلترة بـentity_type،
-      // ولو العمود ما موجود (الـmigration ما اتشغّل) نرجع لاستعلام عام.
-      const baseSelect = 'meal_id, category, position, multiplier, extra_quantity, meals(id, name, is_snack)';
-      const tryFetch = async (withEntity: boolean) => {
-        const q = supabase
-          .from('menu_items')
-          .select(baseSelect)
-          .eq('week_number', weekNumber)
-          .eq('day_of_week', dayOfWeek)
-          .eq('meal_type', mealType);
-        return withEntity ? q.eq('entity_type', entityType) : q;
-      };
-      let res = await tryFetch(true);
-      if (res.error && /entity_type|column/i.test(res.error.message)) {
-        res = await tryFetch(false);
-      }
-      const { data } = res;
+      const next = await fetchMenuSelection(weekNumber, dayOfWeek, mealType);
       if (cancelled) return;
-
-      const items = (data as unknown as MenuItem[] | null) ?? [];
-      // الفئة الفعلية تُؤخذ من meals.category (المصدر الموحد) — menu_items.category
-      // قد يحمل قيمة قديمة (مثلاً 'hot' افتراضي) ما تعكس تصنيف الصنف الحالي.
-      const itemsWithCat = items.map(it => {
-        const fullMeal = meals.find(m => m.id === it.meal_id);
-        const effectiveCat: ItemCategory =
-          (fullMeal?.category as ItemCategory | undefined) ??
-          (it.category as ItemCategory | undefined) ??
-          (fullMeal?.is_snack || it.meals?.is_snack ? 'snack' : 'hot');
-        return { it, effectiveCat };
-      });
-      // Sort: hot, cold, snack — then position
-      const sorted = itemsWithCat.sort((a, b) => {
-        const r = (c: ItemCategory) => c === 'hot' ? 0 : c === 'cold' ? 1 : 2;
-        if (a.effectiveCat !== b.effectiveCat) return r(a.effectiveCat) - r(b.effectiveCat);
-        return a.it.position - b.it.position;
-      });
-
-      setSelected(sorted.map(({ it, effectiveCat }) => ({
-        meal_id: it.meal_id,
-        display_name: it.meals?.name ?? '',
-        extra_quantity: (it as unknown as { extra_quantity?: number }).extra_quantity ?? 0,
-        category: effectiveCat,
-        multiplier: it.multiplier ?? 1,
-      })));
+      setSelected(next);
       setAutoFilledKey(key);
     })();
 
     return () => { cancelled = true; };
-  }, [isEdit, weekNumber, dayOfWeek, mealType, supabase, autoFilledKey, entityType, meals]);
+  }, [isEdit, weekNumber, dayOfWeek, mealType, autoFilledKey, fetchMenuSelection]);
 
   const handleTypeChange = (t: MealType) => {
     setMealType(t);
@@ -181,43 +203,14 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
       return;
     }
     if (selected.length > 0 && !confirm('سيتم استبدال الأصناف الحالية بأصناف المنيو لهذا اليوم. تأكيد؟')) return;
-    const refillSelect = 'meal_id, category, position, extra_quantity, meals(id, name, is_snack)';
-    const tryRefill = async (withEntity: boolean) => {
-      const q = supabase
-        .from('menu_items')
-        .select(refillSelect)
-        .eq('week_number', weekNumber)
-        .eq('day_of_week', dayOfWeek)
-        .eq('meal_type', mealType);
-      return withEntity ? q.eq('entity_type', entityType) : q;
-    };
-    let refillRes = await tryRefill(true);
-    if (refillRes.error && /entity_type|column/i.test(refillRes.error.message)) {
-      refillRes = await tryRefill(false);
+    const next = await fetchMenuSelection(weekNumber, dayOfWeek, mealType);
+    // ما نمسح الأصناف الحالية لو المنيو فاضي لهذا اليوم — نوضّح السبب بس.
+    if (next.length === 0) {
+      setError('ما فيه أصناف في المنيو لهذا اليوم — ما تم تغيير الأصناف الحالية');
+      return;
     }
-    const { data } = refillRes;
-    const items = (data as unknown as MenuItem[] | null) ?? [];
-    // الفئة من meals.category (المصدر الموحد) — نفس منطق التعبئة التلقائية أعلاه.
-    const itemsWithCat = items.map(it => {
-      const fullMeal = meals.find(m => m.id === it.meal_id);
-      const effectiveCat: ItemCategory =
-        (fullMeal?.category as ItemCategory | undefined) ??
-        (it.category as ItemCategory | undefined) ??
-        (fullMeal?.is_snack || it.meals?.is_snack ? 'snack' : 'hot');
-      return { it, effectiveCat };
-    });
-    const sorted = itemsWithCat.sort((a, b) => {
-      const r = (c: ItemCategory) => c === 'hot' ? 0 : c === 'cold' ? 1 : 2;
-      if (a.effectiveCat !== b.effectiveCat) return r(a.effectiveCat) - r(b.effectiveCat);
-      return a.it.position - b.it.position;
-    });
-    setSelected(sorted.map(({ it, effectiveCat }) => ({
-      meal_id: it.meal_id,
-      display_name: it.meals?.name ?? '',
-      extra_quantity: (it as unknown as { extra_quantity?: number }).extra_quantity ?? 0,
-      category: effectiveCat,
-      multiplier: it.multiplier ?? 1,
-    })));
+    setError('');
+    setSelected(next);
   };
 
   const toggleMeal = (meal: Meal) => {

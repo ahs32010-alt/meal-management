@@ -169,8 +169,8 @@ export default function BulkCustomization({ entityType }: Props) {
   // Unexclude — قائمة أصناف مراد إزالة استبعادها
   const [unexclMealIds, setUnexclMealIds] = useState<string[]>(['']);
   // Fixed — قائمة أصناف ثابتة، كل عنصر: صنف + أيام + كمية + تصنيف + شرط إلغاء
-  const [fixedEntries, setFixedEntries] = useState<{ mealId: string; days: Set<number>; qty: number; category: ItemCategory; suppressIfMealIds: string[] }[]>(
-    [{ mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealIds: [] }]
+  const [fixedEntries, setFixedEntries] = useState<{ mealId: string; days: Set<number>; qty: number; category: ItemCategory; suppressIfMealIds: string[]; isAlternative: boolean }[]>(
+    [{ mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealIds: [], isAlternative: false }]
   );
   // Unfixed — قائمة أصناف مراد حذف تثبيتها (days فارغة = كل الأيام)
   const [unfixedEntries, setUnfixedEntries] = useState<{ mealId: string; days: Set<number> }[]>(
@@ -354,7 +354,7 @@ export default function BulkCustomization({ entityType }: Props) {
     const valid = fixedEntries.filter(e => !!e.mealId && e.days.size > 0);
     const names = valid.map(e => {
       const m = meals.find(x => x.id === e.mealId);
-      return `"${m?.name ?? ''}" (${e.days.size} يوم × ${e.qty})`;
+      return `"${m?.name ?? ''}" (${e.days.size} يوم × ${e.qty}${e.isAlternative ? ' — صنف بديل' : ''})`;
     }).join('، ');
     return `سيتم تثبيت ${names} لـ${target}. لو الشخص عنده أياً منها في نفس الأيام تتحدّث الكمية فقط. متابعة؟`;
   }, [mode, selectedIds.size, entityLabel, exclEntries, unexclMealIds, fixedEntries, meals]);
@@ -482,7 +482,7 @@ export default function BulkCustomization({ entityType }: Props) {
           if (existingIds.length > 0) {
             const { error: upErr } = await supabase
               .from('beneficiary_fixed_meals')
-              .update({ quantity: entry.qty, category: entry.category, suppress_if_meal_ids: entry.suppressIfMealIds })
+              .update({ quantity: entry.qty, category: entry.category, suppress_if_meal_ids: entry.suppressIfMealIds, is_alternative: entry.isAlternative })
               .in('id', existingIds);
             if (upErr) {
               if (/column/i.test(upErr.message)) {
@@ -498,7 +498,7 @@ export default function BulkCustomization({ entityType }: Props) {
           for (const bid of ids) {
             for (const day of days) {
               if (!existingKeys.has(`${bid}|${day}`)) {
-                newRows.push({ beneficiary_id: bid, day_of_week: day, meal_type: mealType, meal_id: entry.mealId, quantity: entry.qty, category: entry.category, suppress_if_meal_ids: entry.suppressIfMealIds });
+                newRows.push({ beneficiary_id: bid, day_of_week: day, meal_type: mealType, meal_id: entry.mealId, quantity: entry.qty, category: entry.category, suppress_if_meal_ids: entry.suppressIfMealIds, is_alternative: entry.isAlternative });
               }
             }
           }
@@ -506,7 +506,7 @@ export default function BulkCustomization({ entityType }: Props) {
             const { error: insErr } = await supabase.from('beneficiary_fixed_meals').insert(newRows);
             if (insErr) {
               if (/column/i.test(insErr.message)) {
-                const fallback = newRows.map(r => Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'category' && k !== 'suppress_if_meal_ids')));
+                const fallback = newRows.map(r => Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'category' && k !== 'suppress_if_meal_ids' && k !== 'is_alternative')));
                 const { error: insErr2 } = await supabase.from('beneficiary_fixed_meals').insert(fallback);
                 if (insErr2) throw insErr2;
               } else { throw insErr; }
@@ -523,7 +523,7 @@ export default function BulkCustomization({ entityType }: Props) {
           details: {
             scope: 'bulk_fixed_meal',
             count: ids.length,
-            entries: validFixed.map(e => ({ meal_id: e.mealId, days: Array.from(e.days), qty: e.qty })),
+            entries: validFixed.map(e => ({ meal_id: e.mealId, days: Array.from(e.days), qty: e.qty, is_alternative: e.isAlternative })),
             for_entity: entityType,
             inserted: totalInserted,
             updated: totalUpdated,
@@ -536,7 +536,7 @@ export default function BulkCustomization({ entityType }: Props) {
             `تم تطبيق ${validFixed.length} صنف ثابت على ${ids.length} ${entityLabel}${ids.length === 1 ? '' : 'اً'} ` +
             `(${totalInserted} إضافة، ${totalUpdated} تحديث).`,
         });
-        setFixedEntries([{ mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealIds: [] }]);
+        setFixedEntries([{ mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealIds: [], isAlternative: false }]);
       }
     } catch (err) {
       setResult({ ok: false, message: err instanceof Error ? err.message : String(err) });
@@ -996,6 +996,21 @@ export default function BulkCustomization({ entityType }: Props) {
                                 {CATEGORY_THEME[cat].icon} {CATEGORY_LABELS[cat]}
                               </span>
                             </div>
+                            {/* علامة «صنف بديل» — ينتقل لجدول الأصناف البديلة في أمر التشغيل */}
+                            <button
+                              type="button"
+                              onClick={() => setFixedEntries(prev => prev.map((e, i) => i === idx ? { ...e, isAlternative: !e.isAlternative } : e))}
+                              title={entry.isAlternative
+                                ? 'مُحتسب مع الأصناف البديلة في أمر التشغيل — اضغط لإرجاعه للأصناف اليومية الثابتة'
+                                : 'اضغط لتعليمه كصنف بديل — ينتقل لجدول الأصناف البديلة في أمر التشغيل'}
+                              className={`font-bold px-2 py-0.5 rounded border transition-colors ${
+                                entry.isAlternative
+                                  ? 'bg-emerald-500 border-emerald-500 text-white shadow-sm'
+                                  : 'bg-white border-dashed border-slate-300 text-slate-400 hover:border-emerald-400 hover:text-emerald-600'
+                              }`}
+                            >
+                              {entry.isAlternative ? '✓ صنف بديل' : 'صنف بديل'}
+                            </button>
                             <div className="flex items-center gap-1.5 mr-auto">
                               <span>الكمية:</span>
                               <button type="button" onClick={() => setFixedEntries(prev => prev.map((e, i) => i === idx ? { ...e, qty: Math.max(1, e.qty - 1) } : e))} className="w-6 h-6 rounded bg-white border border-slate-200 text-slate-500 hover:bg-slate-100 font-bold">−</button>
@@ -1066,13 +1081,13 @@ export default function BulkCustomization({ entityType }: Props) {
               </div>
               <button
                 type="button"
-                onClick={() => setFixedEntries(prev => [...prev, { mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealIds: [] }])}
+                onClick={() => setFixedEntries(prev => [...prev, { mealId: '', days: new Set<number>(), qty: 1, category: 'hot' as ItemCategory, suppressIfMealIds: [], isAlternative: false }])}
                 className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 flex items-center gap-1"
               >
                 <span className="text-base leading-none">+</span> إضافة صنف ثابت آخر
               </button>
               <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-600 leading-relaxed">
-                💡 لو الشخص عنده أي من هذه الأصناف ثابتاً في يوم من الأيام المختارة، تتحدّث الكمية والتصنيف فقط. باقي أصنافه الثابتة لا تتأثر.
+                💡 لو الشخص عنده أي من هذه الأصناف ثابتاً في يوم من الأيام المختارة، تتحدّث الكمية والتصنيف وعلامة البديل فقط. باقي أصنافه الثابتة لا تتأثر.
               </div>
             </div>
           )}

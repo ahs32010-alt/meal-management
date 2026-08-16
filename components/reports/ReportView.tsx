@@ -24,7 +24,8 @@ interface ExcludedItem { meal: Meal; alternative: Meal | null }
 interface BeneficiaryDetail {
   beneficiary: { id: string; name: string; code: string; villa?: string; category: string };
   excludedItems: ExcludedItem[];
-  fixedItems: { meal: Meal; quantity: number }[];
+  // is_alternative = صنف ثابت معلَّم كبديل → يُعرض في عمود «البديل» ويُحتسب مع البدائل
+  fixedItems: { meal: Meal; quantity: number; is_alternative?: boolean }[];
 }
 interface MealCount { meal: Meal; gets?: number; qty?: number; quantity?: number }
 interface FullReport {
@@ -553,7 +554,13 @@ export default function ReportView({ initialOrderId }: Props) {
                           </tr>
                         </thead>
                         <tbody>
-                          {withCustom.map((detail, i) => (
+                          {withCustom.map((detail, i) => {
+                          // الأصناف الثابتة المعلَّمة كـ«بديل» تُعرض في عمود البديل
+                          // مع بدائل المحظورات، وتختفي من عمود الثابت اليومي.
+                          const altFixed = detail.fixedItems.filter(f => f.is_alternative);
+                          const plainFixed = detail.fixedItems.filter(f => !f.is_alternative);
+                          const exclAlts = detail.excludedItems.filter(x => x.alternative);
+                          return (
                             <tr key={detail.beneficiary.id} className="hover:bg-slate-50">
                               <td className="table-cell text-slate-400 text-xs">{i + 1}</td>
                               <td className="table-cell font-semibold text-slate-800">{detail.beneficiary.name}</td>
@@ -571,23 +578,31 @@ export default function ReportView({ initialOrderId }: Props) {
                                   ))}</div>}
                               </td>
                               <td className="table-cell">
-                                {detail.excludedItems.every(x => !x.alternative)
+                                {exclAlts.length === 0 && altFixed.length === 0
                                   ? <span className="text-slate-300 text-xs">—</span>
-                                  : <div className="space-y-0.5">{detail.excludedItems.map(({ meal, alternative }) => (
-                                    <div key={meal.id}>{alternative && <span className="badge bg-emerald-100 text-emerald-700 text-xs">{alternative.name}</span>}</div>
-                                  ))}</div>}
+                                  : <div className="flex flex-wrap gap-1">
+                                    {exclAlts.map(({ meal, alternative }) => (
+                                      <span key={meal.id} className="badge bg-emerald-100 text-emerald-700 text-xs">{alternative!.name}</span>
+                                    ))}
+                                    {altFixed.map(({ meal, quantity }) => (
+                                      <span key={`f_${meal.id}`} className="badge bg-emerald-100 text-emerald-700 text-xs">
+                                        {meal.name}{quantity > 1 ? <span className="font-bold mr-0.5">×{quantity}</span> : ''}
+                                      </span>
+                                    ))}
+                                  </div>}
                               </td>
                               <td className="table-cell">
-                                {detail.fixedItems.length === 0
+                                {plainFixed.length === 0
                                   ? <span className="text-slate-300 text-xs">—</span>
-                                  : <div className="flex flex-wrap gap-1">{detail.fixedItems.map(({ meal, quantity }) => (
+                                  : <div className="flex flex-wrap gap-1">{plainFixed.map(({ meal, quantity }) => (
                                     <span key={meal.id} className="badge bg-violet-100 text-violet-700 text-xs">
                                       {meal.name}{quantity > 1 ? <span className="font-bold mr-0.5">×{quantity}</span> : ''}
                                     </span>
                                   ))}</div>}
                               </td>
                             </tr>
-                          ))}
+                          );
+                          })}
                         </tbody>
                       </table>
                     </div>
