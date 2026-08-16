@@ -35,6 +35,14 @@ jobs:
 
       - name: Test
         run: npm test
+        # الاختبارات وحدات نقية ولا تحتاج Supabase. عناوين الـplaceholder أعلاه
+        # تبدو صالحة، فالكود يحاول الاتصال بها فعلياً ويعلّق حتى ينتهي المهلة
+        # (executePlan ينتظر تسجيل النشاط على الخادم). نفرّغها هنا فيفشل تحقّق
+        # البيئة فوراً — نفس ما يحصل على أجهزة المطوّرين حيث المتغيّرات غير مضبوطة.
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ''
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ''
+          SUPABASE_SERVICE_ROLE_KEY: ''
 
       - name: Build
         run: npm run build
