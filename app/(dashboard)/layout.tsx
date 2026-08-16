@@ -16,10 +16,12 @@ const PAGE_TITLES: Record<string, string> = {
   '/meals':         'الأصناف',
   '/orders':          'أوامر التشغيل',
   '/delivery-orders': 'أوامر التسليم',
+  '/costs':           'التكاليف',
   '/reports':         'التقارير',
   '/stickers':      'ستيكرات الفطور',
   '/lunch-dinner-stickers': 'ستيكرات الغداء والعشاء',
   '/approvals':     'الموافقات',
+  '/assistant':     'المساعد الذكي',
   '/settings':      'الإعدادات',
 };
 

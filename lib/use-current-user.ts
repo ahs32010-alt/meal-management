@@ -7,7 +7,7 @@
 //      الصلاحيات، تتحدّث فوراً عند المستخدم بدون refresh.
 
 import { useCallback, useEffect, useState } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
 import type { AppUser } from '@/lib/permissions';
 
 const CACHE_KEY = 'kha:user';
@@ -47,7 +47,6 @@ function writeCache(entry: CachedEntry) {
 async function fetchUser(): Promise<AppUser | null> {
   if (inflight) return inflight;
   inflight = (async () => {
-    const supabase = createClient();
     // نستخدم getSession() بدل getUser() — getSession يقرأ من localStorage
     // محلياً بلا قفل ولا طلب شبكة، فيتفادى التصادم لما عدة hooks ينادون معاً.
     const { data: { session } } = await supabase.auth.getSession();
@@ -76,13 +75,12 @@ function notify(u: AppUser | null) {
 // Singleton realtime subscription — كل instances الـhook يشاركون قناة واحدة
 // عالمية بدل ما كل instance يفتح قناة جديدة بنفس الاسم (يسبب: cannot add
 // postgres_changes callbacks after subscribe).
-type RealtimeChannel = ReturnType<ReturnType<typeof createClient>['channel']>;
+type RealtimeChannel = ReturnType<typeof supabase.channel>;
 let globalChannel: RealtimeChannel | null = null;
 let globalChannelUserId: string | null = null;
 
 function ensureRealtimeSubscription(userId: string) {
   if (globalChannelUserId === userId && globalChannel) return;
-  const supabase = createClient();
   // نظّف القناة القديمة لو كانت لمستخدم آخر (تبديل حسابات في نفس التبويب)
   if (globalChannel) {
     try { supabase.removeChannel(globalChannel); } catch { /* ignore */ }

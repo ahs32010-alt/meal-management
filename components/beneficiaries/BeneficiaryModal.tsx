@@ -9,6 +9,7 @@ import { enqueueCreate, enqueueUpdate, type CreatePayload } from '@/lib/pending-
 import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
+import DietTypeSelect from '@/components/shared/DietTypeSelect';
 
 interface Props {
   beneficiary: Beneficiary | null;
@@ -606,7 +607,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                 <div><label className="label">الفئة</label>
                   <input value={category} onChange={e => setCategory(e.target.value)} className="input-field" placeholder="موظف، طالب..." /></div>
                 <div><label className="label">النظام الغذائي</label>
-                  <input value={dietType} onChange={e => setDietType(e.target.value)} className="input-field" placeholder="نباتي، خالٍ من الغلوتين..." /></div>
+                  <DietTypeSelect value={dietType} onChange={setDietType} /></div>
               </div>
               <div><label className="label">ملاحظات</label>
                 <textarea value={notes} onChange={e => setNotes(e.target.value)} className="input-field h-20 resize-none" placeholder="أي ملاحظات إضافية..." /></div>

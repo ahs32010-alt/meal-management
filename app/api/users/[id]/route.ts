@@ -85,6 +85,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       permissions_changed: permissions !== undefined,
       approval_required_changed: approval_required !== undefined,
     },
+    page: '/settings',
   });
 
   return NextResponse.json({ user: row });
@@ -132,6 +133,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     entity_id: params.id,
     entity_name: target?.full_name ?? target?.email ?? null,
     details: target ? { email: target.email } : null,
+    page: '/settings',
   });
 
   return NextResponse.json({ ok: true });

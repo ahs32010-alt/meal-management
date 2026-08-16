@@ -4,12 +4,11 @@
 // realtime عشان العداد ينحدّث فوراً عند أي تغيير في pending_actions.
 
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
 import { useCurrentUser } from './use-current-user';
 
 export function usePendingCount(): number {
   const { user } = useCurrentUser();
-  const supabase = useMemo(() => createClient(), []);
   const channelId = useId();
   const [count, setCount] = useState(0);
 
@@ -27,7 +26,7 @@ export function usePendingCount(): number {
       return;
     }
     setCount(c ?? 0);
-  }, [supabase, user]);
+  }, [user]);
 
   useEffect(() => { fetchCount(); }, [fetchCount]);
 
@@ -41,7 +40,7 @@ export function usePendingCount(): number {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_actions' }, () => fetchRef.current())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [supabase, user, channelId]);
+  }, [user, channelId]);
 
   return count;
 }

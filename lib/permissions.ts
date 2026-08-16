@@ -13,9 +13,11 @@ export type PageKey =
   | 'menu'
   | 'orders'
   | 'delivery_orders'
+  | 'costs'
   | 'reports'
   | 'stickers'
   | 'lunch_dinner_stickers'
+  | 'assistant'
   | 'settings';
 
 export type PermissionAction = 'view' | 'add' | 'edit' | 'delete';
@@ -51,9 +53,11 @@ export const PAGES: { key: PageKey; label: string; href: string }[] = [
   { key: 'menu',          label: 'قائمة الطعام', href: '/menu' },
   { key: 'orders',          label: 'أوامر التشغيل', href: '/orders' },
   { key: 'delivery_orders', label: 'أوامر التسليم', href: '/delivery-orders' },
+  { key: 'costs',           label: 'التكاليف',      href: '/costs' },
   { key: 'reports',         label: 'التقارير',     href: '/reports' },
   { key: 'stickers',      label: 'ستيكرات الفطور', href: '/stickers' },
   { key: 'lunch_dinner_stickers', label: 'ستيكرات الغداء والعشاء', href: '/lunch-dinner-stickers' },
+  { key: 'assistant',     label: 'المساعد الذكي', href: '/assistant' },
   { key: 'settings',      label: 'الإعدادات',    href: '/settings' },
 ];
 
@@ -76,9 +80,13 @@ export const PAGE_AVAILABLE_ACTIONS: Record<PageKey, PermissionAction[]> = {
   menu:          ['view', 'edit'],
   orders:          ['view', 'add', 'edit', 'delete'],
   delivery_orders: ['view', 'add', 'edit', 'delete'],
+  // التكاليف: add/edit/delete تخص المواد الأولية والوصفات.
+  // edit يشمل أيضاً اعتماد (تجميد) تكلفة أمر التشغيل.
+  costs:           ['view', 'add', 'edit', 'delete'],
   reports:         ['view'],
   stickers:      ['view'],
   lunch_dinner_stickers: ['view'],
+  assistant:     ['view'],
   settings:      ['view', 'edit'],
 };
 

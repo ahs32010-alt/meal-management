@@ -1,6 +1,7 @@
 'use client';
 
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
+import { PAGE_DETAIL_KEY } from '@/lib/activity-describe';
 
 export type ActivityAction = 'create' | 'update' | 'delete';
 
@@ -13,7 +14,11 @@ export type ActivityEntityType =
   | 'transliteration'
   | 'fixed_meal'
   | 'exclusion'
-  | 'backup';
+  | 'backup'
+  | 'raw_material'
+  | 'cost_unit'
+  | 'recipe_item'
+  | 'order_cost';
 
 export interface LogActivityInput {
   action: ActivityAction;
@@ -45,14 +50,24 @@ function readCachedAppUser(): CachedAppUser | null {
 
 export async function logActivity(input: LogActivityInput): Promise<void> {
   try {
-    const supabase = createClient();
-
+    // نستخدم العميل المفرد المشترك. إنشاء عميل جديد هنا كان يخلق GoTrueClient
+    // إضافياً يزاحم على نفس قفل `lock:${storageKey}` الذي يمر عليه كل طلب
+    // PostgREST — فيتأخر الحفظ ثوانيَ، ويسوء كلما طالت الجلسة لأن كل عميل
+    // يترك مؤقّت تحديث توكن لا يُنظَّف.
     let info = readCachedAppUser();
     if (!info) {
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth?.user) return;
-      info = { id: auth.user.id, email: auth.user.email ?? null, full_name: null };
+      // getSession يقرأ من التخزين المحلي بلا طلب شبكة — نفس السبب المشروح في
+      // lib/use-current-user.ts. getUser كان يطلب الشبكة وهو ماسك القفل
+      // المشترك، فيوقف الحفظ الجاري خلفه.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return;
+      info = { id: session.user.id, email: session.user.email ?? null, full_name: null };
     }
+
+    // الصفحة تُلتقط هنا مرة وحدة بدل ما تُمرَّر يدوياً من 40+ نقطة استدعاء،
+    // عشان كل عملية تعرف من أي صفحة صارت حتى لو ما مرّرت شيء.
+    const page = typeof window !== 'undefined' ? window.location.pathname : null;
+    const details = { ...(input.details ?? {}), [PAGE_DETAIL_KEY]: page };
 
     await supabase.from('activity_log').insert({
       user_id: info.id,
@@ -62,7 +77,7 @@ export async function logActivity(input: LogActivityInput): Promise<void> {
       entity_type: input.entity_type,
       entity_id: input.entity_id ?? null,
       entity_name: input.entity_name ?? null,
-      details: input.details ?? null,
+      details,
     });
   } catch (err) {
     if (process.env.NODE_ENV !== 'production') {
@@ -81,6 +96,10 @@ export const ENTITY_LABELS: Record<ActivityEntityType, string> = {
   fixed_meal: 'صنف ثابت',
   exclusion: 'محظور',
   backup: 'نسخة احتياطية',
+  raw_material: 'مادة أولية',
+  cost_unit: 'وحدة قياس',
+  recipe_item: 'مكوّن وصفة',
+  order_cost: 'تكلفة أمر',
 };
 
 export const ACTION_LABELS_AR: Record<ActivityAction, string> = {
@@ -105,4 +124,8 @@ export const ENTITY_STYLES: Record<ActivityEntityType, string> = {
   fixed_meal: 'bg-teal-50 text-teal-700 border-teal-200',
   exclusion: 'bg-rose-50 text-rose-700 border-rose-200',
   backup: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+  raw_material: 'bg-lime-50 text-lime-700 border-lime-200',
+  cost_unit: 'bg-sky-50 text-sky-700 border-sky-200',
+  recipe_item: 'bg-orange-50 text-orange-700 border-orange-200',
+  order_cost: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200',
 };

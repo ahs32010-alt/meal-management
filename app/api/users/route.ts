@@ -87,6 +87,7 @@ export async function POST(req: NextRequest) {
     entity_id: created.user.id,
     entity_name: cleanFullName ?? email,
     details: { email, is_admin: Boolean(is_admin) },
+    page: '/settings',
   });
 
   return NextResponse.json({ user: row });

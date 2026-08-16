@@ -92,6 +92,7 @@ export async function POST(req: NextRequest) {
     entity_id: auth.userId,
     entity_name: null,
     details: { avatar_changed: true },
+    page: '/settings',
   });
 
   return NextResponse.json({ avatar_url: row.avatar_url });
@@ -132,6 +133,7 @@ export async function DELETE(req: NextRequest) {
     entity_id: auth.userId,
     entity_name: null,
     details: { avatar_removed: true },
+    page: '/settings',
   });
 
   return NextResponse.json({ ok: true });

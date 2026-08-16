@@ -8,7 +8,7 @@
 //   if (hasDelete(meal.id)) { /* اعرض شطب أحمر */ }
 
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
-import { createClient } from '@/lib/supabase-client';
+import { supabase } from '@/lib/supabase-client';
 import { useCurrentUser } from './use-current-user';
 import type { PendingAction, PendingEntityType } from './pending-actions';
 
@@ -30,7 +30,6 @@ export interface MyPendingState {
 
 export function useMyPending(entityType: PendingEntityType): MyPendingState {
   const { user } = useCurrentUser();
-  const supabase = useMemo(() => createClient(), []);
   const channelId = useId();
   const [items, setItems] = useState<PendingAction[]>([]);
   const [ready, setReady] = useState(false);
@@ -46,7 +45,7 @@ export function useMyPending(entityType: PendingEntityType): MyPendingState {
       .order('created_at', { ascending: false });
     if (!error) setItems((data ?? []) as PendingAction[]);
     setReady(true);
-  }, [supabase, user, entityType]);
+  }, [user, entityType]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -60,7 +59,7 @@ export function useMyPending(entityType: PendingEntityType): MyPendingState {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_actions' }, () => fetchRef.current())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [supabase, user, entityType, channelId]);
+  }, [user, entityType, channelId]);
 
   const updates = useMemo(() => new Set(items.filter(i => i.action === 'update' && i.entity_id).map(i => i.entity_id!)), [items]);
   const deletes = useMemo(() => new Set(items.filter(i => i.action === 'delete' && i.entity_id).map(i => i.entity_id!)), [items]);

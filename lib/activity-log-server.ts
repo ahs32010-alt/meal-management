@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase-admin';
 import type { ActivityAction, ActivityEntityType } from '@/lib/activity-log';
+import { PAGE_DETAIL_KEY } from '@/lib/activity-describe';
 
 interface LogServerInput {
   user_id: string | null;
@@ -10,6 +11,11 @@ interface LogServerInput {
   entity_id?: string | null;
   entity_name?: string | null;
   details?: Record<string, unknown> | null;
+  /**
+   * الصفحة اللي انطلقت منها العملية. على السيرفر ما فيه window،
+   * فالمسار يُمرَّر من الـroute نفسه.
+   */
+  page?: string | null;
 }
 
 export async function logActivityServer(input: LogServerInput): Promise<void> {
@@ -38,7 +44,7 @@ export async function logActivityServer(input: LogServerInput): Promise<void> {
       entity_type: input.entity_type,
       entity_id: input.entity_id ?? null,
       entity_name: input.entity_name ?? null,
-      details: input.details ?? null,
+      details: { ...(input.details ?? {}), [PAGE_DETAIL_KEY]: input.page ?? null },
     });
   } catch (err) {
     if (process.env.NODE_ENV !== 'production') {

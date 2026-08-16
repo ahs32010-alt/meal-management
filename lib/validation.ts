@@ -1,18 +1,9 @@
 import { z } from 'zod';
-import type { PageKey, PermissionAction } from '@/lib/permissions';
+import { PAGES, type PageKey, type PermissionAction } from '@/lib/permissions';
 
-const PAGE_KEYS: readonly PageKey[] = [
-  'dashboard',
-  'beneficiaries',
-  'companions',
-  'meals',
-  'menu',
-  'orders',
-  'delivery_orders',
-  'reports',
-  'stickers',
-  'settings',
-] as const;
+// تُشتق من PAGES مباشرة بدل قائمة يدوية — القائمة اليدوية كانت تتأخّر عن
+// الصفحات الجديدة، و z.record يرفض أي مفتاح خارجها فيفشل حفظ الصلاحيات كاملاً.
+const PAGE_KEYS = PAGES.map(p => p.key) as [PageKey, ...PageKey[]];
 
 const ACTIONS: readonly PermissionAction[] = ['view', 'add', 'edit', 'delete'] as const;
 
@@ -24,7 +15,7 @@ const pagePermissionSchema = z.object({
 });
 
 export const permissionsMapSchema = z
-  .record(z.enum(PAGE_KEYS as unknown as [PageKey, ...PageKey[]]), pagePermissionSchema)
+  .record(z.enum(PAGE_KEYS), pagePermissionSchema)
   .refine(
     (val) => Object.values(val).every((p) => Object.keys(p).every((k) => (ACTIONS as readonly string[]).includes(k))),
     { message: 'Invalid permission action key' }
@@ -37,7 +28,7 @@ const approvalActionSchema = z.object({
   delete: z.boolean().optional(),
 });
 export const approvalRequiredMapSchema = z
-  .record(z.enum(PAGE_KEYS as unknown as [PageKey, ...PageKey[]]), approvalActionSchema);
+  .record(z.enum(PAGE_KEYS), approvalActionSchema);
 
 const trimmedString = (min: number, max: number) =>
   z.string().trim().min(min).max(max);
