@@ -44,6 +44,54 @@ export interface CreatePayload {
     // معلَّم كـ«بديل» → يُحتسب ضمن الأصناف البديلة في أمر التشغيل
     is_alternative?: boolean;
   }>;
+  /**
+   * قرارات المنيو على خانة محددة (أسبوع + يوم + وجبة) — من تبويب «المنيو
+   * المخصّص». اختيارية: الطلبات القديمة (وقبل تشغيل ترقية القرارات) ما تحملها.
+   */
+  menu_overrides?: Array<{
+    week_number: number;
+    day_of_week: number;
+    meal_type: string;
+    action: 'replace' | 'remove' | 'add';
+    base_meal_id?: string | null;
+    target_meal_id?: string | null;
+    quantity?: number;
+    is_alternative?: boolean;
+  }>;
+}
+
+/**
+ * كتابة قرارات المنيو لمستفيد واحد: مسح ثم إدراج — نفس دلالة المحظورات
+ * والأصناف الثابتة في BeneficiaryModal.
+ *
+ * لو الجدول غير موجود (ترقية القرارات ما اتشغّلت) نتجاهل بصمت بدل ما نفشّل
+ * الموافقة كلها — بقية بيانات المستفيد تُطبَّق كما هي.
+ */
+async function replaceMenuOverrides(
+  supabase: SupabaseClient,
+  beneficiaryId: string,
+  overrides: CreatePayload['menu_overrides'],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const missingTable = (msg: string) =>
+    /beneficiary_menu_overrides|relation .* does not exist|schema cache|could not find the table/i.test(msg);
+
+  const { error: delErr } = await supabase
+    .from('beneficiary_menu_overrides')
+    .delete()
+    .eq('beneficiary_id', beneficiaryId);
+  if (delErr) {
+    if (missingTable(delErr.message)) return { ok: true };
+    return { ok: false, error: delErr.message };
+  }
+
+  if (!overrides?.length) return { ok: true };
+  const rows = overrides.map(ov => ({ ...ov, beneficiary_id: beneficiaryId }));
+  const { error: insErr } = await supabase.from('beneficiary_menu_overrides').insert(rows);
+  if (insErr) {
+    if (missingTable(insErr.message)) return { ok: true };
+    return { ok: false, error: insErr.message };
+  }
+  return { ok: true };
 }
 
 // نوع موحّد لنتيجة enqueue: ok=true عند النجاح، ok=false مع سبب الفشل،
@@ -267,6 +315,9 @@ export async function approveAction(
         }
         if (fmErr) return { ok: false, error: `تم إنشاء المستفيد لكن الأصناف الثابتة فشلت: ${fmErr.message}` };
       }
+
+      const ovRes = await replaceMenuOverrides(supabase, newId, cp.menu_overrides);
+      if (!ovRes.ok) return { ok: false, error: `تم إنشاء المستفيد لكن قرارات المنيو فشلت: ${ovRes.error}` };
     } else if (pa.action === 'update') {
       const cp = pa.payload as unknown as CreatePayload | null;
       if (!pa.entity_id || !cp?.beneficiary) return { ok: false, error: 'payload أو entity_id مفقود' };
@@ -297,6 +348,10 @@ export async function approveAction(
         }
         if (fmErr) return { ok: false, error: `إضافة الأصناف الثابتة فشلت: ${fmErr.message}` };
       }
+
+      // استبدال قرارات المنيو
+      const ovRes = await replaceMenuOverrides(supabase, id, cp.menu_overrides);
+      if (!ovRes.ok) return { ok: false, error: `تحديث قرارات المنيو فشل: ${ovRes.error}` };
     }
 
     const { error: upErr } = await supabase

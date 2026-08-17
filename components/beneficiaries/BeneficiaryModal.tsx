@@ -30,6 +30,22 @@ interface ExclusionEntry {
   alternative_meal_id: string;
 }
 
+/**
+ * قرار على خانة واحدة من المنيو — صف في beneficiary_menu_overrides.
+ * `id` موجود للصفوف المقروءة من القاعدة، وغائب للقرارات الجديدة قبل الحفظ.
+ */
+export type MenuOverrideEntry = {
+  id?: string;
+  week_number: number;
+  day_of_week: number;
+  meal_type: MealType;
+  action: 'replace' | 'remove' | 'add';
+  base_meal_id?: string | null;
+  target_meal_id?: string | null;
+  quantity?: number;
+  is_alternative?: boolean;
+};
+
 type FixedEntry = {
   meal_id: string; meal_type: MealType; days: Set<number>; quantity: number;
   category: ItemCategory; suppress_if_meal_ids: string[];
@@ -316,6 +332,38 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
     buildFixedEntries(beneficiary?.fixed_meals, meals)
   );
 
+  /**
+   * قرارات المنيو على خانة محددة (تبويب «المنيو المخصّص»). تُقرأ من القاعدة عند
+   * فتح النافذة وتُحفظ مع بقية البيانات بزر الحفظ — تماماً كالمحظورات والثابتة.
+   */
+  const [overrides, setOverrides] = useState<MenuOverrideEntry[]>([]);
+  const [overridesReady, setOverridesReady] = useState(false);
+  // الجدول غير موجود (ترقية القرارات ما اتشغّلت) → نمنع التحرير بدل ما نضيّع تعديلاً
+  const [overridesTableMissing, setOverridesTableMissing] = useState(false);
+
+  useEffect(() => {
+    if (!beneficiary) { setOverridesReady(true); return; }
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('beneficiary_menu_overrides')
+        .select('id, week_number, day_of_week, meal_type, action, base_meal_id, target_meal_id, quantity, is_alternative')
+        .eq('beneficiary_id', beneficiary.id)
+        .order('id');
+      if (cancelled) return;
+      if (error) {
+        if (/beneficiary_menu_overrides|does not exist|schema cache|could not find the table/i.test(error.message)) {
+          setOverridesTableMissing(true);
+        }
+        setOverridesReady(true);
+        return;
+      }
+      setOverrides((data ?? []) as unknown as MenuOverrideEntry[]);
+      setOverridesReady(true);
+    })();
+    return () => { cancelled = true; };
+  }, [beneficiary]);
+
   // For adding new fixed meal — صار اختيار وجبة + اختيار صنف/سناك بشكل مستقل
   const [addingFixed, setAddingFixed] = useState(false);
   const [newFixedMealType, setNewFixedMealType] = useState<MealType>('breakfast');
@@ -392,6 +440,76 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const mealById = (id: string) => meals.find(m => m.id === id);
   const excludedMealIds = exclusions.map(e => e.meal_id);
 
+  // ── أوامر تبويب «المنيو المخصّص» ──────────────────────────────────────────
+  // كل أمر يكتب في **نفس** حالة التبويبات الأخرى، فالانعكاس متبادل ولحظي:
+  //   نطاق «كل الأيام»    → exclusions      (يظهر في تبويب المحظورات)
+  //   نطاق «كل نفس اليوم» → fixedEntries    (يظهر في تبويب الثابتة الأسبوعية)
+  //   نطاق «هذه الخانة»   → overrides       (خاص بالمنيو — أدق من الاثنين)
+  const menuActions = {
+    /** تبديل/حذف عام: يسري على كل خانة فيها الصنف — نفس صف تبويب المحظورات */
+    setGlobalExclusion: (baseMealId: string, altMealId: string | null) =>
+      setExclusions(prev => prev.some(e => e.meal_id === baseMealId)
+        ? prev.map(e => e.meal_id === baseMealId ? { ...e, alternative_meal_id: altMealId ?? '' } : e)
+        : [...prev, { meal_id: baseMealId, alternative_meal_id: altMealId ?? '' }]),
+
+    clearGlobalExclusion: (baseMealId: string) =>
+      setExclusions(prev => prev.filter(e => e.meal_id !== baseMealId)),
+
+    /** قرار خانة واحدة: يستبدل قرار الصنف نفسه في نفس الخانة إن وُجد */
+    setSlotOverride: (ov: MenuOverrideEntry) =>
+      setOverrides(prev => {
+        const sameSlot = (o: MenuOverrideEntry) =>
+          o.week_number === ov.week_number && o.day_of_week === ov.day_of_week && o.meal_type === ov.meal_type;
+        const rest = prev.filter(o => !(
+          sameSlot(o) && (
+            ov.action === 'add'
+              ? o.action === 'add' && o.target_meal_id === ov.target_meal_id
+              : o.action !== 'add' && o.base_meal_id === ov.base_meal_id
+          )
+        ));
+        return [...rest, ov];
+      }),
+
+    clearSlotOverride: (slot: { week_number: number; day_of_week: number; meal_type: MealType }, mealId: string) =>
+      setOverrides(prev => prev.filter(o => !(
+        o.week_number === slot.week_number &&
+        o.day_of_week === slot.day_of_week &&
+        o.meal_type === slot.meal_type &&
+        (o.action === 'add' ? o.target_meal_id === mealId : o.base_meal_id === mealId)
+      ))),
+
+    /** إضافة أسبوعية: كل نفس اليوم — نفس صف تبويب الأصناف الثابتة */
+    addWeeklyFixed: (meal: Meal, mealType: MealType, day: number, quantity: number, isAlternative: boolean) =>
+      setFixedEntries(prev => {
+        const idx = prev.findIndex(fe => fe.meal_id === meal.id && fe.meal_type === mealType);
+        if (idx >= 0) {
+          const next = [...prev];
+          const days = new Set(next[idx].days);
+          days.add(day);
+          next[idx] = { ...next[idx], days, quantity, is_alternative: isAlternative };
+          return next;
+        }
+        const category: ItemCategory = (meal.category as ItemCategory | undefined) ?? (meal.is_snack ? 'snack' : 'hot');
+        return [...prev, {
+          meal_id: meal.id, meal_type: mealType, days: new Set([day]),
+          quantity, category, suppress_if_meal_ids: [], is_alternative: isAlternative,
+        }];
+      }),
+
+    /** حذف يوم واحد من صنف ثابت — بقية الأيام تبقى كما هي */
+    removeWeeklyFixedDay: (mealId: string, mealType: MealType, day: number) =>
+      setFixedEntries(prev => prev.flatMap(fe => {
+        if (fe.meal_id !== mealId || fe.meal_type !== mealType) return [fe];
+        const days = new Set(fe.days);
+        days.delete(day);
+        return days.size === 0 ? [] : [{ ...fe, days }];
+      })),
+
+    setWeeklyFixedQuantity: (mealId: string, mealType: MealType, quantity: number) =>
+      setFixedEntries(prev => prev.map(fe =>
+        fe.meal_id === mealId && fe.meal_type === mealType ? { ...fe, quantity } : fe)),
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !code.trim()) { setError('الاسم والكود مطلوبان'); return; }
@@ -426,6 +544,19 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
     try {
       const isEdit = !!beneficiary;
 
+      // صفوف قرارات المنيو كما تُكتب في القاعدة — الـid يُترك للقاعدة تولّده،
+      // لأن الحفظ يمسح صفوف المستفيد ثم يعيد إدراجها (نفس دلالة المحظورات).
+      const overrideRows = () => overrides.map(ov => ({
+        week_number: ov.week_number,
+        day_of_week: ov.day_of_week,
+        meal_type: ov.meal_type,
+        action: ov.action,
+        base_meal_id: ov.base_meal_id ?? null,
+        target_meal_id: ov.target_meal_id ?? null,
+        quantity: ov.quantity ?? 1,
+        is_alternative: ov.is_alternative === true,
+      }));
+
       // إذا ما عند المستخدم صلاحية الإجراء المطلوب، نحوّله لنظام الموافقات.
       // البيانات المرسَلة (المحظورات والأصناف الثابتة) تتخزّن في payload وتُطبَّق عند القبول.
       const buildPayload = (): CreatePayload => ({
@@ -445,6 +576,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
             is_alternative: fe.is_alternative,
           }))
         ),
+        menu_overrides: overrideRows(),
       });
 
       if (!isEdit && addNeedsApproval && currentUser) {
@@ -523,6 +655,34 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
         }
       }
 
+      // ── قرارات المنيو (خانة محددة) — مسح ثم إدراج، نفس دلالة ما فوق ──
+      // لو الجدول غير موجود (الترقية ما اتشغّلت) ننبّه ولا نفشّل الحفظ: بقية
+      // بيانات المستفيد محفوظة أصلاً في هذه المرحلة.
+      const ovRows = overrideRows();
+      const ovTableMissing = (msg: string) =>
+        /beneficiary_menu_overrides|does not exist|schema cache|could not find the table/i.test(msg);
+      const { error: ovDelErr } = await supabase
+        .from('beneficiary_menu_overrides')
+        .delete()
+        .eq('beneficiary_id', beneficiaryId);
+      if (ovDelErr && !ovTableMissing(ovDelErr.message)) throw ovDelErr;
+      if (!ovDelErr && ovRows.length > 0) {
+        const { error: ovInsErr } = await supabase
+          .from('beneficiary_menu_overrides')
+          .insert(ovRows.map(r => ({ ...r, beneficiary_id: beneficiaryId })));
+        if (ovInsErr) {
+          if (ovTableMissing(ovInsErr.message)) {
+            alert(
+              'تنبيه: تم حفظ المستفيد لكن تعديلات «المنيو المخصّص» لم تُحفظ.\n\n' +
+              'الحل: شغّل ملف الترقية مرة واحدة في Supabase SQL Editor:\n' +
+              '• supabase/beneficiary-menu-overrides-migration.sql'
+            );
+          } else {
+            throw ovInsErr;
+          }
+        }
+      }
+
       void logActivity({
         action: isEdit ? 'update' : 'create',
         entity_type: entityType,
@@ -535,6 +695,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           entity_type: entityType,
           exclusions_count: exclusions.length,
           fixed_meals_count: fixedRows.length,
+          menu_overrides_count: ovRows.length,
         },
       });
 
@@ -953,6 +1114,10 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
               beneficiaryName={name}
               exclusions={exclusions}
               fixed={fixedEntries}
+              overrides={overrides}
+              overridesReady={overridesReady}
+              overridesTableMissing={overridesTableMissing}
+              actions={menuActions}
             />
           )}
 
