@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
@@ -11,6 +12,9 @@ import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS } from '@/
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import DietTypeSelect from '@/components/shared/DietTypeSelect';
 
+// تبويب «المنيو» — عرض فقط، ويُحمَّل عند فتحه فقط عشان ما يثقّل النافذة
+const BeneficiaryMenuTab = dynamic(() => import('./BeneficiaryMenuTab'), { ssr: false });
+
 interface Props {
   beneficiary: Beneficiary | null;
   meals: Meal[];
@@ -19,7 +23,7 @@ interface Props {
   onSaved: () => void;
 }
 
-type Tab = 'info' | 'exclusions' | 'fixed';
+type Tab = 'info' | 'exclusions' | 'fixed' | 'menu';
 
 interface ExclusionEntry {
   meal_id: string;
@@ -551,6 +555,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
     info: 'البيانات',
     exclusions: `المحظورات${exclusions.length ? ` (${exclusions.length})` : ''}`,
     fixed: `الثابتة الأسبوعية${totalFixed ? ` (${totalFixed})` : ''}`,
+    menu: 'المنيو المخصّص',
   };
 
   // Group exclusions by section
@@ -565,7 +570,11 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[93vh] overflow-hidden shadow-2xl flex flex-col">
+      {/* تبويب المنيو يعرض شبكة الأسبوع كاملة (٧ أعمدة) فيحتاج عرضاً أكبر —
+          بقية التبويبات تبقى بنفس عرضها القديم بالضبط. */}
+      <div className={`bg-white rounded-2xl w-full max-h-[93vh] overflow-hidden shadow-2xl flex flex-col transition-[max-width] duration-200 ${
+        activeTab === 'menu' ? 'max-w-[min(1200px,96vw)]' : 'max-w-2xl'
+      }`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <h2 className="text-lg font-bold text-slate-800">
             {beneficiary ? `تعديل ${entitySingular}` : `إضافة ${entitySingular} جديد`}
@@ -573,10 +582,10 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-lg">✕</button>
         </div>
 
-        <div className="flex border-b border-slate-100 px-4">
-          {(['info', 'exclusions', 'fixed'] as Tab[]).map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className={`px-4 py-3 text-sm font-semibold border-b-2 transition-colors ${activeTab === tab ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+        <div className="flex border-b border-slate-100 px-4 overflow-x-auto">
+          {(['info', 'exclusions', 'fixed', 'menu'] as Tab[]).map(tab => (
+            <button key={tab} type="button" onClick={() => setActiveTab(tab)}
+              className={`px-4 py-3 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${activeTab === tab ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
               {tabLabels[tab]}
             </button>
           ))}
@@ -934,6 +943,17 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                 </div>
               )}
             </div>
+          )}
+
+          {/* ── Tab: المنيو المخصّص (عرض فقط) ── */}
+          {activeTab === 'menu' && (
+            <BeneficiaryMenuTab
+              entityType={entityType}
+              meals={meals}
+              beneficiaryName={name}
+              exclusions={exclusions}
+              fixed={fixedEntries}
+            />
           )}
 
           {error && (
