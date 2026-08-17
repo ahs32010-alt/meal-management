@@ -11,6 +11,7 @@ import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/li
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import DietTypeSelect from '@/components/shared/DietTypeSelect';
+import { WEEK_TITLES, type WeekNumber } from '@/lib/menu-utils';
 
 // تبويب «المنيو» — عرض فقط، ويُحمَّل عند فتحه فقط عشان ما يثقّل النافذة
 const BeneficiaryMenuTab = dynamic(() => import('./BeneficiaryMenuTab'), { ssr: false });
@@ -80,6 +81,141 @@ function buildFixedEntries(fixedMeals: Beneficiary['fixed_meals'], allMeals?: Me
     map[key].days.add(fm.day_of_week);
   }
   return Object.values(map);
+}
+
+/**
+ * قرارات الخانات مجمّعة للعرض: نفس (الحركة + الصنف + البديل + الكمية) تُعرض
+ * سطراً واحداً ومعه قائمة الخانات التي يسري فيها — عشان المستخدم يشوف بوضوح
+ * أن الحظر/الإضافة تخص أياماً معيّنة لا كل الأيام.
+ */
+type SlotGroup = {
+  key: string;
+  action: 'replace' | 'remove' | 'add';
+  baseId: string | null;
+  targetId: string | null;
+  quantity: number;
+  isAlternative: boolean;
+  slots: MenuOverrideEntry[];
+};
+
+function groupSlotOverrides(list: MenuOverrideEntry[], kinds: SlotGroup['action'][]): SlotGroup[] {
+  const map = new Map<string, SlotGroup>();
+  for (const ov of list) {
+    if (!kinds.includes(ov.action)) continue;
+    const key = `${ov.action}|${ov.base_meal_id ?? ''}|${ov.target_meal_id ?? ''}|${ov.quantity ?? 1}|${ov.is_alternative ? 1 : 0}`;
+    const g = map.get(key) ?? {
+      key, action: ov.action,
+      baseId: ov.base_meal_id ?? null,
+      targetId: ov.target_meal_id ?? null,
+      quantity: ov.quantity ?? 1,
+      isAlternative: ov.is_alternative === true,
+      slots: [],
+    };
+    g.slots.push(ov);
+    map.set(key, g);
+  }
+  // ترتيب الخانات داخل كل سطر: أسبوع ثم يوم ثم وجبة
+  for (const g of map.values()) {
+    g.slots.sort((a, b) =>
+      a.week_number - b.week_number ||
+      DAYS_ORDER.indexOf(a.day_of_week) - DAYS_ORDER.indexOf(b.day_of_week) ||
+      a.meal_type.localeCompare(b.meal_type));
+  }
+  return [...map.values()];
+}
+
+const slotLabel = (ov: MenuOverrideEntry) =>
+  `${WEEK_TITLES[ov.week_number as WeekNumber] ?? `أسبوع ${ov.week_number}`} · ${DAY_LABELS[ov.day_of_week]} · ${MEAL_TYPE_LABELS[ov.meal_type]}`;
+
+/**
+ * لوحة القرارات اليومية داخل تبويبي «المحظورات» و«الثابتة الأسبوعية».
+ * قسم مستقل تماماً — ما يمسّ شكل التبويبين ولا سلوكهما، ويشرح أن هذه القرارات
+ * مقيّدة بأيام محددة، ويسمح بإلغائها من هنا كما من المنيو.
+ */
+function SlotDecisionsPanel({
+  groups, mealById, title, hint, onRemoveSlot, onRemoveGroup,
+}: {
+  groups: SlotGroup[];
+  mealById: (id: string) => Meal | undefined;
+  title: string;
+  hint: string;
+  onRemoveSlot: (ov: MenuOverrideEntry) => void;
+  onRemoveGroup: (g: SlotGroup) => void;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <div className="border border-violet-200 bg-violet-50/40 rounded-xl p-3 space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-bold text-violet-700">{title}</span>
+        <span className="text-[11px] text-violet-600 bg-white border border-violet-200 rounded-full px-2 py-0.5">
+          من تبويب «المنيو المخصّص»
+        </span>
+      </div>
+      <p className="text-[11px] text-slate-500 leading-relaxed">{hint}</p>
+
+      {groups.map(g => {
+        const base = g.baseId ? mealById(g.baseId) : undefined;
+        const target = g.targetId ? mealById(g.targetId) : undefined;
+        return (
+          <div key={g.key} className="bg-white border border-violet-200 rounded-lg px-3 py-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => onRemoveGroup(g)}
+                title="إلغاء هذا القرار من كل أيامه"
+                className="text-slate-300 hover:text-red-500 transition-colors font-bold leading-none"
+              >✕</button>
+
+              {g.action === 'add' ? (
+                <>
+                  <span className="text-sm font-semibold text-violet-800">{target?.name ?? '—'}</span>
+                  {g.quantity > 1 && <span className="text-[11px] font-bold text-violet-600">×{g.quantity}</span>}
+                  <span className="text-[10px] font-bold text-violet-700 bg-violet-50 border border-violet-200 rounded-full px-2 py-0.5">
+                    {g.isAlternative ? 'مضاف · يُحتسب مع البدائل' : 'مضاف'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="text-sm font-semibold text-red-500 line-through">{base?.name ?? '—'}</span>
+                  {g.action === 'replace' ? (
+                    <>
+                      <span className="text-slate-300">→</span>
+                      <span className="text-sm font-semibold text-emerald-700">{target?.name ?? '—'}</span>
+                    </>
+                  ) : (
+                    <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 rounded-full px-2 py-0.5">
+                      بلا بديل
+                    </span>
+                  )}
+                </>
+              )}
+
+              <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+                ⚠️ غير ثابت لكل الأيام
+              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-1 mt-2">
+              {g.slots.map((ov, i) => (
+                <span
+                  key={`${ov.id ?? i}-${ov.week_number}-${ov.day_of_week}-${ov.meal_type}`}
+                  className="inline-flex items-center gap-1 text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-2 py-0.5"
+                >
+                  {slotLabel(ov)}
+                  <button
+                    type="button"
+                    onClick={() => onRemoveSlot(ov)}
+                    title="إلغاء هذا القرار من هذا اليوم وحده"
+                    className="text-slate-300 hover:text-red-500 transition-colors font-bold leading-none"
+                  >✕</button>
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 const CATEGORY_THEME_FIXED: Record<ItemCategory, { icon: string; bg: string; textOn: string }> = {
@@ -725,10 +861,38 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   };
 
   const totalFixed = fixedEntries.reduce((s, fe) => s + fe.days.size, 0);
+
+  // قرارات الخانات معروضة في التبويبين: التبديل/الحذف مع المحظورات،
+  // والإضافة مع الأصناف الثابتة — كل واحد بملاحظة أنه مقيّد بأيام محددة.
+  const slotExclusionGroups = groupSlotOverrides(overrides, ['replace', 'remove']);
+  const slotAddGroups = groupSlotOverrides(overrides, ['add']);
+  const slotExclusionCount = overrides.filter(o => o.action !== 'add').length;
+  const slotAddCount = overrides.filter(o => o.action === 'add').length;
+
+  const removeSlotOverride = (ov: MenuOverrideEntry) =>
+    setOverrides(prev => prev.filter(o => !(
+      o.week_number === ov.week_number &&
+      o.day_of_week === ov.day_of_week &&
+      o.meal_type === ov.meal_type &&
+      o.action === ov.action &&
+      (o.base_meal_id ?? null) === (ov.base_meal_id ?? null) &&
+      (o.target_meal_id ?? null) === (ov.target_meal_id ?? null)
+    )));
+  const removeSlotGroup = (g: SlotGroup) =>
+    setOverrides(prev => prev.filter(o => !(
+      o.action === g.action &&
+      (o.base_meal_id ?? null) === g.baseId &&
+      (o.target_meal_id ?? null) === g.targetId &&
+      (o.quantity ?? 1) === g.quantity &&
+      (o.is_alternative === true) === g.isAlternative
+    )));
+
   const tabLabels: Record<Tab, string> = {
     info: 'البيانات',
-    exclusions: `المحظورات${exclusions.length ? ` (${exclusions.length})` : ''}`,
-    fixed: `الثابتة الأسبوعية${totalFixed ? ` (${totalFixed})` : ''}`,
+    exclusions: `المحظورات${exclusions.length || slotExclusionCount
+      ? ` (${exclusions.length}${slotExclusionCount ? ` + ${slotExclusionCount}` : ''})` : ''}`,
+    fixed: `الثابتة الأسبوعية${totalFixed || slotAddCount
+      ? ` (${totalFixed}${slotAddCount ? ` + ${slotAddCount}` : ''})` : ''}`,
     menu: 'المنيو المخصّص',
   };
 
@@ -840,6 +1004,16 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           {/* ── Tab: Exclusions ── */}
           {activeTab === 'exclusions' && (
             <div className="p-5 space-y-3">
+              {/* قرارات أيام محددة — قادمة من تبويب المنيو المخصّص */}
+              <SlotDecisionsPanel
+                groups={slotExclusionGroups}
+                mealById={mealById}
+                title="محظورات أيام محددة"
+                hint="هذه الأصناف ليست محظورة على المستفيد في كل الأيام — الحظر (أو البديل) يسري في الخانات المذكورة تحت كل صنف فقط. أما محظورات الأسفل فتسري على كل أيام المنيو."
+                onRemoveSlot={removeSlotOverride}
+                onRemoveGroup={removeSlotGroup}
+              />
+
               {/* Summary bar */}
               {exclusions.length > 0 && (
                 <div className="flex flex-wrap gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5">
@@ -942,6 +1116,16 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           {/* ── Tab: Fixed Weekly ── */}
           {activeTab === 'fixed' && (
             <div className="p-6 space-y-4">
+              {/* إضافات أيام محددة — قادمة من تبويب المنيو المخصّص */}
+              <SlotDecisionsPanel
+                groups={slotAddGroups}
+                mealById={mealById}
+                title="أصناف مضافة لأيام محددة"
+                hint="هذه الأصناف ليست ثابتة كل أسبوع — تُضاف في الخانات المذكورة تحت كل صنف فقط. أما أصناف الأسفل فتتكرر كل نفس اليوم في الأسابيع الأربعة."
+                onRemoveSlot={removeSlotOverride}
+                onRemoveGroup={removeSlotGroup}
+              />
+
               <div className="flex items-center justify-between">
                 <p className="text-xs text-slate-500">
                   أضف صنف ثابت واختر الوجبة ثم حدّد الأيام.
