@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ItemCategory, Meal, MealType, MenuItem } from '@/lib/types';
 import { buildSlotMap, mainPosition, snackPosition } from '@/lib/menu-utils';
-import { buildPersonalMenuSlot, tallyPersonalMenuRows } from '@/lib/beneficiary-menu';
+import {
+  buildPersonalMenuSlot, tallyPersonalMenuRows, slotsContainingMeal, buildOrderOverlay,
+} from '@/lib/beneficiary-menu';
 
 function meal(id: string, name: string, category: ItemCategory, type: MealType = 'lunch'): Meal {
   return { id, name, type, is_snack: category === 'snack', category, created_at: '' };
@@ -103,6 +105,17 @@ describe('المنيو المخصّص للمستفيد', () => {
     expect(snacks.map(r => r.meal?.name)).toEqual(['عصير']);
   });
 
+  it('الملخّص يحصي المضاف لهذه الخانة', () => {
+    const { mains } = buildPersonalMenuSlot({
+      ...base, exclusions: [], fixed: [],
+      overrides: [{ week_number: 1, day_of_week: 6, meal_type: 'lunch', action: 'add', target_meal_id: soup.id, quantity: 2 }],
+    });
+    expect(mains.map(r => [r.kind, r.meal?.name, r.quantity])).toEqual([
+      ['kept', 'رز', 1], ['kept', 'سمك', 1], ['kept', 'سلطة', 1], ['added', 'شوربة', 2],
+    ]);
+    expect(tallyPersonalMenuRows(mains)).toEqual({ eats: 4, missing: 0, replaced: 0, added: 1 });
+  });
+
   it('يلغي الصنف الثابت لو أحد أصناف الإلغاء موجود في نفس الوجبة', () => {
     const fixed = [{
       meal_id: soup.id, meal_type: 'lunch' as MealType, days: [6],
@@ -141,7 +154,7 @@ describe('المنيو المخصّص للمستفيد', () => {
       ],
       fixed: [{ meal_id: soup.id, meal_type: 'lunch' as MealType, days: [6], quantity: 1 }],
     });
-    expect(tallyPersonalMenuRows([...mains, ...snacks])).toEqual({ eats: 4, missing: 1, replaced: 1 });
+    expect(tallyPersonalMenuRows([...mains, ...snacks])).toEqual({ eats: 4, missing: 1, replaced: 1, added: 0 });
   });
 
   it('يفصل الأسابيع — منيو الأسبوع الثاني لا يظهر في الأول', () => {
@@ -150,5 +163,201 @@ describe('المنيو المخصّص للمستفيد', () => {
     const w2 = buildPersonalMenuSlot({ ...base, week: 2, slotMap: map, exclusions: [], fixed: [] });
     expect(w1.mains).toEqual([]);
     expect(w2.mains.map(r => r.meal?.name)).toEqual(['رز']);
+  });
+});
+
+// ─── قرارات الخانة الواحدة (beneficiary_menu_overrides) ─────────────────────
+describe('قرارات الخانة تتقدّم على المحظور العام', () => {
+  // نفس الصنف (سمك) في السبت أ١ وفي الثلاثاء أ١ وفي السبت أ٢
+  const multi = buildSlotMap([
+    item('a1', rice, mainPosition(0), 6, 1),
+    item('a2', fish, mainPosition(1), 6, 1),
+    item('b1', fish, mainPosition(0), 2, 1),
+    item('c1', fish, mainPosition(0), 6, 2),
+  ]);
+  const m = { mealType: 'lunch' as MealType, slotMap: multi, mealById };
+
+  it('بديل مختلف لكل يوم لنفس الصنف — وهو ما لا يقدر عليه المحظور العام', () => {
+    const overrides = [
+      { week_number: 1, day_of_week: 6, meal_type: 'lunch' as const, action: 'replace' as const, base_meal_id: fish.id, target_meal_id: chicken.id },
+      { week_number: 1, day_of_week: 2, meal_type: 'lunch' as const, action: 'replace' as const, base_meal_id: fish.id, target_meal_id: soup.id },
+      { week_number: 2, day_of_week: 6, meal_type: 'lunch' as const, action: 'remove' as const, base_meal_id: fish.id },
+    ];
+    const sat1 = buildPersonalMenuSlot({ ...m, week: 1, day: 6, exclusions: [], fixed: [], overrides });
+    const tue1 = buildPersonalMenuSlot({ ...m, week: 1, day: 2, exclusions: [], fixed: [], overrides });
+    const sat2 = buildPersonalMenuSlot({ ...m, week: 2, day: 6, exclusions: [], fixed: [], overrides });
+
+    expect(sat1.mains.map(r => [r.kind, r.meal?.name, r.scope])).toEqual([
+      ['kept', 'رز', 'menu'], ['replaced', 'دجاج', 'slot'],
+    ]);
+    expect(tue1.mains.map(r => [r.kind, r.meal?.name, r.scope])).toEqual([['replaced', 'شوربة', 'slot']]);
+    expect(sat2.mains.map(r => [r.kind, r.meal, r.originalMeal?.name, r.scope])).toEqual([
+      ['removed', null, 'سمك', 'slot'],
+    ]);
+  });
+
+  it('الخانة بلا قرار ترجع للمحظور العام، والخانة ذات القرار تتقدّم عليه', () => {
+    const exclusions = [{ meal_id: fish.id, alternative_meal_id: chicken.id }];
+    const overrides = [
+      { week_number: 1, day_of_week: 2, meal_type: 'lunch' as const, action: 'replace' as const, base_meal_id: fish.id, target_meal_id: soup.id },
+    ];
+    const sat = buildPersonalMenuSlot({ ...m, week: 1, day: 6, exclusions, fixed: [], overrides });
+    const tue = buildPersonalMenuSlot({ ...m, week: 1, day: 2, exclusions, fixed: [], overrides });
+    // السبت: لا قرار خانة → المحظور العام (دجاج) بنطاق global
+    expect(sat.mains.map(r => [r.meal?.name, r.scope])).toEqual([['رز', 'menu'], ['دجاج', 'global']]);
+    // الثلاثاء: قرار الخانة (شوربة) يتقدّم
+    expect(tue.mains.map(r => [r.meal?.name, r.scope])).toEqual([['شوربة', 'slot']]);
+  });
+
+  it('قرار الخانة يقدر يحذف صنفاً ثابتاً أسبوعياً من أسبوع واحد فقط', () => {
+    const fixed = [{ meal_id: soup.id, meal_type: 'lunch' as MealType, days: [6], quantity: 1 }];
+    const overrides = [
+      { week_number: 2, day_of_week: 6, meal_type: 'lunch' as const, action: 'remove' as const, base_meal_id: soup.id },
+    ];
+    const w1 = buildPersonalMenuSlot({ ...m, week: 1, day: 6, exclusions: [], fixed, overrides });
+    const w2 = buildPersonalMenuSlot({ ...m, week: 2, day: 6, exclusions: [], fixed, overrides });
+    expect(w1.mains.filter(r => r.kind === 'fixed').map(r => r.meal?.name)).toEqual(['شوربة']);
+    expect(w2.mains.filter(r => r.kind === 'fixed')).toEqual([]);
+    expect(w2.mains.some(r => r.kind === 'removed' && r.originalMeal?.name === 'شوربة')).toBe(true);
+  });
+
+  it('الإضافة تخص أسبوعها ويومها فقط', () => {
+    const overrides = [
+      { week_number: 2, day_of_week: 6, meal_type: 'lunch' as const, action: 'add' as const, target_meal_id: soup.id, quantity: 3, is_alternative: true },
+    ];
+    const w1 = buildPersonalMenuSlot({ ...m, week: 1, day: 6, exclusions: [], fixed: [], overrides });
+    const w2 = buildPersonalMenuSlot({ ...m, week: 2, day: 6, exclusions: [], fixed: [], overrides });
+    expect(w1.mains.some(r => r.kind === 'added')).toBe(false);
+    const addRow = w2.mains.find(r => r.kind === 'added')!;
+    expect([addRow.meal?.name, addRow.quantity, addRow.isAlternativeFixed, addRow.scope])
+      .toEqual(['شوربة', 3, true, 'slot']);
+  });
+
+  it('الصنف المضاف لا يُحسب مرتين لو له صنف ثابت بنفس الاسم في نفس الخانة', () => {
+    const fixed = [{ meal_id: soup.id, meal_type: 'lunch' as MealType, days: [6], quantity: 1 }];
+    const overrides = [
+      { week_number: 1, day_of_week: 6, meal_type: 'lunch' as const, action: 'add' as const, target_meal_id: soup.id, quantity: 5 },
+    ];
+    const { mains } = buildPersonalMenuSlot({ ...m, week: 1, day: 6, exclusions: [], fixed, overrides });
+    const soups = mains.filter(r => r.meal?.id === soup.id);
+    expect(soups).toHaveLength(1);
+    expect([soups[0].kind, soups[0].quantity]).toEqual(['added', 5]);
+  });
+
+  it('البديل المحذوف من القاعدة يُعامل كحذف بلا بديل لا كصف فارغ', () => {
+    const overrides = [
+      { week_number: 1, day_of_week: 6, meal_type: 'lunch' as const, action: 'replace' as const, base_meal_id: fish.id, target_meal_id: 'meal-deleted' },
+    ];
+    const { mains } = buildPersonalMenuSlot({ ...m, week: 1, day: 6, exclusions: [], fixed: [], overrides });
+    expect(mains.map(r => [r.kind, r.originalMeal?.name])).toEqual([['kept', 'رز'], ['removed', 'سمك']]);
+  });
+
+  it('قرارات وجبة أخرى أو يوم آخر لا تتسرّب لهذه الخانة', () => {
+    const overrides = [
+      { week_number: 1, day_of_week: 6, meal_type: 'dinner' as const, action: 'remove' as const, base_meal_id: fish.id },
+      { week_number: 1, day_of_week: 0, meal_type: 'lunch' as const, action: 'remove' as const, base_meal_id: fish.id },
+    ];
+    const { mains } = buildPersonalMenuSlot({ ...m, week: 1, day: 6, exclusions: [], fixed: [], overrides });
+    expect(mains.map(r => [r.kind, r.meal?.name])).toEqual([['kept', 'رز'], ['kept', 'سمك']]);
+  });
+
+  it('يعدّ خانات الصنف — لتحذير المستخدم من أثر المحظور العام', () => {
+    const slots = slotsContainingMeal(multi, fish.id);
+    expect(slots).toHaveLength(3);
+    expect(slots.map(s => `${s.week}|${s.day}|${s.mealType}`).sort()).toEqual([
+      '1|2|lunch', '1|6|lunch', '2|6|lunch',
+    ]);
+  });
+});
+
+// ─── طبقة أمر التشغيل ────────────────────────────────────────────────────────
+describe('انعكاس القرارات على أمر التشغيل', () => {
+  const orderMealIds = [rice.id, fish.id, juice.id];
+  const baseOrder = { week: 1, day: 6, mealType: 'lunch' as MealType, orderMealIds };
+
+  it('الأمر القديم بلا رقم أسبوع لا يتأثر بقرارات الخانات إطلاقاً', () => {
+    const overrides = [
+      { week_number: 1, day_of_week: 6, meal_type: 'lunch' as const, action: 'replace' as const, base_meal_id: fish.id, target_meal_id: soup.id },
+      { week_number: 1, day_of_week: 6, meal_type: 'lunch' as const, action: 'add' as const, target_meal_id: dates.id, quantity: 2 },
+    ];
+    const exclusions = [{ meal_id: fish.id, alternative_meal_id: chicken.id }];
+
+    for (const week of [null, undefined, 0, 9]) {
+      const r = buildOrderOverlay({ ...baseOrder, week: week as number | null | undefined, exclusions, overrides });
+      // المحظور العام وحده — نفس سلوك النظام قبل الميزة
+      expect(r.excluded).toEqual([{ meal_id: fish.id, alternative_meal_id: chicken.id, scope: 'global' }]);
+      expect(r.added).toEqual([]);
+      expect(r.fixedDecisions.size).toBe(0);
+    }
+  });
+
+  it('قرار الخانة يتقدّم على المحظور العام لنفس الصنف', () => {
+    const r = buildOrderOverlay({
+      ...baseOrder,
+      exclusions: [{ meal_id: fish.id, alternative_meal_id: chicken.id }],
+      overrides: [{ week_number: 1, day_of_week: 6, meal_type: 'lunch', action: 'replace', base_meal_id: fish.id, target_meal_id: soup.id }],
+    });
+    expect(r.excluded).toEqual([{ meal_id: fish.id, alternative_meal_id: soup.id, scope: 'slot' }]);
+  });
+
+  it('المحظور العام يبقى شغّالاً للأصناف التي لا قرار خانة لها', () => {
+    const r = buildOrderOverlay({
+      ...baseOrder,
+      exclusions: [
+        { meal_id: fish.id, alternative_meal_id: chicken.id },
+        { meal_id: juice.id, alternative_meal_id: null },
+      ],
+      overrides: [{ week_number: 1, day_of_week: 6, meal_type: 'lunch', action: 'remove', base_meal_id: fish.id }],
+    });
+    expect(r.excluded).toEqual([
+      { meal_id: fish.id, alternative_meal_id: null, scope: 'slot' },
+      { meal_id: juice.id, alternative_meal_id: null, scope: 'global' },
+    ]);
+  });
+
+  it('قرار على صنف غير موجود في الأمر لا يضيف استبعاداً وهمياً', () => {
+    const r = buildOrderOverlay({
+      ...baseOrder, exclusions: [{ meal_id: salad.id, alternative_meal_id: chicken.id }],
+      overrides: [{ week_number: 1, day_of_week: 6, meal_type: 'lunch', action: 'remove', base_meal_id: soup.id }],
+    });
+    expect(r.excluded).toEqual([]);
+    // لكن القرار يبقى متاحاً للأصناف الثابتة (شوربة قد تكون صنفاً ثابتاً)
+    expect(r.fixedDecisions.get(soup.id)).toEqual({ removed: true, replacedWith: null });
+  });
+
+  it('الإضافة ترجع بكميتها وعلامة «بديل» لتُحتسب في الجدول الصحيح', () => {
+    const r = buildOrderOverlay({
+      ...baseOrder, exclusions: [],
+      overrides: [
+        { week_number: 1, day_of_week: 6, meal_type: 'lunch', action: 'add', target_meal_id: soup.id, quantity: 3, is_alternative: true },
+        { week_number: 1, day_of_week: 6, meal_type: 'lunch', action: 'add', target_meal_id: dates.id },
+      ],
+    });
+    expect(r.added).toEqual([
+      { meal_id: soup.id, quantity: 3, is_alternative: true },
+      { meal_id: dates.id, quantity: 1, is_alternative: false },
+    ]);
+  });
+
+  it('قرارات خانة أخرى (يوم/أسبوع/وجبة) لا تتسرّب للأمر', () => {
+    const r = buildOrderOverlay({
+      ...baseOrder, exclusions: [],
+      overrides: [
+        { week_number: 2, day_of_week: 6, meal_type: 'lunch', action: 'remove', base_meal_id: fish.id },
+        { week_number: 1, day_of_week: 0, meal_type: 'lunch', action: 'remove', base_meal_id: fish.id },
+        { week_number: 1, day_of_week: 6, meal_type: 'dinner', action: 'remove', base_meal_id: fish.id },
+        { week_number: 1, day_of_week: 6, meal_type: 'lunch', action: 'add', target_meal_id: soup.id },
+      ],
+    });
+    expect(r.excluded).toEqual([]);
+    expect(r.added).toEqual([{ meal_id: soup.id, quantity: 1, is_alternative: false }]);
+  });
+
+  it('تبديل صنف ثابت في خانة واحدة يرجع كقرار استبدال لا حذف', () => {
+    const r = buildOrderOverlay({
+      ...baseOrder, exclusions: [],
+      overrides: [{ week_number: 1, day_of_week: 6, meal_type: 'lunch', action: 'replace', base_meal_id: soup.id, target_meal_id: dates.id }],
+    });
+    expect(r.fixedDecisions.get(soup.id)).toEqual({ removed: false, replacedWith: dates.id });
   });
 });

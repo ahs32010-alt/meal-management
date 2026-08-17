@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Meal, ItemCategory } from '@/lib/types';
+import type { Meal, ItemCategory, MealType } from '@/lib/types';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { buildOrderOverlay, type PersonalMenuOverride } from '@/lib/beneficiary-menu';
 
 /**
  * Builds the full report payload for an order from CURRENT database state.
@@ -118,10 +119,45 @@ export async function buildOrderReport(
 
   if (beneficiaries.length === 0) return null;
 
+  /**
+   * قرارات الخانة (beneficiary_menu_overrides) لهذه الخانة وحدها — تبديل أو
+   * حذف أو إضافة يخص (أسبوع + يوم + وجبة) هذا الأمر.
+   *
+   * ⚠️ ضمانتان:
+   *  ١) الأمر الذي لا يحمل `week_number` (أمر قديم) لا يُقرأ له أي قرار — يُحسب
+   *     بالمنطق القديم حرفياً.
+   *  ٢) لو الجدول غير موجود (الترقية ما اتشغّلت) نكمل بلا قرارات بصمت — نفس
+   *     نمط الإسقاط في بقية المشروع، فما ينكسر شيء قبل تشغيل الـmigration.
+   */
+  const orderWeekNumber = typeof order.week_number === 'number' ? order.week_number : null;
+  const overridesByBen = new Map<string, PersonalMenuOverride[]>();
+  if (orderWeekNumber !== null) {
+    const ovRes = await fetchAllRows<PersonalMenuOverride & { beneficiary_id: string }>((from, to) =>
+      supabase
+        .from('beneficiary_menu_overrides')
+        .select('id, beneficiary_id, week_number, day_of_week, meal_type, action, base_meal_id, target_meal_id, quantity, is_alternative')
+        .eq('week_number', orderWeekNumber)
+        .eq('day_of_week', orderDayOfWeek)
+        .eq('meal_type', order.meal_type)
+        .order('id')
+        .range(from, to));
+    if (!ovRes.error && ovRes.data) {
+      for (const ov of ovRes.data) {
+        const list = overridesByBen.get(ov.beneficiary_id) ?? [];
+        list.push(ov);
+        overridesByBen.set(ov.beneficiary_id, list);
+      }
+    }
+  }
+
   const altIds = new Set<string>();
   beneficiaries.forEach((ben: { exclusions: { alternative_meal_id: string | null }[] }) => {
     (ben.exclusions || []).forEach(ex => { if (ex.alternative_meal_id) altIds.add(ex.alternative_meal_id); });
   });
+  // أصناف قرارات الخانة (بدائل ومضافات) لازم تُقرأ أسماؤها مثل بدائل المحظورات
+  for (const list of overridesByBen.values()) {
+    for (const ov of list) if (ov.target_meal_id) altIds.add(ov.target_meal_id);
+  }
 
   const altMealMap: Record<string, Meal> = { ...mealMap };
   if (altIds.size > 0) {
@@ -147,19 +183,35 @@ export async function buildOrderReport(
     exclusions: { id: string; meal_id: string; alternative_meal_id: string | null }[];
     fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; suppress_if_meal_ids?: string[]; is_alternative?: boolean }[];
   }) => {
-    const excludedIds = new Set((ben.exclusions || []).map(e => e.meal_id));
+    /**
+     * تخصيص هذا المستفيد لهذه الخانة: قرار الخانة يتقدّم على المحظور العام،
+     * والمحظور العام يبقى شغّالاً لكل صنف لا قرار له. الحساب في
+     * lib/beneficiary-menu.ts — نفس الدالة التي تعرض بها شاشة منيو المستفيد،
+     * فما تختلف الشاشة عن المطبخ.
+     */
+    const overlay = buildOrderOverlay({
+      week: orderWeekNumber,
+      day: orderDayOfWeek,
+      mealType: order.meal_type as MealType,
+      orderMealIds: Array.from(orderMealIds),
+      exclusions: (ben.exclusions || []).map(e => ({
+        meal_id: e.meal_id,
+        alternative_meal_id: e.alternative_meal_id,
+      })),
+      overrides: overridesByBen.get(ben.id),
+    });
 
-    const excludedItems = (ben.exclusions || [])
-      .filter(ex => orderMealIds.has(ex.meal_id))
-      .map(ex => {
-        const meal = displayMealMap[ex.meal_id];
-        let alternative: Meal | null = null;
-        if (ex.alternative_meal_id && altMealMap[ex.alternative_meal_id]) {
-          alternative = altMealMap[ex.alternative_meal_id];
-        }
-        const category = categoryMap[ex.meal_id] ?? (meal.is_snack ? 'snack' : 'hot');
-        return { meal, alternative, category };
-      });
+    const excludedIds = new Set(overlay.excluded.map(e => e.meal_id));
+
+    const excludedItems = overlay.excluded.map(ex => {
+      const meal = displayMealMap[ex.meal_id];
+      let alternative: Meal | null = null;
+      if (ex.alternative_meal_id && altMealMap[ex.alternative_meal_id]) {
+        alternative = altMealMap[ex.alternative_meal_id];
+      }
+      const category = categoryMap[ex.meal_id] ?? (meal.is_snack ? 'snack' : 'hot');
+      return { meal, alternative, category };
+    });
 
     const todayFixed: { meal: Meal; quantity: number; category: ItemCategory; is_alternative: boolean }[] = (ben.fixed_meals || [])
       .filter(fm =>
@@ -168,7 +220,7 @@ export async function buildOrderReport(
         fm.meals &&
         !(fm.suppress_if_meal_ids?.some(id => orderMealIds.has(id)))
       )
-      .map(fm => {
+      .flatMap(fm => {
         // أولوية تصنيف الصنف الثابت:
         //   1) meals.category — المصدر الموحد (يضمن نفس الصنف نفس الفئة في كل مكان)
         //   2) قيمة محفوظة على صف fixed_meals (للتوافق الرجعي)
@@ -176,13 +228,45 @@ export async function buildOrderReport(
         //   4) المشتق من is_snack
         const mealCat = (fm.meals as { category?: ItemCategory }).category;
         const stored = (fm as { category?: ItemCategory }).category;
-        return {
-          meal: fm.meals,
-          quantity: fm.quantity ?? 1,
-          category: mealCat ?? stored ?? categoryMap[fm.meal_id] ?? (fm.meals.is_snack ? 'snack' : 'hot'),
-          is_alternative: fm.is_alternative === true,
-        };
+        const category: ItemCategory =
+          mealCat ?? stored ?? categoryMap[fm.meal_id] ?? (fm.meals.is_snack ? 'snack' : 'hot');
+        const quantity = fm.quantity ?? 1;
+        const is_alternative = fm.is_alternative === true;
+
+        // قرار الخانة على صنف ثابت: حذفه من هذا الأمر وحده، أو تبديله فيه وحده
+        const decision = overlay.fixedDecisions.get(fm.meal_id);
+        if (decision?.removed) return [];
+        if (decision?.replacedWith) {
+          const target = altMealMap[decision.replacedWith];
+          if (!target) return [];
+          return [{
+            meal: target,
+            quantity,
+            category: (target.category as ItemCategory | undefined)
+              ?? (target.is_snack ? 'snack' : category),
+            is_alternative,
+          }];
+        }
+        return [{ meal: fm.meals, quantity, category, is_alternative }];
       });
+
+    // الأصناف المضافة لهذه الخانة وحدها — تُحتسب بنفس دلالة الصنف الثابت:
+    // المعلَّم «بديل» يذهب لجدول البدائل، وغيره لجدول الأصناف اليومية الثابتة.
+    for (const add of overlay.added) {
+      const meal = altMealMap[add.meal_id];
+      if (!meal) continue;
+      // ما نكرّر صنفاً موجوداً أصلاً كصنف ثابت في نفس الأمر — القرار الأخص يفوز
+      const dupIdx = todayFixed.findIndex(f => f.meal.id === meal.id);
+      const row = {
+        meal,
+        quantity: add.quantity,
+        category: ((meal.category as ItemCategory | undefined)
+          ?? (meal.is_snack ? 'snack' : 'hot')) as ItemCategory,
+        is_alternative: add.is_alternative,
+      };
+      if (dupIdx >= 0) todayFixed[dupIdx] = row;
+      else todayFixed.push(row);
+    }
 
     orderItems.forEach(item => {
       if (!excludedIds.has(item.meal_id)) {
