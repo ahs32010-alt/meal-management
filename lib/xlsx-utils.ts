@@ -63,11 +63,19 @@ export async function exportXLSX(
   sheetName = 'Sheet1'
 ) {
   const XLSX = await import('xlsx');
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const cols = Object.keys(rows[0] ?? {}).map(key => ({
+  // اتحاد مفاتيح كل الصفوف بترتيب أول ظهور — الاعتماد على rows[0] وحده كان
+  // يُسقط أي عمود لا يوجد في الصف الأول (ويحسب عرض الأعمدة على أساس ناقص).
+  const headers: string[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    for (const k of Object.keys(r)) {
+      if (!seen.has(k)) { seen.add(k); headers.push(k); }
+    }
+  }
+  const ws = XLSX.utils.json_to_sheet(rows, { header: headers });
+  ws['!cols'] = headers.map(key => ({
     wch: Math.max(key.length, ...rows.map(r => String(r[key] ?? '').length)) + 2,
   }));
-  ws['!cols'] = cols;
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
   XLSX.writeFile(wb, filename);

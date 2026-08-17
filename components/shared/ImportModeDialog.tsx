@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 
-export type ImportMode = 'append' | 'replace';
+export type ImportMode = 'append' | 'replace' | 'update';
 
 interface Props {
   isOpen: boolean;

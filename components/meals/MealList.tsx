@@ -942,6 +942,7 @@ export default function MealList() {
         <ImportModal
           title="الأصناف"
           templateHeaders={['الاسم', 'الاسم الإنجليزي', 'نوع الوجبة', 'سناك', 'الفئة']}
+          requiredHeaders={['الاسم', 'نوع الوجبة']}
           templateRow={['أرز بالدجاج', 'Rice with Chicken', 'غداء', 'لا', 'حار']}
           onImport={handleImport}
           replaceWarning="سيتم حذف كل الأصناف الحالية لهذه الفئة — وبسبب الربط المتسلسل سيُحذف معها ما يعتمد عليها من محظورات وأصناف ثابتة وعناصر منيو وأوامر."

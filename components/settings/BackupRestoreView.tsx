@@ -173,6 +173,8 @@ export default function BackupRestoreView() {
           trigger_type: triggerType,
           total_rows: summary.total_rows,
           counts: summary.counts,
+          verified: summary.verified,
+          verify_issues: summary.verify_issues,
           full_db_table_count: summary.full_db_table_count,
           full_db_total_rows: summary.full_db_total_rows,
         },
@@ -180,7 +182,16 @@ export default function BackupRestoreView() {
       const fullDbHint = summary.full_db_table_count
         ? ` + لقطة DB كاملة (${summary.full_db_table_count} جدول، ${summary.full_db_total_rows ?? 0} صف)`
         : '';
-      setInfo(`✓ تم إنشاء نسخة احتياطية تحتوي ${summary.total_rows} سجل${fullDbHint}.`);
+      // نسخة ناقصة أخطر من عدم وجود نسخة — الاستعادة منها تمسح الموجود.
+      // فلا نعرضها كنجاح، بل كخطأ صريح يذكر الجدول والفرق.
+      if (summary.verified === false) {
+        setError(
+          `⚠️ النسخة أُنشئت لكن التحقّق فشل — لا تعتمد عليها للاستعادة: ` +
+          (summary.verify_issues ?? []).slice(0, 5).join(' • ')
+        );
+      } else {
+        setInfo(`✓ تم إنشاء نسخة احتياطية تحتوي ${summary.total_rows} سجل${fullDbHint} — تحقّق مطابقة الأعداد: سليم.`);
+      }
       await fetchBackups();
     } catch (err) {
       setError(`تعذّر إنشاء النسخة: ${err instanceof Error ? err.message : String(err)}`);
@@ -293,7 +304,7 @@ export default function BackupRestoreView() {
       const { snapshot } = await fetchFullBackup(supabase, backup.id);
 
       // 3) تنفيذ الاستعادة
-      const { inserted, warnings } = await restoreFromSnapshot(supabase, snapshot);
+      const { inserted, warnings, atomic } = await restoreFromSnapshot(supabase, snapshot);
 
       const totalInserted = Object.values(inserted).reduce((s, n) => s + n, 0);
       void logActivity({
@@ -306,16 +317,18 @@ export default function BackupRestoreView() {
           inserted_total: totalInserted,
           inserted_per_table: inserted,
           warnings_count: warnings.length,
+          atomic,
         },
       });
 
       const warnPart = warnings.length > 0
-        ? ` — مع ${warnings.length} تحذير (راجع الـconsole).`
+        ? ` — مع ${warnings.length} تحذير: ${warnings.slice(0, 3).join(' • ')}`
         : '';
       if (warnings.length > 0 && process.env.NODE_ENV !== 'production') {
         console.warn('Restore warnings:', warnings);
       }
-      setInfo(`✓ تمت الاستعادة. أُدرج ${totalInserted} سجل.${warnPart}`);
+      const modePart = atomic ? ' (استعادة ذرّية — معاملة واحدة)' : '';
+      setInfo(`✓ تمت الاستعادة${modePart}. أُدرج ${totalInserted} سجل.${warnPart}`);
       await fetchBackups();
     } catch (err) {
       setError(`تعذّرت الاستعادة: ${err instanceof Error ? err.message : String(err)}`);

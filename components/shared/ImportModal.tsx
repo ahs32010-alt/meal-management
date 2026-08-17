@@ -8,6 +8,12 @@ interface Props {
   title: string;
   templateHeaders: string[];
   templateRow: (string | number)[];
+  /** الأعمدة التي لا يُقبل الملف بدونها. الافتراضي: العمود الأول فقط. */
+  requiredHeaders?: string[];
+  /** أوضاع الاستيراد المدعومة لهذه الصفحة. الافتراضي: إضافة + استبدال. */
+  modes?: ImportMode[];
+  /** وصف وضع «تحديث بالمفتاح» — يظهر تحت الخيار. */
+  updateHint?: string;
   onImport: (rows: Record<string, string>[], mode: ImportMode) => Promise<{ imported: number; errors: string[] }>;
   onClose: () => void;
   onDone: () => void;
@@ -15,7 +21,8 @@ interface Props {
   replaceWarning?: string;
 }
 
-export default function ImportModal({ title, templateHeaders, templateRow, onImport, onClose, onDone, replaceWarning }: Props) {
+export default function ImportModal({ title, templateHeaders, templateRow, requiredHeaders, modes, updateHint, onImport, onClose, onDone, replaceWarning }: Props) {
+  const allowed = modes ?? ['append', 'replace'];
   const [rows, setRows] = useState<Record<string, string>[] | null>(null);
   const [fileName, setFileName] = useState('');
   const [mode, setMode] = useState<ImportMode>('append');
@@ -32,8 +39,16 @@ export default function ImportModal({ title, templateHeaders, templateRow, onImp
     try {
       const parsed = await parseXLSX(file);
       if (parsed.length === 0) { setParseError('الملف فارغ أو غير صحيح'); return; }
-      if (!Object.keys(parsed[0]).includes(templateHeaders[0])) {
-        setParseError(`العمود الأول يجب أن يكون "${templateHeaders[0]}"`);
+
+      // كان الفحص يقتصر على العمود الأول، فملف بأعمدة خاطئة تماماً يمرّ ويُستورد
+      // فارغاً. نتحقق الآن من كل الأعمدة الإلزامية (الافتراضي: العمود الأول).
+      const present = new Set(Object.keys(parsed[0]).map(h => h.replace(/\s+/g, ' ').trim()));
+      const required = requiredHeaders ?? [templateHeaders[0]];
+      const missing = required.filter(h => !present.has(h.replace(/\s+/g, ' ').trim()));
+      if (missing.length > 0) {
+        setParseError(
+          `الملف ينقصه ${missing.length === 1 ? 'العمود' : 'الأعمدة'}: ${missing.join('، ')} — نزّل القالب واستخدم رؤوسه`
+        );
         return;
       }
       setRows(parsed);
@@ -106,17 +121,28 @@ export default function ImportModal({ title, templateHeaders, templateRow, onImp
           {rows && !result && (
             <div>
               <label className="label">طريقة الاستيراد</label>
-              <div className="grid grid-cols-2 gap-3">
-                <button type="button" onClick={() => setMode('append')}
-                  className={`text-right rounded-xl border-2 p-3 transition-colors ${mode === 'append' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-slate-300'}`}>
-                  <p className={`text-sm font-bold ${mode === 'append' ? 'text-emerald-700' : 'text-slate-700'}`}>إضافة للموجود</p>
-                  <p className="text-xs text-slate-500 mt-0.5">إبقاء البيانات الحالية وإضافة بيانات الملف إليها</p>
-                </button>
-                <button type="button" onClick={() => setMode('replace')}
-                  className={`text-right rounded-xl border-2 p-3 transition-colors ${mode === 'replace' ? 'border-amber-500 bg-amber-50' : 'border-slate-200 hover:border-slate-300'}`}>
-                  <p className={`text-sm font-bold ${mode === 'replace' ? 'text-amber-700' : 'text-slate-700'}`}>استبدال الكل</p>
-                  <p className="text-xs text-slate-500 mt-0.5">حذف البيانات الحالية ووضع بيانات الملف فقط</p>
-                </button>
+              <div className={`grid gap-3 ${allowed.length > 2 ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
+                {allowed.includes('append') && (
+                  <button type="button" onClick={() => setMode('append')}
+                    className={`text-right rounded-xl border-2 p-3 transition-colors ${mode === 'append' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                    <p className={`text-sm font-bold ${mode === 'append' ? 'text-emerald-700' : 'text-slate-700'}`}>إضافة للموجود</p>
+                    <p className="text-xs text-slate-500 mt-0.5">إبقاء البيانات الحالية وإضافة بيانات الملف إليها</p>
+                  </button>
+                )}
+                {allowed.includes('update') && (
+                  <button type="button" onClick={() => setMode('update')}
+                    className={`text-right rounded-xl border-2 p-3 transition-colors ${mode === 'update' ? 'border-sky-500 bg-sky-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                    <p className={`text-sm font-bold ${mode === 'update' ? 'text-sky-700' : 'text-slate-700'}`}>تحديث الموجود</p>
+                    <p className="text-xs text-slate-500 mt-0.5">{updateHint ?? 'تحديث السجلات المطابقة وإضافة الجديدة — بلا حذف'}</p>
+                  </button>
+                )}
+                {allowed.includes('replace') && (
+                  <button type="button" onClick={() => setMode('replace')}
+                    className={`text-right rounded-xl border-2 p-3 transition-colors ${mode === 'replace' ? 'border-amber-500 bg-amber-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                    <p className={`text-sm font-bold ${mode === 'replace' ? 'text-amber-700' : 'text-slate-700'}`}>استبدال الكل</p>
+                    <p className="text-xs text-slate-500 mt-0.5">حذف البيانات الحالية ووضع بيانات الملف فقط</p>
+                  </button>
+                )}
               </div>
               {mode === 'replace' && replaceWarning && (
                 <p className="text-xs text-red-600 mt-2 font-medium leading-relaxed">⚠️ {replaceWarning}</p>
@@ -179,7 +205,7 @@ export default function ImportModal({ title, templateHeaders, templateRow, onImp
         <div className="flex gap-3 px-6 pb-6 pt-2">
           {rows && !result && (
             <button onClick={handleImport} disabled={importing} className="btn-primary flex-1 justify-center">
-              {importing ? 'جاري الاستيراد...' : `${mode === 'replace' ? 'استبدال بـ' : 'استيراد'} ${rows.length} سجل`}
+              {importing ? 'جاري الاستيراد...' : `${mode === 'replace' ? 'استبدال بـ' : mode === 'update' ? 'تحديث' : 'استيراد'} ${rows.length} سجل`}
             </button>
           )}
           <button onClick={result ? onDone : onClose} className="btn-secondary flex-1 justify-center">

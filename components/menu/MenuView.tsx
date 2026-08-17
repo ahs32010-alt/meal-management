@@ -664,7 +664,8 @@ export default function MenuView() {
       // تطبيق كـ«فرق» بدل مسح الأسبوع وإعادة إدراجه: نكتب المتغيّر فقط، وفي وضع
       // الاستبدال نحذف — بالمعرّف — ما لم يعد له وجود في الملف. النتيجة أن تنزيل
       // الملف ورفعه بدون تعديل عملية محايدة تماماً.
-      const res = await applyMenuImport(supabase, rows, weeks, entityType, mode);
+      // حوار المنيو يعرض «إضافة» و«استبدال» فقط — أي وضع آخر يُعامل كإضافة
+      const res = await applyMenuImport(supabase, rows, weeks, entityType, mode === 'replace' ? 'replace' : 'append');
 
       void logActivity({
         action: 'update',

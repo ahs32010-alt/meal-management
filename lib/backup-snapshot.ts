@@ -1,48 +1,55 @@
 'use client';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 // ─── أنواع البيانات ───────────────────────────────────────────────────────────
 
 export type BackupTriggerType = 'auto_daily' | 'manual' | 'pre_restore';
 
-// قائمة الجداول المحفوظة في النسخة الاحتياطية، بترتيب لا يضرّ بالـFKs عند الإدراج.
-// ترتيب الإدراج:
-//   1) meals (مرجع لكل شيء تقريباً)
-//   2) beneficiaries (يشمل المستفيدين والمرافقين)
-//   3) daily_orders (يجب أن يسبق order_items + delivery_orders)
-//   4) custom_transliterations (مستقل)
-//   5) meal_alternatives (يعتمد على meals فقط)
-//   6) exclusions (يعتمد على beneficiaries + meals)
-//   7) beneficiary_fixed_meals (يعتمد على beneficiaries + meals)
-//   8) menu_items (يعتمد على meals)
-//   9) order_items (يعتمد على daily_orders + meals)
-//  10) sticker_splits (يعتمد على daily_orders + beneficiaries)
-//  ── منظومة أوامر التسليم ──
-//  11) cities (مستقل)
-//  12) delivery_locations (يعتمد على cities)
-//  13) delivery_meals (مستقل — أصناف التسليم منفصلة عن meals)
-//  14) delivery_creators (مستقل — أشخاص منشئون)
-//  15) delivery_print_header (مستقل — صف واحد، إعدادات هيدر الطباعة)
-//  16) delivery_orders (يعتمد على delivery_locations + daily_orders + delivery_creators)
-//  17) delivery_order_items (يعتمد على delivery_orders)
+/**
+ * كل جداول البيانات المحفوظة في النسخة الاحتياطية، **بترتيب إدراج يحترم
+ * المفاتيح الخارجية** (الجدول المرجعي قبل التابع له).
+ *
+ * ⚠️ هذه القائمة هي نفسها ترتيب الاستعادة. أي جدول ناقص هنا:
+ *   • لا يُحفظ في النسخة، و
+ *   • لا يُستعاد بعد المسح — أي يُفقد نهائياً عند أي استعادة.
+ * كان ينقصها: meal_alternatives (مذكور في التعليق ومنسي من القائمة)، ومنظومة
+ * التكاليف كاملة (الوحدات/المواد/الوصفات/الأسعار/تجميد التكلفة)، وألوان
+ * الأنظمة الغذائية لستيكرات الغداء والعشاء.
+ *
+ * غير مشمول عمداً: backups (تفادي التكرار)، app_users و activity_log
+ * (المستخدمون والصلاحيات والسجل لا تتأثر بالاستعادة)، pending_actions
+ * (طابور موافقات لحظي — استعادته تُحيي طلبات قديمة).
+ */
 export const BACKUP_TABLES = [
+  // ── جداول مستقلة (لا تعتمد على غيرها) ──
   'meals',
   'beneficiaries',
   'daily_orders',
   'custom_transliterations',
+  'lunch_dinner_diet_colors',
+  'cost_units',
+  'cities',
+  'delivery_meals',
+  'delivery_creators',
+  'delivery_print_header',
+  // ── تابعة لـ meals / beneficiaries ──
+  'meal_alternatives',
   'exclusions',
   'beneficiary_fixed_meals',
   'menu_items',
   'order_items',
   'sticker_splits',
-  'cities',
-  'delivery_locations',
-  'delivery_meals',
-  'delivery_creators',
-  'delivery_print_header',
-  'delivery_orders',
-  'delivery_order_items',
+  // ── منظومة التكاليف ──
+  'raw_materials',        // ← cost_units
+  'meal_recipe_items',    // ← meals + raw_materials + cost_units
+  'meal_pricing',         // ← meals
+  'order_cost_snapshots', // ← daily_orders
+  // ── منظومة أوامر التسليم ──
+  'delivery_locations',   // ← cities
+  'delivery_orders',      // ← delivery_locations + daily_orders + delivery_creators
+  'delivery_order_items', // ← delivery_orders
 ] as const;
 
 export type BackupTableName = (typeof BACKUP_TABLES)[number];
@@ -61,6 +68,13 @@ export interface BackupSummary {
   // عدّاد الجداول في النسخة الكاملة من DB (لو وجدت)
   full_db_table_count?: number;
   full_db_total_rows?: number;
+  /**
+   * نتيجة التحقّق: مقارنة ما حُفظ فعلاً مع count(*) الحقيقي لكل جدول.
+   * أي فرق يعني نسخة ناقصة — وهي أخطر من عدم وجود نسخة، لأن الاستعادة منها
+   * تمسح الموجود. نخزّنه مع النسخة ليبقى الدليل محفوظاً.
+   */
+  verified?: boolean;
+  verify_issues?: string[];
 }
 
 // لقطة DB كاملة وخام: { table_name: rows }
@@ -84,28 +98,45 @@ export const AUTO_BACKUP_RETENTION = 3;
 
 // ─── إنشاء snapshot ──────────────────────────────────────────────────────────
 
-const TABLE_SELECTS: Record<BackupTableName, string> = {
-  meals: '*',
-  beneficiaries: '*',
-  daily_orders: '*',
-  custom_transliterations: '*',
-  exclusions: '*',
-  beneficiary_fixed_meals: '*',
-  menu_items: '*',
-  order_items: '*',
-  sticker_splits: '*',
-  cities: '*',
-  delivery_locations: '*',
-  delivery_meals: '*',
-  delivery_creators: '*',
-  delivery_print_header: '*',
-  delivery_orders: '*',
-  delivery_order_items: '*',
+/**
+ * العمود المفتاحي لكل جدول — يُستخدم لترتيب القراءة على دفعات (شرط ألا تتكرر
+ * أو تُفقد صفوف بين الدفعات) وكشرط «صادق دائماً» عند المسح قبل الاستعادة.
+ * معظم الجداول مفتاحها `id`، وهذان الاثنان مفتاحهما مختلف تماماً.
+ */
+const TABLE_KEY: Record<BackupTableName, string> = {
+  meals: 'id',
+  beneficiaries: 'id',
+  daily_orders: 'id',
+  custom_transliterations: 'id',
+  lunch_dinner_diet_colors: 'diet_type',
+  cost_units: 'id',
+  cities: 'id',
+  delivery_meals: 'id',
+  delivery_creators: 'id',
+  delivery_print_header: 'id',
+  meal_alternatives: 'id',
+  exclusions: 'id',
+  beneficiary_fixed_meals: 'id',
+  menu_items: 'id',
+  order_items: 'id',
+  sticker_splits: 'id',
+  raw_materials: 'id',
+  meal_recipe_items: 'id',
+  meal_pricing: 'meal_id',
+  order_cost_snapshots: 'id',
+  delivery_locations: 'id',
+  delivery_orders: 'id',
+  delivery_order_items: 'id',
 };
 
 /**
  * يجمع لقطة كاملة من كل الجداول المعنية. يتجاهل بهدوء أي جدول/عمود غير
  * موجود (مثلاً لو ما اتشغّل migration بعد) — يُسجّل صفر صفوف لذلك الجدول.
+ *
+ * ⚠️ القراءة على دفعات إلزامية هنا: PostgREST يقصّ أي استعلام عند ١٠٠٠ صف
+ * **بدون أي خطأ**. جدول exclusions وحده تعدّى ١٦٠٠ صف، فكانت النسخة تُحفظ
+ * ناقصة بصمت — والاستعادة منها تمسح الموجود وتُرجع الجزء المقصوص فقط، أي
+ * فقدان دائم للبيانات. هذا أخطر ما كان في المنظومة.
  *
  * كذلك يحاول جلب لقطة DB كاملة عبر RPC `dump_all_public_tables` لو كانت
  * متاحة (تتطلّب backup-full-db-migration.sql مفعّل).
@@ -120,7 +151,8 @@ export async function createSnapshot(supabase: SupabaseClient): Promise<{
 
   for (const t of BACKUP_TABLES) {
     try {
-      const { data, error } = await supabase.from(t).select(TABLE_SELECTS[t]);
+      const { data, error } = await fetchAllRows<Record<string, unknown>>((from, to) =>
+        supabase.from(t).select('*').order(TABLE_KEY[t]).range(from, to));
       if (error) {
         if (process.env.NODE_ENV !== 'production') {
           console.warn(`backup: skipping ${t}:`, error.message);
@@ -129,7 +161,7 @@ export async function createSnapshot(supabase: SupabaseClient): Promise<{
         counts[t] = 0;
         continue;
       }
-      const rows = (data ?? []) as unknown as Record<string, unknown>[];
+      const rows = data ?? [];
       tables[t] = rows;
       counts[t] = rows.length;
     } catch (err) {
@@ -142,6 +174,20 @@ export async function createSnapshot(supabase: SupabaseClient): Promise<{
   }
 
   const total = Object.values(counts).reduce((s, n) => s + n, 0);
+
+  // ── التحقّق: هل ما حُفظ = ما في القاعدة فعلاً؟ ─────────────────────────────
+  // استعلام count منفصل لكل جدول (head:true — لا ينقل صفوفاً، فرخيص) ومقارنته
+  // بما جمعناه. لو اختلفا فالنسخة ناقصة، وهذا ما كان يمرّ بصمت سنوات.
+  const verifyIssues: string[] = [];
+  for (const t of BACKUP_TABLES) {
+    try {
+      const { count, error } = await supabase.from(t).select(TABLE_KEY[t], { count: 'exact', head: true });
+      if (error || count == null) continue; // جدول غير موجود أو تعذّر العدّ — لا نحكم عليه
+      if (count !== counts[t]) {
+        verifyIssues.push(`${t}: حُفظ ${counts[t]} صف والموجود ${count}`);
+      }
+    } catch { /* العدّ غير حرج — لا نُفشل النسخة بسببه */ }
+  }
 
   // محاولة جلب لقطة DB كاملة عبر RPC. لو الدالة غير موجودة (الـmigration
   // الجديد ما اتشغّل بعد) نتجاهل بهدوء — النسخة المنطقية تكفي كحدّ أدنى.
@@ -172,6 +218,8 @@ export async function createSnapshot(supabase: SupabaseClient): Promise<{
     summary: {
       counts,
       total_rows: total,
+      verified: verifyIssues.length === 0,
+      ...(verifyIssues.length > 0 ? { verify_issues: verifyIssues } : {}),
       ...(fullTableCount != null ? { full_db_table_count: fullTableCount } : {}),
       ...(fullTotalRows != null ? { full_db_total_rows: fullTotalRows } : {}),
     },
@@ -364,52 +412,48 @@ export async function setBackupSchedule(
 export async function restoreFromSnapshot(
   supabase: SupabaseClient,
   snapshot: BackupSnapshot,
-): Promise<{ inserted: Record<BackupTableName, number>; warnings: string[] }> {
+): Promise<{ inserted: Record<BackupTableName, number>; warnings: string[]; atomic: boolean }> {
   const warnings: string[] = [];
   const inserted: Record<BackupTableName, number> = {} as Record<BackupTableName, number>;
 
-  // 1) محو البيانات الحالية. نمسح الجداول التابعة أولاً ثم الأم.
-  //    ترتيب الحذف يحترم FKs (الجداول التابعة قبل الأم):
-  //      ── منظومة أوامر التسليم (تعتمد على daily_orders) ──
-  //      a) delivery_order_items (تابع لـ delivery_orders)
-  //      b) delivery_orders       (تابع لـ delivery_locations + daily_orders + delivery_creators)
-  //      c) delivery_print_header (مستقل — صف واحد)
-  //      d) delivery_creators     (مستقل)
-  //      e) delivery_meals        (مستقل)
-  //      f) delivery_locations    (تابع لـ cities)
-  //      g) cities                (مستقل)
-  //      ── منظومة الأوامر اليومية ──
-  //      h) order_items
-  //      i) sticker_splits
-  //      j) daily_orders
-  //      k) menu_items
-  //      l) beneficiary_fixed_meals
-  //      m) exclusions
-  //      n) beneficiaries
-  //      p) meals
-  //      q) custom_transliterations
-  const wipeOrder: BackupTableName[] = [
-    'delivery_order_items',
-    'delivery_orders',
-    'delivery_print_header',
-    'delivery_creators',
-    'delivery_meals',
-    'delivery_locations',
-    'cities',
-    'order_items',
-    'sticker_splits',
-    'daily_orders',
-    'menu_items',
-    'beneficiary_fixed_meals',
-    'exclusions',
-    'beneficiaries',
-    'meals',
-    'custom_transliterations',
-  ];
-  // كل الجداول عندها عمود id (سواء uuid أو smallint). نستخدم فلتر
-  // صادق دائماً (not id is null) كبديل عن delete بدون where (الذي يحجبه supabase-js).
+  // ── المسار المفضّل: استعادة ذرّية على السيرفر ─────────────────────────────
+  // كل شيء داخل معاملة واحدة: إما تكتمل أو ترجع القاعدة كما كانت. المسار
+  // القديم (مسح ثم إدراج من المتصفح) يترك القاعدة ممسوحة جزئياً لو انقطع
+  // الاتصال في المنتصف. نستخدمه كاحتياطي فقط لو الترقية ما اتشغّلت.
+  try {
+    const { data, error } = await supabase.rpc('restore_backup_snapshot', { p_snapshot: snapshot });
+    if (!error && data) {
+      const res = data as { inserted?: Record<string, number>; skipped_tables?: string[] };
+      for (const t of BACKUP_TABLES) inserted[t] = res.inserted?.[t] ?? 0;
+      for (const t of res.skipped_tables ?? []) {
+        warnings.push(`${t}: الجدول غير موجود في قاعدة البيانات — لم يُستعد`);
+      }
+      return { inserted, warnings, atomic: true };
+    }
+    if (error && !/does not exist|could not find|function/i.test(error.message)) {
+      // الدالة موجودة لكن التنفيذ فشل — المعاملة تراجعت، فالقاعدة سليمة.
+      // لا نُكمل بالمسار غير الذرّي حتى لا نمسح ما نجا.
+      throw new Error(`تعذّرت الاستعادة الذرّية ولم يتغيّر شيء: ${error.message}`);
+    }
+    warnings.push(
+      'الاستعادة الذرّية غير متاحة — شغّل supabase/backup-atomic-restore-migration.sql. ' +
+      'تمّت الاستعادة بالطريقة القديمة (على مراحل).'
+    );
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('تعذّرت الاستعادة الذرّية')) throw err;
+    warnings.push('تعذّر نداء الاستعادة الذرّية — تمّت الاستعادة بالطريقة القديمة.');
+  }
+
+  // 1) محو البيانات الحالية — عكس ترتيب الإدراج بالضبط، فالتابع يُمسح قبل الأم.
+  //    اشتقاقه من BACKUP_TABLES بدل قائمة يدوية يضمن أن أي جدول يُضاف مستقبلاً
+  //    يدخل الاستعادة تلقائياً؛ القائمة اليدوية السابقة نسيت meal_alternatives
+  //    ومنظومة التكاليف، فكانت الاستعادة تُبقي بيانات قديمة وتفقد أخرى.
+  const wipeOrder: BackupTableName[] = [...BACKUP_TABLES].reverse();
+
+  // فلتر «صادق دائماً» بديلاً عن delete بلا where (يحجبه supabase-js) — نستخدم
+  // مفتاح كل جدول لأن meal_pricing و lunch_dinner_diet_colors بلا عمود id.
   for (const t of wipeOrder) {
-    const { error } = await supabase.from(t).delete().not('id', 'is', null);
+    const { error } = await supabase.from(t).delete().not(TABLE_KEY[t], 'is', null);
     if (error) {
       // لو الجدول غير موجود (الـmigration ما اتشغّل بعد) نتجاوز بهدوء
       if (/relation .* does not exist|does not exist/i.test(error.message)) {
@@ -460,7 +504,7 @@ export async function restoreFromSnapshot(
     }
   }
 
-  return { inserted, warnings };
+  return { inserted, warnings, atomic: false };
 }
 
 // ─── حذف نسخة محددة ──────────────────────────────────────────────────────────

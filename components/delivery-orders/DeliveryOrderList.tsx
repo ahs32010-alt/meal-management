@@ -8,11 +8,21 @@ import type { DeliveryOrder } from '@/lib/types';
 import { DELIVERY_MEAL_TYPE_LABELS, DAY_LABELS } from '@/lib/types';
 import { formatDate, formatDateTime } from '@/lib/date-utils';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
+import { exportXLSX } from '@/lib/xlsx-utils';
+import {
+  DELIVERY_ORDER_HEADERS,
+  DELIVERY_ORDER_REQUIRED_HEADERS,
+  buildDeliveryOrderRow,
+  parseDeliveryOrderRow,
+  type DeliveryImportRefs,
+} from '@/lib/delivery-order-sheet';
+import type { ImportMode } from '@/components/shared/ImportModeDialog';
 import Pagination from '@/components/shared/Pagination';
 import { usePagination } from '@/lib/use-pagination';
 
 const DeliveryOrderModal = dynamic(() => import('./DeliveryOrderModal'), { ssr: false });
 const DeliveryPrintHeaderModal = dynamic(() => import('./DeliveryPrintHeaderModal'), { ssr: false });
+const ImportModal = dynamic(() => import('@/components/shared/ImportModal'), { ssr: false });
 
 const MEAL_TYPE_STYLES: Record<string, string> = {
   breakfast: 'bg-yellow-100 text-yellow-700',
@@ -30,6 +40,7 @@ export default function DeliveryOrderList() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const [search, setSearch] = useState('');
+  const [importOpen, setImportOpen] = useState(false);
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
@@ -103,6 +114,75 @@ export default function DeliveryOrderList() {
 
   const pagination = usePagination(filteredOrders, { pageSize: 25 });
 
+  // ── التصدير ───────────────────────────────────────────────────────────────
+  // نصدّر النتائج المعروضة (تحترم البحث) بنفس صيغة lib/delivery-order-sheet
+  // التي يقرأها الاستيراد وورقة النسخة الاحتياطية.
+  const handleExport = () => {
+    const rows = filteredOrders.map(buildDeliveryOrderRow);
+    void exportXLSX(rows, `أوامر_التسليم_${new Date().toISOString().slice(0, 10)}.xlsx`, 'أوامر التسليم');
+  };
+
+  // ── الاستيراد ─────────────────────────────────────────────────────────────
+  // نمرّ على نفس واجهة POST التي تستخدمها نافذة الإنشاء، فترقيم الأوامر
+  // والتحقق يبقى في مكان واحد بالسيرفر ولا نكرّره هنا.
+  const handleImport = async (rows: Record<string, string>[], mode: ImportMode) => {
+    const errors: string[] = [];
+
+    const [locRes, creatorRes] = await Promise.all([
+      fetch('/api/delivery-locations').then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch('/api/delivery-creators').then(r => r.ok ? r.json() : []).catch(() => []),
+    ]);
+    const norm = (v: string) => String(v ?? '').replace(/\s+/g, ' ').trim();
+    const refs: DeliveryImportRefs = {
+      locationIdByName: new Map((locRes as { id: string; name: string }[]).map(l => [norm(l.name), l.id])),
+      creatorIdByName:  new Map((creatorRes as { id: string; name: string }[]).map(c => [norm(c.name), c.id])),
+    };
+
+    // نتحقّق من كل الصفوف أولاً — لا نكتب شيئاً لو في الملف مشكلة واحدة،
+    // فلا تُنشأ أوامر نصفية يصعب تتبّعها.
+    const payloads: ReturnType<typeof parseDeliveryOrderRow>['payload'][] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const { payload, errors: rowErrors } = parseDeliveryOrderRow(rows[i], refs, `صف ${i + 2}`);
+      errors.push(...rowErrors);
+      if (payload) payloads.push(payload);
+    }
+    if (errors.length > 0) return { imported: 0, errors };
+    if (payloads.length === 0) return { imported: 0, errors: ['لم يُعثر على أوامر صالحة في الملف'] };
+
+    // «استبدال الكل» يحذف الأوامر الحالية أولاً — تحذير الحوار يوضّح ذلك
+    if (mode === 'replace') {
+      for (const o of orders) {
+        const res = await fetch(`/api/delivery-orders/${o.id}`, { method: 'DELETE' });
+        if (!res.ok) errors.push(`تعذّر حذف الأمر ${o.order_number}`);
+      }
+    }
+
+    let imported = 0;
+    for (let i = 0; i < payloads.length; i++) {
+      const res = await fetch('/api/delivery-orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payloads[i]),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        errors.push(`صف ${i + 2}: ${(j as { error?: string }).error ?? 'تعذّر الإنشاء'}`);
+        continue;
+      }
+      imported++;
+    }
+
+    if (imported > 0) {
+      void logActivity({
+        action: 'create',
+        entity_type: 'order',
+        entity_name: `استيراد أوامر تسليم (${imported})`,
+        details: { count: imported, mode, source: 'delivery_xlsx_import' },
+      });
+    }
+    return { imported, errors };
+  };
+
   return (
     <div className="p-6 space-y-4">
       {/* Header */}
@@ -126,6 +206,12 @@ export default function DeliveryOrderList() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
             بيانات الهيدر
+          </button>
+          <button onClick={handleExport} disabled={filteredOrders.length === 0} className="btn-secondary text-sm">
+            تصدير Excel
+          </button>
+          <button onClick={() => setImportOpen(true)} className="btn-secondary text-sm">
+            استيراد Excel
           </button>
           <button
             onClick={() => { setEditingOrder(null); setIsModalOpen(true); }}
@@ -305,6 +391,23 @@ export default function DeliveryOrderList() {
 
       {isHeaderModalOpen && (
         <DeliveryPrintHeaderModal onClose={() => setIsHeaderModalOpen(false)} />
+      )}
+
+      {importOpen && (
+        <ImportModal
+          title="أوامر التسليم"
+          templateHeaders={DELIVERY_ORDER_HEADERS}
+          requiredHeaders={DELIVERY_ORDER_REQUIRED_HEADERS}
+          templateRow={[
+            '(يولّده النظام)', '2026-08-17', 'غداء', 'مقر الشركة', 'الدمام',
+            'أحمد', '0500000000', '2026-08-17', '12:30',
+            'كبسة (غداء) ×20 | سلطة (غداء) ×20', 'ملاحظة', '(يولّده النظام)',
+          ]}
+          replaceWarning="سيتم حذف كل أوامر التسليم الحالية قبل إضافة أوامر الملف."
+          onImport={handleImport}
+          onClose={() => setImportOpen(false)}
+          onDone={() => { setImportOpen(false); fetchOrders(); }}
+        />
       )}
 
       <ConfirmDialog

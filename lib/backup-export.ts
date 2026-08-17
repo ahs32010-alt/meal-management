@@ -1,7 +1,14 @@
 'use client';
 
 import type { BackupSnapshot } from '@/lib/backup-snapshot';
-import type { ItemCategory, MealType, EntityType } from '@/lib/types';
+import type { ItemCategory, MealType, EntityType, MenuItem } from '@/lib/types';
+import {
+  buildBeneficiaryRow,
+  type SheetBeneficiary,
+  type SheetExclusion,
+  type SheetFixedMeal,
+  type SheetMeal,
+} from '@/lib/beneficiary-sheet';
 
 // ─── أنواع مساعدة ───────────────────────────────────────────────────────────
 
@@ -15,6 +22,9 @@ interface BeneficiaryRow {
   id: string; name: string; english_name?: string | null;
   code: string; category?: string | null; villa?: string | null;
   diet_type?: string | null; notes?: string | null;
+  // حقول كانت غائبة عن ورقة النسخة رغم أن الصفحة تحرّرها
+  is_active?: boolean | null;
+  no_fish?: boolean | null; no_pasta_sandwich?: boolean | null; low_carb?: boolean | null;
   entity_type?: EntityType; created_at?: string;
 }
 
@@ -27,6 +37,7 @@ interface FixedMealRow {
   beneficiary_id: string; day_of_week: number; meal_type: MealType;
   meal_id: string; quantity: number; category?: ItemCategory;
   suppress_if_meal_ids?: string[] | null;
+  is_alternative?: boolean | null;
 }
 
 interface MenuRow {
@@ -51,6 +62,15 @@ interface OrderItemRow {
 interface CustomTranslitRow {
   word: string; transliteration: string;
 }
+
+// ─── أنواع منظومة التكاليف ─────────────────────────────────────────────────
+interface CostUnitRow { id: string; name: string; family: string; factor: number; is_builtin?: boolean | null }
+interface RawMaterialRow { id: string; name: string; unit_id?: string | null; unit_cost: number; notes?: string | null; is_active?: boolean | null }
+interface RecipeItemRow { id: string; meal_id: string; raw_material_id: string; quantity: number; unit_id?: string | null }
+interface MealPriceRow { meal_id: string; selling_price: number; notes?: string | null }
+interface OrderCostSnapshotRow { order_id: string; total_cost: number; frozen_at?: string | null; frozen_by_name?: string | null }
+interface MealAlternativeRow { meal_id: string; alternative_id: string }
+interface DietColorRow { diet_type: string; color: string }
 
 // ─── أنواع منظومة التسليم ──────────────────────────────────────────────────
 interface CityRow { id: string; name: string; created_at?: string }
@@ -94,78 +114,30 @@ function buildBeneficiariesSheet(
   fixed: FixedMealRow[],
   entityType: EntityType,
 ): Record<string, string>[] {
-  const mealsById = new Map(meals.map(m => [m.id, m] as const));
-  const filtered = bens.filter(b => (b.entity_type ?? 'beneficiary') === entityType);
+  // نفس الصيغة التي تصدّرها صفحة المستفيدين حرفياً — مصدر واحد في
+  // lib/beneficiary-sheet، فما تتباعد ورقة النسخة عن ملف الصفحة مرة أخرى.
+  const mealsById = new Map<string, SheetMeal>(
+    meals.map(m => [m.id, { id: m.id, name: m.name, type: m.type, is_snack: m.is_snack }] as const),
+  );
+  const exclByBen = new Map<string, ExclusionRow[]>();
+  for (const e of exclusions) {
+    const list = exclByBen.get(e.beneficiary_id);
+    if (list) list.push(e); else exclByBen.set(e.beneficiary_id, [e]);
+  }
+  const fixedByBen = new Map<string, FixedMealRow[]>();
+  for (const f of fixed) {
+    const list = fixedByBen.get(f.beneficiary_id);
+    if (list) list.push(f); else fixedByBen.set(f.beneficiary_id, [f]);
+  }
 
-  // helpers identical to BeneficiaryList.handleExport
-  const buildExclStr = (benId: string, type: MealType, isSnack: boolean) =>
-    exclusions
-      .filter(e => e.beneficiary_id === benId)
-      .map(e => {
-        const m = mealsById.get(e.meal_id);
-        if (!m || m.type !== type || m.is_snack !== isSnack) return '';
-        const alt = e.alternative_meal_id ? mealsById.get(e.alternative_meal_id) : null;
-        const altName = alt?.name ?? '';
-        return altName ? `${m.name}؛${altName}` : m.name;
-      })
-      .filter(Boolean)
-      .join(' - ');
-
-  const buildFixedStr = (benId: string, type: MealType, isSnack: boolean) => {
-    const sectionDefault: ItemCategory = isSnack ? 'snack' : 'hot';
-    const map = new Map<string, { name: string; days: number[]; quantity: number; category: ItemCategory; suppressIds: string[] }>();
-    for (const fm of fixed.filter(f => f.beneficiary_id === benId && f.meal_type === type)) {
-      const m = mealsById.get(fm.meal_id);
-      if (!m || m.is_snack !== isSnack) continue;
-      const cat = (fm.category ?? sectionDefault) as ItemCategory;
-      const key = `${fm.meal_id}|${cat}`;
-      const suppressIds = Array.isArray(fm.suppress_if_meal_ids) ? [...fm.suppress_if_meal_ids] : [];
-      if (!map.has(key)) {
-        map.set(key, {
-          name: m.name,
-          days: [],
-          quantity: fm.quantity ?? 1,
-          category: cat,
-          suppressIds,
-        });
-      }
-      map.get(key)!.days.push(fm.day_of_week);
-    }
-    return Array.from(map.values())
-      .map(({ name, days, quantity, category, suppressIds }) => {
-        const nameStr = quantity > 1 ? `${name}×${quantity}` : name;
-        const daysStr = days.map(d => DAY_SHORT[d]).join(' ');
-        const catSuffix = category !== sectionDefault ? `@${CAT_AR[category]}` : '';
-        const suppressNames = suppressIds
-          .map(id => mealsById.get(id)?.name ?? '')
-          .filter(Boolean);
-        const suppressSuffix = suppressNames.length ? `↛${suppressNames.join(',')}` : '';
-        return `${nameStr}؛${daysStr}${catSuffix}${suppressSuffix}`;
-      })
-      .join(' - ');
-  };
-
-  return filtered.map(b => ({
-    'الاسم': b.name,
-    'الاسم الإنجليزي': b.english_name ?? '',
-    'الكود': b.code,
-    'الفئة': b.category ?? '',
-    'الفيلا': b.villa ?? '',
-    'النظام الغذائي': b.diet_type ?? '',
-    'محظورات الفطور':         buildExclStr(b.id, 'breakfast', false),
-    'محظورات سناكات الفطور':  buildExclStr(b.id, 'breakfast', true),
-    'محظورات الغداء':         buildExclStr(b.id, 'lunch',     false),
-    'محظورات سناكات الغداء':  buildExclStr(b.id, 'lunch',     true),
-    'محظورات العشاء':         buildExclStr(b.id, 'dinner',    false),
-    'محظورات سناكات العشاء':  buildExclStr(b.id, 'dinner',    true),
-    'ثابتة الفطور':           buildFixedStr(b.id, 'breakfast', false),
-    'ثابتة سناكات الفطور':    buildFixedStr(b.id, 'breakfast', true),
-    'ثابتة الغداء':           buildFixedStr(b.id, 'lunch',     false),
-    'ثابتة سناكات الغداء':    buildFixedStr(b.id, 'lunch',     true),
-    'ثابتة العشاء':           buildFixedStr(b.id, 'dinner',    false),
-    'ثابتة سناكات العشاء':    buildFixedStr(b.id, 'dinner',    true),
-    'ملاحظات': b.notes ?? '',
-  }));
+  return bens
+    .filter(b => (b.entity_type ?? 'beneficiary') === entityType)
+    .map(b => buildBeneficiaryRow(
+      b as SheetBeneficiary,
+      (exclByBen.get(b.id) ?? []) as SheetExclusion[],
+      (fixedByBen.get(b.id) ?? []) as SheetFixedMeal[],
+      mealsById,
+    ));
 }
 
 function buildMealsSheet(meals: MealRow[], entityType: EntityType): Record<string, string>[] {
@@ -321,6 +293,90 @@ function buildDeliveryOrdersSheet(
   });
 }
 
+// ─── أوراق منظومة التكاليف والمراجع ─────────────────────────────────────────
+// كانت هذه الجداول خارج النسخة الاحتياطية بالكامل — لا تُحفظ ولا تُستعاد.
+
+function buildCostUnitsSheet(units: CostUnitRow[]): Record<string, string>[] {
+  return units.map(u => ({
+    'الوحدة': u.name,
+    'المجموعة': u.family,
+    'المعامل': String(u.factor),
+    'مدمجة': u.is_builtin ? 'نعم' : 'لا',
+  }));
+}
+
+function buildRawMaterialsSheet(mats: RawMaterialRow[], units: CostUnitRow[]): Record<string, string>[] {
+  const unitById = new Map(units.map(u => [u.id, u.name] as const));
+  return mats.map(m => ({
+    'المادة': m.name,
+    'وحدة الشراء': m.unit_id ? (unitById.get(m.unit_id) ?? '') : '',
+    'سعر الوحدة': String(m.unit_cost ?? 0),
+    'مفعّلة': m.is_active === false ? 'لا' : 'نعم',
+    'ملاحظات': m.notes ?? '',
+  }));
+}
+
+function buildRecipesSheet(
+  recipes: RecipeItemRow[],
+  meals: MealRow[],
+  mats: RawMaterialRow[],
+  units: CostUnitRow[],
+): Record<string, string>[] {
+  const mealById = new Map(meals.map(m => [m.id, m] as const));
+  const matById  = new Map(mats.map(m => [m.id, m.name] as const));
+  const unitById = new Map(units.map(u => [u.id, u.name] as const));
+  return recipes.map(r => {
+    const meal = mealById.get(r.meal_id);
+    return {
+      'الصنف': meal?.name ?? `(محذوف: ${r.meal_id})`,
+      'الوجبة': meal ? (MEAL_TYPE_AR[meal.type] ?? meal.type) : '',
+      'المادة': matById.get(r.raw_material_id) ?? `(محذوفة: ${r.raw_material_id})`,
+      'الكمية': String(r.quantity ?? 0),
+      'الوحدة': r.unit_id ? (unitById.get(r.unit_id) ?? '') : '',
+    };
+  });
+}
+
+function buildPricingSheet(prices: MealPriceRow[], meals: MealRow[]): Record<string, string>[] {
+  const mealById = new Map(meals.map(m => [m.id, m] as const));
+  return prices.map(p => {
+    const meal = mealById.get(p.meal_id);
+    return {
+      'الصنف': meal?.name ?? `(محذوف: ${p.meal_id})`,
+      'الوجبة': meal ? (MEAL_TYPE_AR[meal.type] ?? meal.type) : '',
+      'سعر البيع': String(p.selling_price ?? 0),
+      'ملاحظات': p.notes ?? '',
+    };
+  });
+}
+
+function buildFrozenCostsSheet(snaps: OrderCostSnapshotRow[], orders: OrderRow[]): Record<string, string>[] {
+  const orderById = new Map(orders.map(o => [o.id, o] as const));
+  return snaps.map(s => {
+    const o = orderById.get(s.order_id);
+    return {
+      'التاريخ': o?.date ?? '',
+      'الوجبة': o ? (MEAL_TYPE_AR[o.meal_type] ?? o.meal_type) : '',
+      'الفئة': o?.entity_type === 'companion' ? 'المرافقون' : 'المستفيدون',
+      'التكلفة المجمّدة': String(s.total_cost ?? 0),
+      'تاريخ التجميد': s.frozen_at ?? '',
+      'جمّدها': s.frozen_by_name ?? '',
+    };
+  });
+}
+
+function buildMealAlternativesSheet(alts: MealAlternativeRow[], meals: MealRow[]): Record<string, string>[] {
+  const mealById = new Map(meals.map(m => [m.id, m] as const));
+  return alts.map(a => ({
+    'الصنف': mealById.get(a.meal_id)?.name ?? `(محذوف: ${a.meal_id})`,
+    'البديل': mealById.get(a.alternative_id)?.name ?? `(محذوف: ${a.alternative_id})`,
+  }));
+}
+
+function buildDietColorsSheet(colors: DietColorRow[]): Record<string, string>[] {
+  return colors.map(c => ({ 'النظام الغذائي': c.diet_type, 'اللون': c.color }));
+}
+
 // ─── التنزيل كـExcel متعدد الأوراق ──────────────────────────────────────────
 
 export async function downloadBackupAsXLSX(
@@ -348,6 +404,14 @@ export async function downloadBackupAsXLSX(
   const deliveryMeals = (t.delivery_meals ?? []) as unknown as DeliveryMealRow[];
   const deliveryOrders = (t.delivery_orders ?? []) as unknown as DeliveryOrderRow[];
   const deliveryItems = (t.delivery_order_items ?? []) as unknown as DeliveryOrderItemRow[];
+  // منظومة التكاليف + المراجع
+  const costUnits   = (t.cost_units ?? []) as unknown as CostUnitRow[];
+  const rawMats     = (t.raw_materials ?? []) as unknown as RawMaterialRow[];
+  const recipes     = (t.meal_recipe_items ?? []) as unknown as RecipeItemRow[];
+  const pricing     = (t.meal_pricing ?? []) as unknown as MealPriceRow[];
+  const frozenCosts = (t.order_cost_snapshots ?? []) as unknown as OrderCostSnapshotRow[];
+  const mealAlts    = (t.meal_alternatives ?? []) as unknown as MealAlternativeRow[];
+  const dietColors  = (t.lunch_dinner_diet_colors ?? []) as unknown as DietColorRow[];
 
   const addSheet = (title: string, rows: Record<string, string>[]) => {
     if (rows.length === 0) return;
@@ -374,13 +438,18 @@ export async function downloadBackupAsXLSX(
   addSheet('أصناف المستفيدين', buildMealsSheet(meals, 'beneficiary'));
   addSheet('أصناف المرافقين',  buildMealsSheet(meals, 'companion'));
 
-  // 3) المنيو لكل فئة (4 أسابيع × فئتين = حتى 8 أوراق)
+  // 3) المنيو لكل فئة — جدول مسطّح للقراءة البشرية
   for (const sheet of buildMenuSheets(menu, meals, 'beneficiary')) {
     addSheet(`${sheet.title} - مستفيدين`, sheet.rows);
   }
   for (const sheet of buildMenuSheets(menu, meals, 'companion')) {
     addSheet(`${sheet.title} - مرافقين`, sheet.rows);
   }
+
+  // 3ب) نسخة المنيو بصيغة الشبكة **القابلة لإعادة الاستيراد** من صفحة قائمة
+  //     الطعام مباشرة. الجدول المسطّح أعلاه للقراءة فقط، فلو احتاج المستخدم
+  //     يرجّع المنيو وحده (بلا استعادة كاملة) كان لازم يعيد إدخاله يدوياً.
+  await appendImportableMenuSheets(XLSX, wb, menu, meals);
 
   // 4) أوامر التشغيل
   addSheet('أوامر التشغيل', buildOrdersSheet(orders, orderItems, meals));
@@ -390,8 +459,17 @@ export async function downloadBackupAsXLSX(
   addSheet('مواقع التسليم',  buildDeliveryLocationsSheet(deliveryLocs, cities));
   addSheet('أوامر التسليم',  buildDeliveryOrdersSheet(deliveryOrders, deliveryItems, deliveryLocs, cities));
 
-  // 6) الترجمة الحرفية المخصصة
-  addSheet('الترجمة الحرفية', buildTranslitSheet(translit));
+  // 6) منظومة التكاليف
+  addSheet('وحدات القياس',    buildCostUnitsSheet(costUnits));
+  addSheet('المواد الأولية',  buildRawMaterialsSheet(rawMats, costUnits));
+  addSheet('الوصفات',         buildRecipesSheet(recipes, meals, rawMats, costUnits));
+  addSheet('أسعار البيع',     buildPricingSheet(pricing, meals));
+  addSheet('تكاليف مجمّدة',   buildFrozenCostsSheet(frozenCosts, orders));
+
+  // 7) مراجع وإعدادات
+  addSheet('بدائل الأصناف',        buildMealAlternativesSheet(mealAlts, meals));
+  addSheet('ألوان الأنظمة',        buildDietColorsSheet(dietColors));
+  addSheet('الترجمة الحرفية',      buildTranslitSheet(translit));
 
   // ورقة Meta للنسخة
   const metaRows: Record<string, string>[] = [
@@ -405,6 +483,61 @@ export async function downloadBackupAsXLSX(
   addSheet('Meta', metaRows);
 
   XLSX.writeFile(wb, filename);
+}
+
+/**
+ * يُلحق أوراق المنيو بصيغة الشبكة نفسها التي تصدّرها صفحة قائمة الطعام —
+ * ورقة لكل (فئة × أسبوع)، فيمكن نسخ ورقة ورفعها في الصفحة مباشرة.
+ * أسماء الأوراق تحمل لاحقة الفئة، والقارئ يتعرّف على الأسبوع من رقمه في الاسم.
+ */
+async function appendImportableMenuSheets(
+  XLSX: typeof import('xlsx'),
+  wb: import('xlsx').WorkBook,
+  menu: MenuRow[],
+  meals: MealRow[],
+): Promise<void> {
+  const { buildMenuWorkbook } = await import('@/components/menu/menu-xlsx');
+  const mealsById = new Map(meals.map(m => [m.id, m] as const));
+
+  for (const entityType of ['beneficiary', 'companion'] as EntityType[]) {
+    const items: MenuItem[] = menu
+      .filter(mi => (mi.entity_type ?? 'beneficiary') === entityType)
+      .map(mi => ({
+        // معرّف مشتقّ من المفتاح الفريد — يكفي لكسر التعادل في الترتيب الثابت
+        id: `${mi.week_number}|${mi.day_of_week}|${mi.meal_type}|${mi.meal_id}`,
+        week_number: mi.week_number,
+        day_of_week: mi.day_of_week,
+        meal_type: mi.meal_type,
+        meal_id: mi.meal_id,
+        category: mi.category,
+        position: mi.position,
+        multiplier: mi.multiplier ?? 1,
+        extra_quantity: mi.extra_quantity ?? 0,
+        entity_type: entityType,
+        created_at: '',
+        meals: (() => {
+          const m = mealsById.get(mi.meal_id);
+          if (!m) return undefined;
+          return {
+            id: m.id,
+            name: m.name,
+            english_name: m.english_name ?? undefined,
+            type: m.type,
+            is_snack: m.is_snack,
+            category: m.category ?? undefined,
+            entity_type: m.entity_type,
+            created_at: m.created_at ?? '',
+          };
+        })(),
+      }));
+    if (items.length === 0) continue;
+
+    const suffix = entityType === 'companion' ? 'مرافقين' : 'مستفيدين';
+    const src = buildMenuWorkbook(XLSX, items);
+    for (const name of src.SheetNames) {
+      XLSX.utils.book_append_sheet(wb, src.Sheets[name], `${name} ${suffix}`.slice(0, 31));
+    }
+  }
 }
 
 // ─── التنزيل كـSQL ──────────────────────────────────────────────────────────

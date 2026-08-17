@@ -1,5 +1,6 @@
 import type { Meal, MealType, ItemCategory, MenuItem } from '@/lib/types';
 import type { MenuImportRow } from '@/lib/menu-import';
+import { CATEGORY_MARK_RE, CAT_FROM_AR } from '@/lib/sheet-marks';
 import {
   MENU_DAYS,
   MEAL_SECTIONS,
@@ -8,6 +9,7 @@ import {
   MAIN_ROWS_PER_MEAL,
   SNACK_ROWS_PER_MEAL,
   buildSlotMap,
+  normalizeSlot,
   slotKey,
   effectiveCategory,
   mainPosition,
@@ -429,12 +431,33 @@ export function parseMenuWorkbook(
   const isKnownName = (name: string) => mealByName.has(norm(name));
   const isSnackMeal = (m: Meal) => m.is_snack === true || m.category === 'snack';
 
+  // ورقة → أسبوع. نقبل الاسم المطابق تماماً، أو اسماً يحوي عنوان الأسبوع
+  // (مثل «الأسبوع الأول مستفيدين» في ملف النسخة الاحتياطية)، أو رقم الأسبوع.
+  const weekOfSheet = (sheetName: string): number | undefined => {
+    const n = norm(sheetName);
+    return WEEK_NUMBERS.find(w => norm(WEEK_TITLES[w]) === n)
+        ?? WEEK_NUMBERS.find(w => n.includes(norm(WEEK_TITLES[w])))
+        ?? WEEK_NUMBERS.find(w => n.includes(String(w)));
+  };
+
+  // ورقتان لنفس الأسبوع تعني ملفاً فيه منيو الفئتين معاً — دمجهما يخلط
+  // منيو المستفيدين بالمرافقين بصمت، فنرفض بدل أن نخمّن.
+  const sheetByWeek = new Map<number, string>();
   for (const sheetName of wb.SheetNames) {
-    const week = WEEK_NUMBERS.find(w =>
-      norm(WEEK_TITLES[w]) === norm(sheetName) ||
-      norm(sheetName).includes(String(w))
-    );
+    const w = weekOfSheet(sheetName);
+    if (w === undefined) continue;
+    const prev = sheetByWeek.get(w);
+    if (prev) {
+      errors.push(`الورقتان "${prev}" و"${sheetName}" تخصّان ${WEEK_TITLES[w as 1 | 2 | 3 | 4]} — أبقِ ورقة واحدة لكل أسبوع`);
+      continue;
+    }
+    sheetByWeek.set(w, sheetName);
+  }
+
+  for (const sheetName of wb.SheetNames) {
+    const week = weekOfSheet(sheetName);
     if (!week) continue;
+    if (sheetByWeek.get(week) !== sheetName) continue;
 
     const ws = wb.Sheets[sheetName];
     if (!ws) continue;
@@ -461,12 +484,13 @@ export function parseMenuWorkbook(
 
           const where = `الورقة "${sheetName}" — ${MENU_DAYS.find(d => d.value === day)?.label ?? ''} صف ${cellRow + 1}`;
 
-          // لاحقة الفئة @حار/@بارد/@سناك — توافق مع ملفات قديمة
+          // لاحقة الفئة @حار/@بارد/@سناك — توافق مع ملفات قديمة.
+          // التعبير من lib/sheet-marks: استخدام \b هنا كان يعني ألا تُطابق أبداً.
           let category: ItemCategory = s.category;
           let text = cellText;
-          const catMatch = text.match(/@\s*(حار|بارد|سناك)\b/);
+          const catMatch = text.match(CATEGORY_MARK_RE);
           if (catMatch) {
-            category = catMatch[1] === 'حار' ? 'hot' : catMatch[1] === 'بارد' ? 'cold' : 'snack';
+            category = CAT_FROM_AR[catMatch[1]] ?? s.category;
             text = norm(text.replace(catMatch[0], ''));
           }
 
@@ -548,4 +572,75 @@ export async function importMenuXLSX(file: File, meals: Meal[]): Promise<ParsedM
   const buffer = await file.arrayBuffer();
   const wb = XLSX.read(new Uint8Array(buffer), { type: 'array' });
   return parseMenuWorkbook(XLSX, wb, meals);
+}
+
+// ─── تحقّق الدورة ────────────────────────────────────────────────────────────
+
+export interface RoundTripResult {
+  ok: boolean;
+  /** عدد الأصناف التي عبرت الدورة سليمة */
+  matched: number;
+  issues: string[];
+}
+
+/**
+ * يصدّر المنيو الحالي في الذاكرة ثم يستورده ويقارن — بلا أي كتابة ولا تنزيل.
+ * يكشف فوراً أي انحراف بين ما يُكتب في الملف وما يُقرأ منه، فلا نكتشفه بعد
+ * أن يفقد المستخدم بيانات. تُستدعى من زر «تحقّق من الملف» في صفحة المنيو.
+ */
+export function verifyMenuRoundTrip(
+  XLSX: typeof import('xlsx'),
+  items: MenuItem[],
+  meals: Meal[],
+): RoundTripResult {
+  const issues: string[] = [];
+
+  const wb = buildMenuWorkbook(XLSX, items);
+  const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+  const reread = XLSX.read(new Uint8Array(buf), { type: 'array' });
+  const parsed = parseMenuWorkbook(XLSX, reread, meals);
+
+  for (const e of parsed.errors) issues.push(`قراءة: ${e}`);
+
+  // الحالة المتوقّعة = المنيو الحالي بعد التطبيع (نفس ما يكتبه التصدير)
+  const mealName = (id: string) => meals.find(m => m.id === id)?.name ?? id;
+  const expected = new Map<string, MenuImportRow>();
+  for (const [, slotItems] of buildSlotMap(items)) {
+    for (const { item, category, position } of normalizeSlot(slotItems)) {
+      expected.set(`${item.week_number}|${item.day_of_week}|${item.meal_type}|${item.meal_id}`, {
+        week_number: item.week_number,
+        day_of_week: item.day_of_week,
+        meal_type: item.meal_type,
+        meal_id: item.meal_id,
+        category,
+        position,
+        multiplier: item.multiplier ?? 1,
+        extra_quantity: item.extra_quantity ?? 0,
+      });
+    }
+  }
+
+  const actual = new Map<string, MenuImportRow>(parsed.rows.map(r =>
+    [`${r.week_number}|${r.day_of_week}|${r.meal_type}|${r.meal_id}`, r] as const));
+
+  let matched = 0;
+  for (const [key, exp] of expected) {
+    const got = actual.get(key);
+    const where = `${WEEK_TITLES[exp.week_number as 1 | 2 | 3 | 4]} — ${MENU_DAYS.find(d => d.value === exp.day_of_week)?.label} — «${mealName(exp.meal_id)}»`;
+    if (!got) { issues.push(`${where}: يختفي من الملف`); continue; }
+
+    const diffs: string[] = [];
+    if (got.category !== exp.category)             diffs.push(`الفئة ${exp.category}→${got.category}`);
+    if (got.position !== exp.position)             diffs.push(`الترتيب ${exp.position}→${got.position}`);
+    if (got.multiplier !== exp.multiplier)         diffs.push(`المضاعف ${exp.multiplier}→${got.multiplier}`);
+    if (got.extra_quantity !== exp.extra_quantity) diffs.push(`الكمية الإضافية ${exp.extra_quantity}→${got.extra_quantity}`);
+    if (diffs.length > 0) issues.push(`${where}: ${diffs.join('، ')}`);
+    else matched++;
+  }
+
+  for (const [key, got] of actual) {
+    if (!expected.has(key)) issues.push(`صنف زائد في الملف: «${mealName(got.meal_id)}»`);
+  }
+
+  return { ok: issues.length === 0, matched, issues };
 }

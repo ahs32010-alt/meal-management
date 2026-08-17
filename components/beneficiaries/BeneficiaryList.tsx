@@ -5,12 +5,28 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { fetchAllRows } from '@/lib/fetch-all';
+import {
+  BENEFICIARY_HEADERS,
+  COL_ACTIVE,
+  EXCLUSION_COLUMNS,
+  FIXED_COLUMNS,
+  STICKER_FLAG_COLUMNS,
+  buildBeneficiaryRow,
+  parseFixedToken,
+  parseYesNo,
+  splitCellTokens,
+  DAY_FROM_AR,
+  type SheetBeneficiary,
+  type SheetExclusion,
+  type SheetFixedMeal,
+  type SheetMeal,
+} from '@/lib/beneficiary-sheet';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
 import { enqueueDelete } from '@/lib/pending-actions';
 import { useMyPending } from '@/lib/use-my-pending';
-import type { Beneficiary, Meal, EntityType, ItemCategory } from '@/lib/types';
+import type { Beneficiary, Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
 import { DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import Pagination from '@/components/shared/Pagination';
@@ -83,13 +99,14 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  // كل الأصناف بلا فلترة فئة — تُستخدم فقط في بناء/فحص ملف Excel
+  const [allMealsForSheet, setAllMealsForSheet] = useState<{ id: string; name: string; type: MealType; is_snack: boolean }[]>([]);
   const [editingBeneficiary, setEditingBeneficiary] = useState<Beneficiary | null>(null);
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<'name' | 'code' | 'category' | 'villa' | 'diet_type' | 'fixed_count' | 'excluded_count' | 'notes'>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [deleting, setDeleting] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
-  const [deletingAll, setDeletingAll] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const { user: currentUser } = useCurrentUser();
   // الصلاحيات على هذي الصفحة (page) للمستخدم الحالي:
@@ -117,8 +134,15 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       // refuses to render companions data (we only want beneficiaries view safely).
       // قراءة على دفعات — القائمة تتجاوز سقف الـ١٠٠٠ صف الافتراضي فيقصّها
       // PostgREST بصمت، فيختفي مستفيدون من الصفحة بلا أي رسالة خطأ.
+      // ⚠️ is_alternative لازم يُقرأ هنا: BeneficiaryModal يبني حالته من هذا
+      // الصف، فلو ما انقرأ ظهرت كل الأصناف الثابتة «غير بديلة» وأي حفظ للمستفيد
+      // يمسح العلامة — وتنتقل كميات في تقرير الأمر من خانة البدائل للثابتة.
+      let withFixedAlt = true;
       const fetchBens = (withFixedCategory: boolean, withEntityType: boolean, withFlags: boolean) => {
         const flagCols = withFlags ? ', no_fish, no_pasta_sandwich, low_carb, is_active' : '';
+        const fixedCols =
+          `id, beneficiary_id, day_of_week, meal_type, meal_id, quantity` +
+          `${withFixedCategory ? ', category, suppress_if_meal_ids' : ''}${withFixedAlt ? ', is_alternative' : ''}`;
         return fetchAllRows((from, to) => {
         const q = supabase
           .from('beneficiaries')
@@ -128,10 +152,10 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
             exclusions(
               id, beneficiary_id, meal_id, alternative_meal_id,
               meals:meals!exclusions_meal_id_fkey(id, name, type, is_snack),
-              alternative_meal:meals!exclusions_alternative_meal_id_fkey(id, name)
+              alternative_meal:meals!exclusions_alternative_meal_id_fkey(id, name, type, is_snack)
             ),
             fixed_meals:beneficiary_fixed_meals(
-              id, beneficiary_id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category, suppress_if_meal_ids' : ''},
+              ${fixedCols},
               meals!meal_id(id, name, type, is_snack)
             )
           `)
@@ -142,9 +166,14 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         });
       };
 
+      let bensResult = await fetchBens(true, true, true);
+      // عمود is_alternative غير موجود (الترقية ما اتشغّلت) → نسقطه وحده
+      if (bensResult.error && /is_alternative/i.test(bensResult.error.message)) {
+        withFixedAlt = false;
+        bensResult = await fetchBens(true, true, true);
+      }
       // أعمدة خيارات الستيكر (no_fish...) غير موجودة → نعيد بدونها
       let withFlags = true;
-      let bensResult = await fetchBens(true, true, withFlags);
       if (bensResult.error && /no_fish|no_pasta_sandwich|low_carb|is_active/i.test(bensResult.error.message)) {
         withFlags = false;
         bensResult = await fetchBens(true, true, false);
@@ -189,6 +218,13 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
           mealsResult = await fetchMeals(false, false);
         }
       }
+
+      // كل الأصناف (الفئتين) لبناء ملف Excel — قراءة خفيفة على دفعات
+      void (async () => {
+        const r = await fetchAllRows<{ id: string; name: string; type: MealType; is_snack: boolean }>(
+          (from, to) => supabase.from('meals').select('id, name, type, is_snack').order('id').range(from, to));
+        if (!r.error && r.data) setAllMealsForSheet(r.data);
+      })();
 
       // ✅ FIX 1: لازم نحفظ المستفيدين فعلياً
       if (bensResult.data) {
@@ -245,30 +281,6 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     });
   };
 
-  const handleDeleteAll = () => {
-    if (beneficiaries.length === 0) return;
-    setDialog({
-      title: `حذف جميع ال${entityPlural.replace(/^ال/, '')}`,
-      message: `هل أنت متأكد من حذف جميع ال${entityPlural.replace(/^ال/, '')} (${beneficiaries.length})؟ لا يمكن التراجع عن هذه العملية.`,
-      onConfirm: async () => {
-        setDialog(null);
-        setDeletingAll(true);
-        const ids = beneficiaries.map(b => b.id);
-        const count = ids.length;
-        // نحذف فقط الـIDs اللي عرضناها (وكلها من نفس entity_type)
-        await supabase.from('beneficiaries').delete().in('id', ids);
-        void logActivity({
-          action: 'delete',
-          entity_type: entityType,
-          entity_name: `حذف جماعي (${count} ${entitySingular})`,
-          details: { count, scope: 'all', entity_type: entityType },
-        });
-        await fetchData();
-        setDeletingAll(false);
-      },
-    });
-  };
-
   const handleEdit = (b: Beneficiary) => {
     setEditingBeneficiary(b);
     setIsModalOpen(true);
@@ -285,87 +297,44 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     myPending.refresh();
   };
 
-  const handleExport = () => {
-    const DAY_SHORT: Record<number, string> = {
-      0: 'احد', 1: 'اثنين', 2: 'ثلاثاء', 3: 'اربعاء', 4: 'خميس', 5: 'جمعة', 6: 'سبت',
+  /**
+   * خريطة الأصناف كما يحتاجها بناء الصف. لازم تكون **شاملة**: قائمة الإلغاء
+   * (suppress_if_meal_ids) عابرة للأنواع بحكم تصميمها، فلو بنيناها من أصناف
+   * الفئة الحالية فقط لسقطت أسماء مشروعة من الملف — وأبلغ عنها زر التحقق
+   * كأنها بيانات ضائعة. لذلك نضمّ `allMealsForSheet` (كل الأصناف بلا فلترة).
+   */
+  const buildSheetMealsMap = () => {
+    const mealsById = new Map<string, SheetMeal>();
+    const addMeal = (m: { id?: string; name?: string; type?: string; is_snack?: boolean } | null | undefined) => {
+      if (!m?.id || !m.name || !m.type) return;
+      if (!mealsById.has(m.id)) mealsById.set(m.id, { id: m.id, name: m.name, type: m.type as MealType, is_snack: m.is_snack === true });
     };
-
-    const buildExclStr = (excl: Beneficiary['exclusions'], type: string, isSnack: boolean) =>
-      (excl ?? [])
-        .filter(e => e.meals?.type === type && e.meals?.is_snack === isSnack)
-        .map(e => {
-          const mealName = e.meals?.name ?? '';
-          const altName = (e as any).alternative_meal?.name ?? '';
-          return altName ? `${mealName}؛${altName}` : mealName;
-        })
-        .filter(Boolean)
-        .join(' - ');
-
-    // العمود "ثابتة الفطور" مثلاً افتراضه "حار"، أما "ثابتة سناكات الفطور" فافتراضه "سناك".
-    // نضيف لاحقة `@بارد/@حار/@سناك` فقط لو فئة الصف تختلف عن افتراض العمود،
-    // عشان الملفات القديمة تبقى مقروءة، والجديد يحفظ الفئة بدقة.
-    // لاحقة `↛اسم1,اسم2` تحفظ "أصناف تُلغي هذا الصنف الثابت" عند وجودها بالأمر.
-    const CAT_AR: Record<ItemCategory, string> = { hot: 'حار', cold: 'بارد', snack: 'سناك' };
-    const mealsById = new Map<string, Meal>();
-    for (const m of meals) mealsById.set(m.id, m);
-    const buildFixedStr = (fixedMeals: Beneficiary['fixed_meals'], type: string, isSnack: boolean) => {
-      const sectionDefault: ItemCategory = isSnack ? 'snack' : 'hot';
-      // نُجمع حسب (meal_id, category) — صفوف نفس الصنف بفئتين مختلفتين تظهر منفصلة.
-      const map = new Map<string, { name: string; days: number[]; quantity: number; category: ItemCategory; suppressIds: string[] }>();
-      for (const fm of fixedMeals ?? []) {
-        const mealInfo = (fm as any).meals;
-        if (mealInfo?.type !== type || mealInfo?.is_snack !== isSnack) continue;
-        const mealName = mealInfo?.name ?? '';
-        if (!mealName) continue;
-        const cat = ((fm as any).category as ItemCategory | undefined) ?? sectionDefault;
-        const key = `${fm.meal_id}|${cat}`;
-        const suppressIds = (fm as unknown as { suppress_if_meal_ids?: string[] }).suppress_if_meal_ids ?? [];
-        if (!map.has(key)) {
-          map.set(key, {
-            name: mealName,
-            days: [],
-            quantity: (fm as any).quantity ?? 1,
-            category: cat,
-            suppressIds: Array.isArray(suppressIds) ? [...suppressIds] : [],
-          });
-        }
-        map.get(key)!.days.push(fm.day_of_week);
+    for (const m of meals) addMeal(m);
+    for (const m of allMealsForSheet) addMeal(m);
+    // الأصناف المرتبطة تأتي مضمّنة مع المستفيد — نضيفها حتى لو غابت عن قائمة الصفحة
+    for (const b of beneficiaries) {
+      for (const e of b.exclusions ?? []) {
+        addMeal((e as { meals?: { id?: string; name?: string; type?: string; is_snack?: boolean } }).meals);
+        addMeal((e as { alternative_meal?: { id?: string; name?: string; type?: string; is_snack?: boolean } }).alternative_meal);
       }
-      return Array.from(map.values())
-        .map(({ name, days, quantity, category, suppressIds }) => {
-          const nameStr = quantity > 1 ? `${name}×${quantity}` : name;
-          const daysStr = days.map(d => DAY_SHORT[d]).join(' ');
-          const catSuffix = category !== sectionDefault ? `@${CAT_AR[category]}` : '';
-          const suppressNames = suppressIds
-            .map(id => mealsById.get(id)?.name ?? '')
-            .filter(Boolean);
-          const suppressSuffix = suppressNames.length ? `↛${suppressNames.join(',')}` : '';
-          return `${nameStr}؛${daysStr}${catSuffix}${suppressSuffix}`;
-        })
-        .join(' - ');
-    };
+      for (const fm of b.fixed_meals ?? []) {
+        addMeal((fm as { meals?: { id?: string; name?: string; type?: string; is_snack?: boolean } }).meals);
+      }
+    }
 
-    const rows = beneficiaries.map(b => ({
-      'الاسم': b.name,
-      'الاسم الإنجليزي': b.english_name ?? '',
-      'الكود': b.code,
-      'الفئة': b.category ?? '',
-      'الفيلا': b.villa ?? '',
-      'النظام الغذائي': b.diet_type ?? '',
-      'محظورات الفطور':         buildExclStr(b.exclusions, 'breakfast', false),
-      'محظورات سناكات الفطور':  buildExclStr(b.exclusions, 'breakfast', true),
-      'محظورات الغداء':         buildExclStr(b.exclusions, 'lunch',     false),
-      'محظورات سناكات الغداء':  buildExclStr(b.exclusions, 'lunch',     true),
-      'محظورات العشاء':         buildExclStr(b.exclusions, 'dinner',    false),
-      'محظورات سناكات العشاء':  buildExclStr(b.exclusions, 'dinner',    true),
-      'ثابتة الفطور':           buildFixedStr(b.fixed_meals, 'breakfast', false),
-      'ثابتة سناكات الفطور':    buildFixedStr(b.fixed_meals, 'breakfast', true),
-      'ثابتة الغداء':           buildFixedStr(b.fixed_meals, 'lunch',     false),
-      'ثابتة سناكات الغداء':    buildFixedStr(b.fixed_meals, 'lunch',     true),
-      'ثابتة العشاء':           buildFixedStr(b.fixed_meals, 'dinner',    false),
-      'ثابتة سناكات العشاء':    buildFixedStr(b.fixed_meals, 'dinner',    true),
-      'ملاحظات': b.notes ?? '',
-    }));
+    return mealsById;
+  };
+
+  const handleExport = () => {
+    // الصيغة من lib/beneficiary-sheet — نفسها التي تستعملها ورقة النسخة
+    // الاحتياطية، فما تعود الاثنتان تتباعدان.
+    const mealsById = buildSheetMealsMap();
+    const rows = beneficiaries.map(b => buildBeneficiaryRow(
+      b as SheetBeneficiary,
+      (b.exclusions ?? []) as SheetExclusion[],
+      (b.fixed_meals ?? []) as unknown as SheetFixedMeal[],
+      mealsById,
+    ));
     const fileLabel = entityType === 'companion' ? 'مرافقون' : 'مستفيدون';
     exportXLSX(rows, `${fileLabel}_${new Date().toISOString().slice(0, 10)}.xlsx`, entityPlural);
   };
@@ -481,13 +450,6 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               </Link>
               <button onClick={() => setImportOpen(true)} className="btn-secondary text-sm">استيراد Excel</button>
               <button onClick={handleExport} disabled={beneficiaries.length === 0} className="btn-secondary text-sm">تصدير Excel</button>
-              <button
-                onClick={handleDeleteAll}
-                disabled={deletingAll || beneficiaries.length === 0}
-                className="btn-secondary text-sm text-red-600 hover:bg-red-50 border-red-200"
-              >
-                {deletingAll ? 'جاري الحذف...' : 'حذف الكل'}
-              </button>
             </>
           )}
           {can(currentUser, permPage, 'add') && (
@@ -732,16 +694,13 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       {importOpen && (
         <ImportModal
           title={entityPlural}
-          templateHeaders={[
-            'الاسم', 'الاسم الإنجليزي', 'الكود', 'الفئة', 'الفيلا', 'النظام الغذائي',
-            'محظورات الفطور', 'محظورات سناكات الفطور',
-            'محظورات الغداء', 'محظورات سناكات الغداء',
-            'محظورات العشاء', 'محظورات سناكات العشاء',
-            'ثابتة الفطور', 'ثابتة سناكات الفطور',
-            'ثابتة الغداء', 'ثابتة سناكات الغداء',
-            'ثابتة العشاء', 'ثابتة سناكات العشاء',
-            'ملاحظات',
-          ]}
+          templateHeaders={BENEFICIARY_HEADERS}
+          // الأعمدة الاختيارية (مفعّل/خيارات الستيكر) مستثناة عمداً
+          // عشان الملفات القديمة تبقى مقبولة
+          requiredHeaders={['الاسم', 'الكود']}
+          modes={['append', 'update', 'replace']}
+          updateHint="يطابق بالكود: يحدّث الموجود ويضيف الجديد — بلا حذف أحد"
+
           templateRow={[
             'محمد أحمد', 'Mohammad Ahmad', 'B001', 'عائلة', '5', '',
             'فول؛كبدة - شكشوكة؛تونة', '',
@@ -751,44 +710,22 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
             //   فول×2؛سبت احد اربعاء  → كمية 2 (تصنيف افتراضي حار)
             //   سلطة؛سبت احد@بارد       → فئة بارد بدل الافتراضي
             //   مكرونة؛سبت↛فول,بيض     → تُلغى لو وُجد "فول" أو "بيض" في نفس الأمر
+            //   تمر؛سبت@بديل            → يُحتسب مع البدائل بدل الأصناف الثابتة
             'فول×2؛سبت احد اربعاء - سلطة؛سبت احد@بارد - مكرونة؛سبت↛فول,بيض', '',
             '', '',
             '', '',
             '',
+            // مفعّل + خيارات الستيكر — أعمدة اختيارية، غيابها يعني مفعّل/لا
+            'نعم',
+            ...STICKER_FLAG_COLUMNS.map(() => 'لا'),
           ]}
           onClose={() => setImportOpen(false)}
           onDone={() => { setImportOpen(false); fetchData(); }}
           replaceWarning={`سيتم حذف كل ${entityPlural} الحاليين (وما يرتبط بهم من محظورات وأصناف ثابتة) قبل إضافة بيانات الملف.`}
           onImport={async (rows, mode) => {
             const errors: string[] = [];
-
-            const DAY_MAP: Record<string, number> = {
-              'سبت': 6, 'السبت': 6,
-              'احد': 0, 'أحد': 0, 'الأحد': 0, 'الاحد': 0,
-              'اثنين': 1, 'إثنين': 1, 'الاثنين': 1, 'الإثنين': 1,
-              'ثلاثاء': 2, 'الثلاثاء': 2,
-              'اربعاء': 3, 'أربعاء': 3, 'الأربعاء': 3, 'الاربعاء': 3,
-              'خميس': 4, 'الخميس': 4,
-              'جمعة': 5, 'الجمعة': 5,
-            };
-
-            const EXCL_COLS = [
-              { col: 'محظورات الفطور',        type: 'breakfast', isSnack: false },
-              { col: 'محظورات سناكات الفطور',  type: 'breakfast', isSnack: true  },
-              { col: 'محظورات الغداء',         type: 'lunch',     isSnack: false },
-              { col: 'محظورات سناكات الغداء',  type: 'lunch',     isSnack: true  },
-              { col: 'محظورات العشاء',         type: 'dinner',    isSnack: false },
-              { col: 'محظورات سناكات العشاء',  type: 'dinner',    isSnack: true  },
-            ] as const;
-
-            const FIXED_COLS = [
-              { col: 'ثابتة الفطور',        type: 'breakfast', isSnack: false },
-              { col: 'ثابتة سناكات الفطور',  type: 'breakfast', isSnack: true  },
-              { col: 'ثابتة الغداء',         type: 'lunch',     isSnack: false },
-              { col: 'ثابتة سناكات الغداء',  type: 'lunch',     isSnack: true  },
-              { col: 'ثابتة العشاء',         type: 'dinner',    isSnack: false },
-              { col: 'ثابتة سناكات العشاء',  type: 'dinner',    isSnack: true  },
-            ] as const;
+            const EXCL_COLS = EXCLUSION_COLUMNS;
+            const FIXED_COLS = FIXED_COLUMNS;
 
             // ① (في وضع الاستبدال فقط) حذف بيانات هذا النوع + جلب الأصناف — بالتوازي
             // ⚠️ مهم جداً: الـdelete مقيّد بـentity_type عشان استيراد المرافقين ما يمسح المستفيدين والعكس.
@@ -869,6 +806,12 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                   diet_type: row['النظام الغذائي']?.toString().trim() || null,
                   notes: row['ملاحظات']?.toString().trim() || null,
                   entity_type: entityType,
+                  // أعمدة اختيارية — الملفات القديمة بدونها تُقرأ كما كانت تماماً
+                  // (مفعّل، وكل خيارات الستيكر مطفأة).
+                  is_active: parseYesNo(row[COL_ACTIVE], true),
+                  ...Object.fromEntries(
+                    STICKER_FLAG_COLUMNS.map(f => [f.key, parseYesNo(row[f.col], false)]),
+                  ),
                 },
                 exclCols:  EXCL_COLS.map(c => ({ type: c.type, isSnack: c.isSnack, raw: row[c.col]?.toString().trim() || '' })),
                 fixedCols: FIXED_COLS.map(c => ({ type: c.type, isSnack: c.isSnack, raw: row[c.col]?.toString().trim() || '' })),
@@ -877,11 +820,53 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
 
             if (parsed.length === 0) return { imported: 0, errors };
 
-            // ③ bulk insert المستفيدين
+            // ③ كتابة المستفيدين
             const CHUNK = 50;
             const codeToId = new Map<string, string>();
 
-            for (let c = 0; c < parsed.length; c += CHUNK) {
+            // ── وضع «تحديث الموجود» ──────────────────────────────────────────
+            // يطابق بالكود: يحدّث الموجود ويضيف الجديد، ولا يحذف أحداً. أبسط
+            // وأقل خطراً من «استبدال الكل» لتصحيح دفعة بيانات، ولا يفشل على
+            // الأكواد المكررة كما يفعل وضع «الإضافة».
+            if (mode === 'update') {
+              for (let c = 0; c < parsed.length; c += CHUNK) {
+                const chunk = parsed.slice(c, c + CHUNK);
+                const { data, error } = await supabase
+                  .from('beneficiaries')
+                  .upsert(chunk.map(r => r.payload), { onConflict: 'entity_type,code' })
+                  .select('id, code');
+                if (error) {
+                  // القيد القديم على code وحده (قبل ترقية المرافقين)
+                  if (/entity_type/i.test(error.message)) {
+                    const { data: d2, error: e2 } = await supabase
+                      .from('beneficiaries')
+                      .upsert(chunk.map(r => r.payload), { onConflict: 'code' })
+                      .select('id, code');
+                    if (e2) { errors.push(`تعذّر تحديث المجموعة ${Math.floor(c / CHUNK) + 1}: ${e2.message}`); continue; }
+                    for (const b of d2 ?? []) codeToId.set(b.code, b.id);
+                    continue;
+                  }
+                  errors.push(`تعذّر تحديث المجموعة ${Math.floor(c / CHUNK) + 1}: ${error.message}`);
+                  continue;
+                }
+                for (const b of data ?? []) codeToId.set(b.code, b.id);
+              }
+
+              // المحظورات والأصناف الثابتة تُستبدل بالكامل لمن ورد في الملف فقط
+              // — نفس دلالة نافذة تخصيص المستفيد. من لم يرد في الملف لا يتأثر.
+              const touchedIds = [...codeToId.values()];
+              for (let c = 0; c < touchedIds.length; c += CHUNK) {
+                const slice = touchedIds.slice(c, c + CHUNK);
+                const [ex, fx] = await Promise.all([
+                  supabase.from('exclusions').delete().in('beneficiary_id', slice),
+                  supabase.from('beneficiary_fixed_meals').delete().in('beneficiary_id', slice),
+                ]);
+                if (ex.error) errors.push(`تعذّر تحديث المحظورات: ${ex.error.message}`);
+                if (fx.error) errors.push(`تعذّر تحديث الأصناف الثابتة: ${fx.error.message}`);
+              }
+            }
+
+            for (let c = 0; mode !== 'update' && c < parsed.length; c += CHUNK) {
               const chunk = parsed.slice(c, c + CHUNK);
               const { data, error } = await supabase
                 .from('beneficiaries')
@@ -940,48 +925,38 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               for (const { type, isSnack, raw } of fixedCols) {
                 if (!raw) continue;
                 const sectionDefault: ItemCategory = isSnack ? 'snack' : 'hot';
-                for (const partRaw of raw.split(/ - | -|- /).map(s => s.trim()).filter(Boolean)) {
-                  // نستخرج لاحقة @بارد/@حار/@سناك أينما كانت في النص ونحذفها قبل بقية المعالجة.
-                  // الملفات القديمة بدون اللاحقة تستخدم افتراض العمود.
-                  let category: ItemCategory = sectionDefault;
-                  let part = partRaw;
-                  const catMatch = part.match(/@\s*(حار|بارد|سناك)\b/);
-                  if (catMatch) {
-                    category = catMatch[1] === 'حار' ? 'hot' : catMatch[1] === 'بارد' ? 'cold' : 'snack';
-                    part = part.replace(catMatch[0], '').trim();
-                  }
+                // التفكيك في lib/beneficiary-sheet — نفس الرموز التي يكتبها
+                // التصدير: الكمية ×N، الفئة @بارد، البديل @بديل، الإلغاء ↛…
+                for (const partRaw of splitCellTokens(raw)) {
+                  const token = parseFixedToken(partRaw, sectionDefault);
+                  if (!token) continue;
 
-                  // نستخرج لاحقة `↛اسم1,اسم2` (أصناف يلغي بوجودها). اللاحقة اختيارية —
-                  // الملفات القديمة بدون اللاحقة لا تتأثّر.
-                  let suppress_if_meal_ids: string[] = [];
-                  const suppressMatch = part.match(/↛\s*([^@]+?)\s*$/);
-                  if (suppressMatch) {
-                    const names = suppressMatch[1].split(/[,،]/).map(s => s.trim()).filter(Boolean);
-                    const seenIds = new Set<string>();
-                    for (const n of names) {
-                      const ids = lookupSuppressIds(n);
-                      if (ids.length === 0) {
-                        errors.push(`صف ${i + 2}: الصنف الـ"↛${n}" غير موجود — سيُتجاهل`);
-                        continue;
-                      }
-                      for (const id of ids) seenIds.add(id);
+                  const seenIds = new Set<string>();
+                  for (const n of token.suppressNames) {
+                    const ids = lookupSuppressIds(n);
+                    if (ids.length === 0) {
+                      errors.push(`صف ${i + 2}: الصنف الـ"↛${n}" غير موجود — سيُتجاهل`);
+                      continue;
                     }
-                    suppress_if_meal_ids = Array.from(seenIds);
-                    part = part.replace(suppressMatch[0], '').trim();
+                    for (const id of ids) seenIds.add(id);
                   }
+                  const suppress_if_meal_ids = Array.from(seenIds);
 
-                  const [mealPart, daysStr] = part.split('؛').map(s => s.trim());
-                  if (!mealPart || !daysStr) continue;
-                  // اسم الصنف قد يحتوي على كمية: فول×2
-                  const qtyMatch = mealPart.match(/^(.+?)×(\d+)$/);
-                  const mealName = qtyMatch ? qtyMatch[1].trim() : mealPart;
-                  const quantity = qtyMatch ? parseInt(qtyMatch[2], 10) : 1;
-                  const meal = lookupMeal(mealName, type, isSnack);
-                  if (!meal) { errors.push(`صف ${i + 2}: الصنف الثابت "${mealName}" غير موجود في هذه الوجبة`); continue; }
-                  for (const dayStr of daysStr.split(/[\s،,]+/).filter(Boolean)) {
-                    const dayNum = DAY_MAP[dayStr];
+                  const meal = lookupMeal(token.mealName, type, isSnack);
+                  if (!meal) { errors.push(`صف ${i + 2}: الصنف الثابت "${token.mealName}" غير موجود في هذه الوجبة`); continue; }
+                  for (const dayStr of token.dayTokens) {
+                    const dayNum = DAY_FROM_AR[dayStr];
                     if (dayNum === undefined) { errors.push(`صف ${i + 2}: اليوم "${dayStr}" غير معروف`); continue; }
-                    fixedRows.push({ beneficiary_id: benId, day_of_week: dayNum, meal_type: meal.type, meal_id: meal.id, quantity, category, suppress_if_meal_ids });
+                    fixedRows.push({
+                      beneficiary_id: benId,
+                      day_of_week: dayNum,
+                      meal_type: meal.type,
+                      meal_id: meal.id,
+                      quantity: token.quantity,
+                      category: token.category,
+                      suppress_if_meal_ids,
+                      is_alternative: token.isAlternative,
+                    });
                   }
                 }
               }
@@ -1001,11 +976,12 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                 if (error) {
                   // إذا أعمدة category أو suppress_if_meal_ids غير موجودة (الـmigrations
                   // ما اتشغّلت)، نعيد المحاولة بدونها عشان الاستيراد يكمل ويحفظ بقية الحقول.
-                  if (/category|suppress_if|column/i.test(error.message)) {
+                  if (/category|suppress_if|is_alternative|column/i.test(error.message)) {
                     const fallback = slice.map(row => {
                       const r = { ...row };
                       delete (r as Record<string, unknown>).category;
                       delete (r as Record<string, unknown>).suppress_if_meal_ids;
+                      delete (r as Record<string, unknown>).is_alternative;
                       return r;
                     });
                     const { error: e2 } = await supabase.from('beneficiary_fixed_meals').insert(fallback);

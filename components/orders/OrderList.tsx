@@ -71,7 +71,10 @@ export default function OrderList() {
         const baseCols = `id, date, meal_type, week_number, day_of_week, created_at`;
         const extra = `${withSnapshot ? ', snapshot' : ''}${withEntityType ? ', entity_type' : ''}`;
         const sel = `${baseCols}${extra}, order_items(id, meal_id, display_name, extra_quantity, category, multiplier, meals(id, name, is_snack))`;
-        return supabase.from('daily_orders').select(sel).order('date', { ascending: false });
+        // قراءة على دفعات — سجل الأوامر يتجاوز ١٠٠٠ صف مع الوقت
+        return fetchAllRows((from, to) =>
+          supabase.from('daily_orders').select(sel)
+            .order('date', { ascending: false }).order('id').range(from, to));
       };
 
       let entityTypeOk = true;

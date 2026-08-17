@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase-server';
 import { NextResponse, type NextRequest } from 'next/server';
 import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
 import { deliveryOrderSchema, parseJson } from '@/lib/validation';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,10 +22,15 @@ export async function GET() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const { data, error } = await supabase
-    .from('delivery_orders')
-    .select(SELECT_LIST)
-    .order('created_at', { ascending: false });
+  // قراءة على دفعات — بدونها يقصّ PostgREST القائمة عند ١٠٠٠ أمر بصمت
+  // فتختفي أوامر من الصفحة ومن التصدير بلا أي مؤشّر.
+  const { data, error } = await fetchAllRows((from, to) =>
+    supabase
+      .from('delivery_orders')
+      .select(SELECT_LIST)
+      .order('created_at', { ascending: false })
+      .order('id')
+      .range(from, to));
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
