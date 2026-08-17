@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { supabase } from '@/lib/supabase-client';
 import { fetchAllRows } from '@/lib/fetch-all';
 import type { Meal, MealType, ItemCategory, MenuItem, EntityType } from '@/lib/types';
@@ -225,6 +226,14 @@ function MealList({
         autoFocus
         value={query}
         onChange={e => setQuery(e.target.value)}
+        // ⚠️ المحرّر يُعرض داخل نموذج النافذة. بدون منع Enter كان الضغط عليه
+        // أثناء البحث يُرسل النموذج فيُحفظ المستفيد وتُغلق النافذة قبل اختيار
+        // الصنف — فيضيع التعديل ويبدو أنه «ما انحفظ».
+        onKeyDown={e => {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          if (filtered.length === 1) onPick(filtered[0]);
+        }}
         placeholder="ابحث عن صنف…"
         className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300"
       />
@@ -317,7 +326,10 @@ function CellEditor({
   const btnWeekly = `${btn} border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100`;
   const btnPlain = `${btn} border-slate-200 bg-white text-slate-700 hover:bg-slate-50`;
 
-  return (
+  // ⚠️ يُعرض عبر portal خارج نموذج النافذة عمداً: أي حقل إدخال داخل <form>
+  // يجعل Enter يُرسل النموذج (فيُحفظ المستفيد ويُغلق قبل إتمام التعديل).
+  // الخروج من شجرة النموذج يمنع ذلك من أصله.
+  return createPortal(
     <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={close}>
       <div
         className="bg-white rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[85vh]"
@@ -546,7 +558,8 @@ function CellEditor({
           </p>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -561,6 +574,13 @@ export default function BeneficiaryMenuTab({
   const [week, setWeek] = useState<WeekNumber>(1);
   const [editing, setEditing] = useState<EditingState | null>(null);
   const canEdit = !!actions;
+  /**
+   * صفوف إضافية يطلبها المستخدم — المفتاح `${meal_type}|m` للأساسي و`|s` للسناك.
+   * الشبكة تتوسّع تلقائياً لتسع أصناف المستفيد، وهذي زيادة يدوية فوقها لإضافة
+   * صنف جديد في خانة ممتلئة.
+   */
+  const [extraRows, setExtraRows] = useState<Record<string, number>>({});
+  const addRow = (key: string) => setExtraRows(prev => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
 
   // قراءة أصناف المنيو لهذه الفئة — بنفس سلسلة الإسقاط المستخدمة في صفحة
   // قائمة الطعام: أي عمود ناقص (الترقية ما اتشغّلت) يُسقط وتُعاد المحاولة.
@@ -679,10 +699,12 @@ export default function BeneficiaryMenuTab({
     return {
       ...section,
       byDay,
-      mainRows:  Math.max(MAIN_ROWS_PER_MEAL,  ...byDay.map(s => s.mains.length)),
-      snackRows: Math.max(SNACK_ROWS_PER_MEAL, ...byDay.map(s => s.snacks.length)),
+      mainRows:  Math.max(MAIN_ROWS_PER_MEAL,  ...byDay.map(s => s.mains.length))
+        + (extraRows[`${section.meal_type}|m`] ?? 0),
+      snackRows: Math.max(SNACK_ROWS_PER_MEAL, ...byDay.map(s => s.snacks.length))
+        + (extraRows[`${section.meal_type}|s`] ?? 0),
     };
-  }), [week, slotMap, exclusions, fixed, overrides, mealById]);
+  }), [week, slotMap, exclusions, fixed, overrides, mealById, extraRows]);
 
   // ملخّص كل يوم في ذيل الجدول: ياكل / بدائل / بلا بديل
   const dayTallies = useMemo(() => MENU_DAYS.map((_, dayIdx) =>
@@ -803,7 +825,7 @@ export default function BeneficiaryMenuTab({
                       ))}
                       {rowIdx === 0 && (
                         <td
-                          rowSpan={section.mainRows}
+                          rowSpan={section.mainRows + (canEdit ? 1 : 0)}
                           className={`border border-slate-200 align-middle font-bold text-sm w-20 ${sectionTheme}`}
                           style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
                         >
@@ -812,6 +834,21 @@ export default function BeneficiaryMenuTab({
                       )}
                     </tr>
                   )),
+                  // صف «إضافة صف» للقسم الأساسي
+                  ...(canEdit ? [(
+                    <tr key={`${section.meal_type}-main-add`} className="bg-slate-50/60">
+                      <td colSpan={MENU_DAYS.length} className="border border-slate-200 p-0">
+                        <button
+                          type="button"
+                          onClick={() => addRow(`${section.meal_type}|m`)}
+                          title={`أضف صفاً فاضياً لقسم ${section.label} — ثم اضغط الخانة لإضافة صنف`}
+                          className="w-full py-1 text-[11px] font-semibold text-slate-400 hover:text-emerald-600 hover:bg-emerald-50/50 transition-colors"
+                        >
+                          + إضافة صف
+                        </button>
+                      </td>
+                    </tr>
+                  )] : []),
                   // صفوف السناك
                   ...Array.from({ length: section.snackRows }, (_, rowIdx) => (
                     <tr key={`${section.meal_type}-snack-${rowIdx}`} className="bg-amber-50/60">
@@ -828,7 +865,7 @@ export default function BeneficiaryMenuTab({
                       ))}
                       {rowIdx === 0 && (
                         <td
-                          rowSpan={section.snackRows}
+                          rowSpan={section.snackRows + (canEdit ? 1 : 0)}
                           className="border border-slate-200 align-middle font-bold text-sm w-20 bg-amber-100 text-amber-800"
                           style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
                         >
@@ -837,6 +874,20 @@ export default function BeneficiaryMenuTab({
                       )}
                     </tr>
                   )),
+                  ...(canEdit ? [(
+                    <tr key={`${section.meal_type}-snack-add`} className="bg-amber-50/40">
+                      <td colSpan={MENU_DAYS.length} className="border border-slate-200 p-0">
+                        <button
+                          type="button"
+                          onClick={() => addRow(`${section.meal_type}|s`)}
+                          title={`أضف صف سناك فاضياً لقسم ${section.label}`}
+                          className="w-full py-1 text-[11px] font-semibold text-amber-500/70 hover:text-amber-700 hover:bg-amber-100/60 transition-colors"
+                        >
+                          + إضافة صف سناك
+                        </button>
+                      </td>
+                    </tr>
+                  )] : []),
                 ];
               })}
             </tbody>

@@ -246,6 +246,13 @@ export default function MenuView() {
   const [importMsg, setImportMsg] = useState('');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [search, setSearch] = useState('');
+  /**
+   * صفوف إضافية يطلبها المستخدم لقسم معيّن — المفتاح `${meal_type}|m` للأساسي
+   * و`|s` للسناك. الشبكة تتوسّع تلقائياً لتسع الأصناف الموجودة (وإلا اختفى ما
+   * زاد عن الحد الثابت)، وهذي زيادة يدوية فوقها لتعبئة صنف جديد.
+   */
+  const [extraRows, setExtraRows] = useState<Record<string, number>>({});
+  const addRow = (key: string) => setExtraRows(prev => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
   const importRef = useRef<HTMLInputElement>(null);
 
   const switchEntity = useCallback((next: EntityType) => {
@@ -853,13 +860,22 @@ export default function MenuView() {
                     ? 'bg-emerald-50 text-emerald-800'
                     : 'bg-rose-50 text-rose-800';
 
+                // الشبكة تتّسع لأكبر خانة في القسم: الحد الثابت كان يخفي أي صنف
+                // زائد عنه بلا أي أثر على الشاشة.
+                const perDay = MENU_DAYS.map(d => slotMainsAndSnacks(activeWeek, d.value, section.meal_type));
+                const mainKey  = `${section.meal_type}|m`;
+                const snackKey = `${section.meal_type}|s`;
+                const mainRows = Math.max(MAIN_ROWS_PER_MEAL, ...perDay.map(p => p.mains.length))
+                  + (extraRows[mainKey] ?? 0);
+                const snackRows = Math.max(SNACK_ROWS_PER_MEAL, ...perDay.map(p => p.snacks.length))
+                  + (extraRows[snackKey] ?? 0);
+
                 return [
-                  // Main rows (5)
-                  ...Array.from({ length: MAIN_ROWS_PER_MEAL }, (_, rowIdx) => (
+                  // الصفوف الأساسية
+                  ...Array.from({ length: mainRows }, (_, rowIdx) => (
                     <tr key={`${section.meal_type}-main-${rowIdx}`} className="hover:bg-slate-50/40">
-                      {MENU_DAYS.map(d => {
-                        const { mains } = slotMainsAndSnacks(activeWeek, d.value, section.meal_type);
-                        const cellItem = mains[rowIdx] ?? null;
+                      {MENU_DAYS.map((d, dayIdx) => {
+                        const cellItem = perDay[dayIdx].mains[rowIdx] ?? null;
                         const pKey = `${activeWeek}|${d.value}|${section.meal_type}|m|${rowIdx}`;
                         return (
                           <td key={d.value} className="border border-slate-200 align-middle p-0">
@@ -886,7 +902,7 @@ export default function MenuView() {
                       })}
                       {rowIdx === 0 && (
                         <td
-                          rowSpan={MAIN_ROWS_PER_MEAL}
+                          rowSpan={mainRows + (canEdit ? 1 : 0)}
                           className={`border border-slate-200 align-middle font-bold text-sm w-20 ${sectionTheme}`}
                           style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
                         >
@@ -895,12 +911,26 @@ export default function MenuView() {
                       )}
                     </tr>
                   )),
-                  // Snack rows (2) — yellow background
-                  ...Array.from({ length: SNACK_ROWS_PER_MEAL }, (_, rowIdx) => (
+                  // صف «إضافة صف» للقسم الأساسي
+                  ...(canEdit ? [(
+                    <tr key={`${section.meal_type}-main-add`} className="bg-slate-50/60">
+                      <td colSpan={MENU_DAYS.length} className="border border-slate-200 p-0">
+                        <button
+                          type="button"
+                          onClick={() => addRow(mainKey)}
+                          title={`أضف صفاً جديداً لقسم ${section.label} — لكل الأيام`}
+                          className="w-full py-1 text-[11px] font-semibold text-slate-400 hover:text-emerald-600 hover:bg-emerald-50/50 transition-colors"
+                        >
+                          + إضافة صف
+                        </button>
+                      </td>
+                    </tr>
+                  )] : []),
+                  // صفوف السناك — خلفية كهرمانية
+                  ...Array.from({ length: snackRows }, (_, rowIdx) => (
                     <tr key={`${section.meal_type}-snack-${rowIdx}`} className="bg-amber-50/60">
-                      {MENU_DAYS.map(d => {
-                        const { snacks } = slotMainsAndSnacks(activeWeek, d.value, section.meal_type);
-                        const cellItem = snacks[rowIdx] ?? null;
+                      {MENU_DAYS.map((d, dayIdx) => {
+                        const cellItem = perDay[dayIdx].snacks[rowIdx] ?? null;
                         const pKey = `${activeWeek}|${d.value}|${section.meal_type}|s|${rowIdx}`;
                         return (
                           <td key={d.value} className="border border-slate-200 align-middle p-0">
@@ -927,7 +957,7 @@ export default function MenuView() {
                       })}
                       {rowIdx === 0 && (
                         <td
-                          rowSpan={SNACK_ROWS_PER_MEAL}
+                          rowSpan={snackRows + (canEdit ? 1 : 0)}
                           className="border border-slate-200 align-middle font-bold text-sm w-20 bg-amber-100 text-amber-800"
                           style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
                         >
@@ -936,6 +966,20 @@ export default function MenuView() {
                       )}
                     </tr>
                   )),
+                  ...(canEdit ? [(
+                    <tr key={`${section.meal_type}-snack-add`} className="bg-amber-50/40">
+                      <td colSpan={MENU_DAYS.length} className="border border-slate-200 p-0">
+                        <button
+                          type="button"
+                          onClick={() => addRow(snackKey)}
+                          title={`أضف صف سناك جديداً لقسم ${section.label} — لكل الأيام`}
+                          className="w-full py-1 text-[11px] font-semibold text-amber-500/70 hover:text-amber-700 hover:bg-amber-100/60 transition-colors"
+                        >
+                          + إضافة صف سناك
+                        </button>
+                      </td>
+                    </tr>
+                  )] : []),
                 ];
               })}
             </tbody>

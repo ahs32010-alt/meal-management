@@ -72,6 +72,11 @@ async function replaceMenuOverrides(
   beneficiaryId: string,
   overrides: CreatePayload['menu_overrides'],
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  // ⚠️ الطلب الذي لا يحمل المفتاح أصلاً (طلب قديم، أو نافذة ما قرأت القرارات)
+  // لا يعني «امسح كل القرارات» — يعني «لا رأي لي فيها». المسح هنا كان يضيّع
+  // قرارات المستفيد بالكامل عند الموافقة على أي تعديل آخر.
+  if (overrides === undefined) return { ok: true };
+
   const missingTable = (msg: string) =>
     /beneficiary_menu_overrides|relation .* does not exist|schema cache|could not find the table/i.test(msg);
 

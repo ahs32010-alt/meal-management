@@ -372,6 +372,11 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<Tab>('info');
+  // ⚠️ كل التبويبات تتشارك نفس الحاوية القابلة للتمرير. بدون تصفير التمرير عند
+  // تبديل التبويب يبقى المستخدم عند نفس الارتفاع الذي وصل له في التبويب السابق،
+  // فيفتح «المنيو المخصّص» ويجده مقصوصاً من فوق (الشرح وتبويبات الأسابيع مخفية).
+  const bodyRef = useRef<HTMLFormElement>(null);
+  useEffect(() => { bodyRef.current?.scrollTo({ top: 0 }); }, [activeTab]);
   const { user: currentUser } = useCurrentUser();
   // المسار: الزر يظهر/يخفى من القسم الأول (canAdd/canEdit)، ولو يظهر،
   // نسأل القسم الثاني: هل هذا الإجراء يحتاج موافقة لهذا المستخدم؟
@@ -513,6 +518,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !code.trim()) { setError('الاسم والكود مطلوبان'); return; }
+    // الحفظ يعيد كتابة قرارات المنيو من حالة النافذة — فما نسمح به قبل قراءتها
+    if (!overridesReady) { setError('جاري قراءة تعديلات المنيو — انتظر لحظة ثم احفظ'); return; }
     setSaving(true); setError('');
 
     const payload: Record<string, unknown> = {
@@ -576,7 +583,9 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
             is_alternative: fe.is_alternative,
           }))
         ),
-        menu_overrides: overrideRows(),
+        // نرسل القرارات فقط لو قرأناها فعلاً — الطلب الذي لا يحملها لا يمسّها
+        // عند الموافقة (انظر replaceMenuOverrides في lib/pending-actions.ts).
+        ...(overridesReady && !overridesTableMissing ? { menu_overrides: overrideRows() } : {}),
       });
 
       if (!isEdit && addNeedsApproval && currentUser) {
@@ -658,15 +667,19 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
       // ── قرارات المنيو (خانة محددة) — مسح ثم إدراج، نفس دلالة ما فوق ──
       // لو الجدول غير موجود (الترقية ما اتشغّلت) ننبّه ولا نفشّل الحفظ: بقية
       // بيانات المستفيد محفوظة أصلاً في هذه المرحلة.
+      //
+      // ⚠️ لا نمسّ الجدول إطلاقاً ما لم تكتمل قراءة القرارات: المسح يعتمد على
+      // حالة النافذة، فلو حُفظ قبل وصولها (أو بعد فشل القراءة) مسحنا قرارات
+      // المستفيد كلها وكتبنا مكانها لا شيء — وهذا ضياع بيانات صامت.
       const ovRows = overrideRows();
       const ovTableMissing = (msg: string) =>
         /beneficiary_menu_overrides|does not exist|schema cache|could not find the table/i.test(msg);
-      const { error: ovDelErr } = await supabase
-        .from('beneficiary_menu_overrides')
-        .delete()
-        .eq('beneficiary_id', beneficiaryId);
+      const canWriteOverrides = overridesReady && !overridesTableMissing;
+      const { error: ovDelErr } = canWriteOverrides
+        ? await supabase.from('beneficiary_menu_overrides').delete().eq('beneficiary_id', beneficiaryId)
+        : { error: null };
       if (ovDelErr && !ovTableMissing(ovDelErr.message)) throw ovDelErr;
-      if (!ovDelErr && ovRows.length > 0) {
+      if (canWriteOverrides && !ovDelErr && ovRows.length > 0) {
         const { error: ovInsErr } = await supabase
           .from('beneficiary_menu_overrides')
           .insert(ovRows.map(r => ({ ...r, beneficiary_id: beneficiaryId })));
@@ -736,14 +749,16 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
       <div className={`bg-white rounded-2xl w-full max-h-[93vh] overflow-hidden shadow-2xl flex flex-col transition-[max-width] duration-200 ${
         activeTab === 'menu' ? 'max-w-[min(1200px,96vw)]' : 'max-w-2xl'
       }`}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+        <div className="shrink-0 flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <h2 className="text-lg font-bold text-slate-800">
             {beneficiary ? `تعديل ${entitySingular}` : `إضافة ${entitySingular} جديد`}
           </h2>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-lg">✕</button>
         </div>
 
-        <div className="flex border-b border-slate-100 px-4 overflow-x-auto">
+        {/* shrink-0: الشريط عليه overflow-x-auto فحدّه الأدنى صفر — بدونها ينضغط
+            ويختفي كلياً لما يطول محتوى التبويب. */}
+        <div className="shrink-0 flex border-b border-slate-100 px-4 overflow-x-auto">
           {(['info', 'exclusions', 'fixed', 'menu'] as Tab[]).map(tab => (
             <button key={tab} type="button" onClick={() => setActiveTab(tab)}
               className={`px-4 py-3 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${activeTab === tab ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
@@ -1126,8 +1141,10 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           )}
 
           <div className="flex gap-3 px-6 pb-6 pt-2">
-            <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
-              {saving ? 'جاري الحفظ...' : beneficiary ? 'حفظ التعديلات' : `إضافة ال${entitySingular}`}
+            <button type="submit" disabled={saving || !overridesReady} className="btn-primary flex-1 justify-center">
+              {saving ? 'جاري الحفظ...'
+                : !overridesReady ? 'جاري قراءة التعديلات…'
+                : beneficiary ? 'حفظ التعديلات' : `إضافة ال${entitySingular}`}
             </button>
             <button type="button" onClick={onClose} className="btn-secondary">إلغاء</button>
           </div>
