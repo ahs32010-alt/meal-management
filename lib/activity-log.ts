@@ -16,6 +16,7 @@ export type ActivityEntityType =
   | 'exclusion'
   | 'backup'
   | 'raw_material'
+  | 'meal_price'
   | 'cost_unit'
   | 'recipe_item'
   | 'order_cost';
@@ -97,6 +98,7 @@ export const ENTITY_LABELS: Record<ActivityEntityType, string> = {
   exclusion: 'محظور',
   backup: 'نسخة احتياطية',
   raw_material: 'مادة أولية',
+  meal_price: 'سعر بيع صنف',
   cost_unit: 'وحدة قياس',
   recipe_item: 'مكوّن وصفة',
   order_cost: 'تكلفة أمر',
@@ -125,6 +127,7 @@ export const ENTITY_STYLES: Record<ActivityEntityType, string> = {
   exclusion: 'bg-rose-50 text-rose-700 border-rose-200',
   backup: 'bg-cyan-50 text-cyan-700 border-cyan-200',
   raw_material: 'bg-lime-50 text-lime-700 border-lime-200',
+  meal_price: 'bg-purple-50 text-purple-700 border-purple-200',
   cost_unit: 'bg-sky-50 text-sky-700 border-sky-200',
   recipe_item: 'bg-orange-50 text-orange-700 border-orange-200',
   order_cost: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200',

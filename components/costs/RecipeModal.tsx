@@ -11,6 +11,7 @@ import {
   convertQuantity,
   costRecipe,
   formatMoney,
+  mealMargin,
   formatQty,
   parsePositiveNumber,
   round,
@@ -35,6 +36,8 @@ interface Props {
   existing: RecipeItem[];
   materials: RawMaterial[];
   units: CostUnitDef[];
+  /** سعر البيع الحالي — null يعني ما له سعر بعد */
+  sellingPrice: number | null;
   canEdit: boolean;
   /** إعادة تحميل المواد/الوحدات بعد إنشاء واحدة جديدة من داخل هذه النافذة */
   onDataChanged: () => Promise<void>;
@@ -46,8 +49,9 @@ let keySeq = 0;
 const nextKey = () => `line-${++keySeq}`;
 
 export default function RecipeModal({
-  meal, existing, materials, units, canEdit, onDataChanged, onClose, onSaved,
+  meal, existing, materials, units, sellingPrice, canEdit, onDataChanged, onClose, onSaved,
 }: Props) {
+  const [priceText, setPriceText] = useState(sellingPrice !== null ? String(sellingPrice) : '');
   const [lines, setLines] = useState<DraftLine[]>(() =>
     existing.map(r => ({
       key: nextKey(),
@@ -191,6 +195,24 @@ export default function RecipeModal({
         .from('meal_recipe_items')
         .upsert(rows, { onConflict: 'meal_id,raw_material_id' });
       if (upErr) { setError(upErr.message); setSaving(false); return; }
+    }
+
+    // سعر البيع — فارغ يعني إزالته
+    const trimmedPrice = priceText.trim();
+    if (trimmedPrice === '') {
+      if (sellingPrice !== null) {
+        const { error: e } = await supabase.from('meal_pricing').delete().eq('meal_id', meal.id);
+        if (e) { setError(e.message); setSaving(false); return; }
+      }
+    } else {
+      const price = parsePositiveNumber(trimmedPrice);
+      if (price === null) { setError('سعر البيع غير صالح — أدخل رقماً موجباً'); setSaving(false); return; }
+      if (price !== sellingPrice) {
+        const { error: e } = await supabase
+          .from('meal_pricing')
+          .upsert({ meal_id: meal.id, selling_price: price }, { onConflict: 'meal_id' });
+        if (e) { setError(e.message); setSaving(false); return; }
+      }
     }
 
     void logActivity({
@@ -388,6 +410,55 @@ export default function RecipeModal({
             <div className="text-2xl font-extrabold text-emerald-700 tabular-nums" dir="ltr">
               {formatMoney(costed.total)} <span className="text-sm font-bold">ريال</span>
             </div>
+          </div>
+
+          {/* سعر البيع والهامش — يُحسبان لحظياً مع تغيّر الوصفة */}
+          <div className="border border-slate-200 rounded-xl px-4 py-3 space-y-2">
+            <div className="flex items-center gap-3">
+              <label className="text-xs font-bold text-slate-600 whitespace-nowrap">سعر بيع الحصة</label>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={priceText}
+                onChange={e => setPriceText(e.target.value)}
+                disabled={!canEdit}
+                dir="ltr"
+                placeholder="اتركه فارغاً لو ما له سعر"
+                className="input-field py-2 text-sm text-center flex-1"
+              />
+              <span className="text-xs font-bold text-slate-500">ريال</span>
+            </div>
+
+            {(() => {
+              const m = mealMargin(costed.total, parsePositiveNumber(priceText.trim()));
+              if (m.status === 'unpriced') {
+                return <p className="text-[11px] text-slate-400">أدخل سعر البيع ليظهر الربح وهامشه.</p>;
+              }
+              const tone = m.marginPct !== null && m.marginPct < 0 ? 'text-red-600'
+                : m.marginPct !== null && m.marginPct < 20 ? 'text-amber-600' : 'text-emerald-600';
+              return (
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <div className="text-[10px] text-slate-400 font-semibold">الربح للحصة</div>
+                    <div className={`text-sm font-extrabold tabular-nums ${tone}`} dir="ltr">{formatMoney(m.profit ?? 0)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-slate-400 font-semibold">هامش الربح</div>
+                    <div className={`text-sm font-extrabold tabular-nums ${tone}`} dir="ltr">{round(m.marginPct ?? 0, 1)}%</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-slate-400 font-semibold">نسبة التكلفة</div>
+                    <div className="text-sm font-extrabold text-slate-600 tabular-nums" dir="ltr">{round(m.foodCostPct ?? 0, 1)}%</div>
+                  </div>
+                  {m.status === 'loss' && (
+                    <p className="col-span-3 text-[11px] text-red-600 font-semibold">🔴 التكلفة أعلى من سعر البيع — خسارة على كل حصة.</p>
+                  )}
+                  {m.status === 'no_cost' && (
+                    <p className="col-span-3 text-[11px] text-amber-600">الصنف بلا وصفة، فالهامش يظهر كاملاً وهو غير حقيقي.</p>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           {costed.total > 0 && (

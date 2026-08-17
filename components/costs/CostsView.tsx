@@ -7,6 +7,7 @@ import { can } from '@/lib/permissions';
 import {
   costRecipe,
   type CostUnitDef,
+  type MealPrice,
   type RawMaterial,
   type RecipeCost,
   type RecipeItem,
@@ -21,13 +22,14 @@ type Tab = 'materials' | 'meals' | 'orders';
 
 const TABS: { key: Tab; label: string; hint: string }[] = [
   { key: 'materials', label: 'المواد الأولية',   hint: 'أسعار الشراء' },
-  { key: 'meals',     label: 'تسعير الأصناف',    hint: 'مكوّنات كل صنف' },
+  { key: 'meals',     label: 'الأصناف والأسعار', hint: 'التكلفة والربح' },
   { key: 'orders',    label: 'تكلفة أوامر التشغيل', hint: 'اليوم / الوجبة' },
 ];
 
 /** رسالة الترقية الناقصة — نميّزها عن أي خطأ آخر عشان التوجيه يكون دقيقاً */
 const MIGRATION_HINT =
-  'جداول التكاليف غير مكتملة — شغّل supabase/costs-migration.sql ثم supabase/costs-units-migration.sql في Supabase SQL Editor.';
+  'جداول الأسعار والتكاليف غير مكتملة — شغّل ملفات supabase/costs-migration.sql ثم ' +
+  'costs-units-migration.sql ثم costs-selling-price-migration.sql في Supabase SQL Editor.';
 
 export default function CostsView() {
   const { user: currentUser, loading: userLoading } = useCurrentUser();
@@ -37,6 +39,7 @@ export default function CostsView() {
   const [materials, setMaterials] = useState<RawMaterial[]>([]);
   const [recipes, setRecipes] = useState<RecipeItem[]>([]);
   const [meals, setMeals] = useState<Meal[]>([]);
+  const [prices, setPrices] = useState<MealPrice[]>([]);
   // التحميل الأول فقط يفرّغ الشاشة. التحديث بعد الحفظ يصير بصمت عشان
   // ما يومض الجدول ويبان الحفظ بطيئاً وهو منتهٍ أصلاً.
   const [loading, setLoading] = useState(true);
@@ -52,14 +55,15 @@ export default function CostsView() {
     if (!loadedOnce.current) setLoading(true);
     setError('');
 
-    const [unitsRes, materialsRes, recipesRes, mealsRes] = await Promise.all([
+    const [unitsRes, materialsRes, recipesRes, mealsRes, pricesRes] = await Promise.all([
       supabase.from('cost_units').select('id, name, family, factor, is_builtin').order('name'),
       supabase.from('raw_materials').select('id, name, unit_id, unit_cost, notes, is_active').order('name'),
       supabase.from('meal_recipe_items').select('id, meal_id, raw_material_id, quantity, unit_id'),
       supabase.from('meals').select('id, name, english_name, type, is_snack, category, entity_type, created_at').order('name'),
+      supabase.from('meal_pricing').select('meal_id, selling_price, notes'),
     ]);
 
-    const firstErr = unitsRes.error ?? materialsRes.error ?? recipesRes.error;
+    const firstErr = unitsRes.error ?? materialsRes.error ?? recipesRes.error ?? pricesRes.error;
     if (firstErr) {
       setError(
         /does not exist|relation|schema cache/i.test(firstErr.message)
@@ -89,6 +93,9 @@ export default function CostsView() {
       (recipesRes.data ?? []).map(r => ({ ...r, quantity: Number(r.quantity) || 0 })) as RecipeItem[],
     );
     setMeals((mealsRes.data ?? []) as Meal[]);
+    setPrices(
+      (pricesRes.data ?? []).map(p => ({ ...p, selling_price: Number(p.selling_price) || 0 })) as MealPrice[],
+    );
     loadedOnce.current = true;
     setLoading(false);
   }, []);
@@ -121,6 +128,12 @@ export default function CostsView() {
     }
     return map;
   }, [recipesByMeal, materialsById, unitsById]);
+
+  const pricesByMeal = useMemo(() => {
+    const map: Record<string, MealPrice> = {};
+    for (const p of prices) map[p.meal_id] = p;
+    return map;
+  }, [prices]);
 
   const usageByMaterial = useMemo(() => {
     const map: Record<string, number> = {};
@@ -157,9 +170,9 @@ export default function CostsView() {
       {/* الرأس */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="hidden md:block">
-          <h1 className="text-2xl font-bold text-slate-800">التكاليف</h1>
+          <h1 className="text-2xl font-bold text-slate-800">الأسعار والتكاليف</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            حساب تكلفة أوامر التشغيل من المواد الأولية داخل كل صنف
+            تكلفة الأصناف من موادها الأولية، وأسعار بيعها وهامش الربح
           </p>
         </div>
         {!loading && (
@@ -169,6 +182,7 @@ export default function CostsView() {
               materials={materials}
               meals={meals}
               recipes={recipes}
+              prices={prices}
               canImport={canAdd || canEdit}
               onChanged={loadData}
             />
@@ -222,6 +236,7 @@ export default function CostsView() {
           meals={meals}
           recipesByMeal={recipesByMeal}
           recipeCosts={recipeCosts}
+          pricesByMeal={pricesByMeal}
           materials={materials}
           units={units}
           canEdit={canEdit}

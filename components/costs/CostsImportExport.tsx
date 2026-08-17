@@ -7,11 +7,13 @@ import { exportWorkbook, parseWorkbook, type WorkbookSheet } from '@/lib/xlsx-ut
 import {
   COLS,
   MATERIAL_HEADERS,
+  PRICE_HEADERS,
   RECIPE_HEADERS,
   SHEETS,
   UNIT_HEADERS,
   buildGuideRows,
   buildMaterialRows,
+  buildPriceRows,
   buildRecipeRows,
   buildUnitRows,
   nameKey,
@@ -20,7 +22,7 @@ import {
   templateSamples,
   type ImportPlan,
 } from '@/lib/costs-xlsx';
-import type { CostUnitDef, RawMaterial, RecipeItem } from '@/lib/costs';
+import type { CostUnitDef, MealPrice, RawMaterial, RecipeItem } from '@/lib/costs';
 import type { Meal } from '@/lib/types';
 
 interface Props {
@@ -28,6 +30,7 @@ interface Props {
   materials: RawMaterial[];
   meals: Meal[];
   recipes: RecipeItem[];
+  prices: MealPrice[];
   canImport: boolean;
   onChanged: () => Promise<void>;
 }
@@ -35,7 +38,7 @@ interface Props {
 const stamp = () => new Date().toISOString().slice(0, 10);
 
 export default function CostsImportExport({
-  units, materials, meals, recipes, canImport, onChanged,
+  units, materials, meals, recipes, prices, canImport, onChanged,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [plan, setPlan] = useState<ImportPlan | null>(null);
@@ -51,9 +54,10 @@ export default function CostsImportExport({
       { name: SHEETS.guide,     rows: buildGuideRows(), headers: ['كيف تستخدم هذا الملف'] },
       { name: SHEETS.units,     rows: buildUnitRows(units),                 headers: UNIT_HEADERS },
       { name: SHEETS.materials, rows: buildMaterialRows(materials, units),  headers: MATERIAL_HEADERS },
-      { name: SHEETS.recipes,   rows: buildRecipeRows({ units, materials, meals, recipes }), headers: RECIPE_HEADERS },
+      { name: SHEETS.recipes,   rows: buildRecipeRows({ units, materials, meals, recipes, prices }), headers: RECIPE_HEADERS },
+      { name: SHEETS.prices,    rows: buildPriceRows(meals, prices), headers: PRICE_HEADERS },
     ];
-    void exportWorkbook(sheets, `التكاليف-${stamp()}.xlsx`);
+    void exportWorkbook(sheets, `الأسعار-والتكاليف-${stamp()}.xlsx`);
   };
 
   /** قالب فارغ برؤوس الأعمدة وأسطر مثال — الوحدات الحالية تنزل معه للمرجع */
@@ -65,8 +69,9 @@ export default function CostsImportExport({
       { name: SHEETS.units,     rows: [...buildUnitRows(units), ...s.units], headers: UNIT_HEADERS },
       { name: SHEETS.materials, rows: s.materials, headers: MATERIAL_HEADERS },
       { name: SHEETS.recipes,   rows: s.recipes,   headers: RECIPE_HEADERS },
+      { name: SHEETS.prices,    rows: s.prices,    headers: PRICE_HEADERS },
     ];
-    void exportWorkbook(sheets, `قالب-التكاليف-${stamp()}.xlsx`);
+    void exportWorkbook(sheets, `قالب-الأسعار-والتكاليف-${stamp()}.xlsx`);
   };
 
   // ── الاستيراد ─────────────────────────────────────────────────────────────
@@ -165,6 +170,22 @@ export default function CostsImportExport({
 
         const { error: insErr } = await supabase.from('meal_recipe_items').insert(rows);
         if (insErr) throw new Error(`حفظ الوصفات: ${insErr.message}`);
+      }
+
+      // ٤) أسعار البيع
+      const priceUpserts = plan.prices.filter(p => p.selling_price !== null);
+      const priceRemovals = plan.prices.filter(p => p.selling_price === null).map(p => p.meal.id);
+
+      if (priceUpserts.length > 0) {
+        const { error } = await supabase.from('meal_pricing').upsert(
+          priceUpserts.map(p => ({ meal_id: p.meal.id, selling_price: p.selling_price! })),
+          { onConflict: 'meal_id' },
+        );
+        if (error) throw new Error(`أسعار البيع: ${error.message}`);
+      }
+      if (priceRemovals.length > 0) {
+        const { error } = await supabase.from('meal_pricing').delete().in('meal_id', priceRemovals);
+        if (error) throw new Error(`إزالة أسعار البيع: ${error.message}`);
       }
 
       void logActivity({

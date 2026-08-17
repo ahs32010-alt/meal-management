@@ -53,7 +53,7 @@ export const PAGES: { key: PageKey; label: string; href: string }[] = [
   { key: 'menu',          label: 'قائمة الطعام', href: '/menu' },
   { key: 'orders',          label: 'أوامر التشغيل', href: '/orders' },
   { key: 'delivery_orders', label: 'أوامر التسليم', href: '/delivery-orders' },
-  { key: 'costs',           label: 'التكاليف',      href: '/costs' },
+  { key: 'costs',           label: 'الأسعار والتكاليف', href: '/costs' },
   { key: 'reports',         label: 'التقارير',     href: '/reports' },
   { key: 'stickers',      label: 'ستيكرات الفطور', href: '/stickers' },
   { key: 'lunch_dinner_stickers', label: 'ستيكرات الغداء والعشاء', href: '/lunch-dinner-stickers' },

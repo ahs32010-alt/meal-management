@@ -248,6 +248,75 @@ export function costRecipe(
   };
 }
 
+// ── سعر البيع وهامش الربح ───────────────────────────────────────────────────
+
+/** سعر بيع صنف — صفّ في جدول meal_pricing */
+export interface MealPrice {
+  meal_id: string;
+  selling_price: number;
+  notes?: string | null;
+}
+
+export type MarginStatus =
+  /** ما له سعر بيع بعد */
+  | 'unpriced'
+  /** له سعر لكن ما له وصفة — الربح يبدو كاملاً وهو غير حقيقي */
+  | 'no_cost'
+  /** التكلفة أعلى من سعر البيع */
+  | 'loss'
+  | 'ok';
+
+export const MARGIN_STATUS_LABELS: Record<MarginStatus, string> = {
+  unpriced: 'بلا سعر بيع',
+  no_cost:  'بلا تكلفة',
+  loss:     'خسارة',
+  ok:       'ربح',
+};
+
+export interface MealMargin {
+  cost: number;
+  price: number | null;
+  /** سعر البيع − التكلفة. null إذا ما فيه سعر بيع */
+  profit: number | null;
+  /**
+   * نسبة الهامش على *سعر البيع* — التعريف المحاسبي المعتاد للهامش الإجمالي.
+   * لا تخلطها بنسبة الإضافة (markup) المحسوبة على التكلفة.
+   */
+  marginPct: number | null;
+  /** نسبة تكلفة الطعام = التكلفة ÷ سعر البيع. مكمّلة للهامش (المجموع 100%) */
+  foodCostPct: number | null;
+  /** نسبة الإضافة على التكلفة — تُعرض عند الحاجة، null لو التكلفة صفر */
+  markupPct: number | null;
+  status: MarginStatus;
+}
+
+/**
+ * يحسب ربح الحصة الواحدة ونسبه. يفصل حالات «بلا سعر» و«بلا تكلفة» عن الربح
+ * الحقيقي بدل ما يعطي 100% مضلّلة لصنف ما له وصفة أصلاً.
+ */
+export function mealMargin(cost: number, price: number | null | undefined): MealMargin {
+  const c = Number.isFinite(cost) && cost > 0 ? cost : 0;
+  const p = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
+
+  if (p === null) {
+    return {
+      cost: c, price: null, profit: null, marginPct: null,
+      foodCostPct: null, markupPct: null, status: 'unpriced',
+    };
+  }
+
+  const profit = p - c;
+  return {
+    cost: c,
+    price: p,
+    profit,
+    marginPct: (profit / p) * 100,
+    foodCostPct: (c / p) * 100,
+    markupPct: c > 0 ? (profit / c) * 100 : null,
+    status: c === 0 ? 'no_cost' : profit < 0 ? 'loss' : 'ok',
+  };
+}
+
 // ── تسعير أمر تشغيل ─────────────────────────────────────────────────────────
 
 /** كمية صنف داخل أمر تشغيل — تجي من itemFinalCounts في تقرير الأمر */

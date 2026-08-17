@@ -11,6 +11,7 @@
 
 import {
   convertQuantity,
+  type MealPrice,
   deriveFactor,
   newCustomFamily,
   parsePositiveNumber,
@@ -28,6 +29,7 @@ export const SHEETS = {
   units:     'الوحدات',
   materials: 'المواد الأولية',
   recipes:   'الوصفات',
+  prices:    'أسعار البيع',
 } as const;
 
 export const COLS = {
@@ -51,11 +53,19 @@ export const COLS = {
     qty:      'الكمية للحصة',
     unit:     'الوحدة',
   },
+  prices: {
+    meal:     'الصنف',
+    mealType: 'الوجبة',
+    entity:   'الفئة',
+    snack:    'سناك',
+    price:    'سعر بيع الحصة',
+  },
 } as const;
 
 export const UNIT_HEADERS     = Object.values(COLS.units);
 export const MATERIAL_HEADERS = Object.values(COLS.materials);
 export const RECIPE_HEADERS   = Object.values(COLS.recipes);
+export const PRICE_HEADERS    = Object.values(COLS.prices);
 
 // ── تحويل القيم العربية ─────────────────────────────────────────────────────
 
@@ -110,6 +120,7 @@ export interface ExportInput {
   materials: RawMaterial[];
   meals: Meal[];
   recipes: RecipeItem[];
+  prices: MealPrice[];
 }
 
 /** أصغر وحدة في المجموعة — نستخدمها كمرجع عند تصدير الوحدات */
@@ -174,6 +185,24 @@ export function buildRecipeRows(input: ExportInput) {
     );
 }
 
+export function buildPriceRows(meals: Meal[], prices: MealPrice[]) {
+  const mealById = new Map(meals.map(m => [m.id, m]));
+  return prices
+    .map(p => {
+      const meal = mealById.get(p.meal_id);
+      if (!meal) return null;
+      return {
+        [COLS.prices.meal]:     meal.name,
+        [COLS.prices.mealType]: MEAL_TYPE_LABELS[meal.type],
+        [COLS.prices.entity]:   ENTITY_LABEL[(meal.entity_type as EntityType) ?? 'beneficiary'],
+        [COLS.prices.snack]:    meal.is_snack ? YES : NO,
+        [COLS.prices.price]:    round(p.selling_price, 4),
+      };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null)
+    .sort((a, b) => a[COLS.prices.meal].toString().localeCompare(b[COLS.prices.meal].toString(), 'ar'));
+}
+
 /** صفوف ورقة التعليمات — تُقرأ كنص عادي داخل Excel */
 export function buildGuideRows() {
   const line = (t: string) => ({ 'كيف تستخدم هذا الملف': t });
@@ -188,6 +217,12 @@ export function buildGuideRows() {
     line('٣) ورقة «الوصفات»: سطر لكل مادة داخل الصنف، بالكمية اللازمة لحصة واحدة.'),
     line('   مثال: كبدة | غداء | مستفيدون | لا | زيت | 2 | مل'),
     line('   تقدر تدخل الكمية بأي وحدة من نفس مجموعة وحدة الشراء والنظام يحوّل.'),
+    line(''),
+    line(''),
+    line('٤) ورقة «أسعار البيع»: سعر بيع الحصة الواحدة من الصنف.'),
+    line('   مثال: كبدة | غداء | مستفيدون | لا | 12'),
+    line('   النظام يحسب الربح = سعر البيع − التكلفة، وهامش الربح تلقائياً.'),
+    line('   اترك السطر أو ضع صفراً لإزالة السعر.'),
     line(''),
     line('ملاحظات مهمة:'),
     line('• الأصناف لازم تكون موجودة مسبقاً في صفحة «الأصناف» — الاستيراد ما ينشئها.'),
@@ -234,10 +269,17 @@ export interface RecipePlan {
   lines: RecipeLineDraft[];
 }
 
+export interface PricePlan {
+  meal: Meal;
+  /** null يعني إزالة السعر */
+  selling_price: number | null;
+}
+
 export interface ImportPlan {
   newUnits: NewUnit[];
   materials: MaterialUpsert[];
   recipes: RecipePlan[];
+  prices: PricePlan[];
   errors: string[];
   warnings: string[];
   stats: {
@@ -247,6 +289,8 @@ export interface ImportPlan {
     materialsUnchanged: number;
     mealsPriced: number;
     recipeLines: number;
+    sellingPricesSet: number;
+    sellingPricesRemoved: number;
   };
 }
 
@@ -384,6 +428,41 @@ export function planImport(
     mealsByName.set(nameKey(m.name), list);
   }
 
+  /**
+   * يحدّد الصنف من صف: بالاسم لو فريد، وإلا بالاسم + وجبة + فئة + سناك.
+   * مشتركة بين ورقتَي «الوصفات» و«أسعار البيع» فما يختلف سلوك التمييز بينهما.
+   */
+  const resolveMeal = (
+    ln: string,
+    name: string,
+    cols: { mealType: string; entity: string; snack: string },
+    row: Row,
+  ): Meal | null => {
+    const candidates = mealsByName.get(nameKey(name)) ?? [];
+    if (candidates.length === 0) {
+      errors.push(`${ln}: الصنف «${name}» غير موجود — أضفه في صفحة «الأصناف» أولاً.`);
+      return null;
+    }
+    if (candidates.length === 1) return candidates[0];
+
+    const type   = parseMealType(row[cols.mealType]);
+    const entity = parseEntity(row[cols.entity]);
+    const snack  = parseBool(row[cols.snack]);
+    if (type === null || entity === null || snack === null) {
+      errors.push(
+        `${ln}: الاسم «${name}» مكرّر على ${candidates.length} أصناف — عبّي أعمدة ` +
+        `«${cols.mealType}» و«${cols.entity}» و«${cols.snack}» للتمييز.`,
+      );
+      return null;
+    }
+    const found = mealsByFullKey.get(mealKey(name, type, entity, snack));
+    if (!found) {
+      errors.push(`${ln}: ما فيه صنف «${name}» بهذه الوجبة/الفئة/سناك.`);
+      return null;
+    }
+    return found;
+  };
+
   const byMeal = new Map<string, RecipePlan>();
   const seenPair = new Set<string>();
   const recipeRows = sheets[SHEETS.recipes] ?? [];
@@ -394,32 +473,8 @@ export function planImport(
     if (!mealName) return;
 
     // ١) حدّد الصنف
-    const candidates = mealsByName.get(nameKey(mealName)) ?? [];
-    if (candidates.length === 0) {
-      errors.push(`${ln}: الصنف «${mealName}» غير موجود — أضفه في صفحة «الأصناف» أولاً.`);
-      return;
-    }
-
-    let meal: Meal | undefined;
-    if (candidates.length === 1) {
-      meal = candidates[0];
-    } else {
-      const type   = parseMealType(row[COLS.recipes.mealType]);
-      const entity = parseEntity(row[COLS.recipes.entity]);
-      const snack  = parseBool(row[COLS.recipes.snack]);
-      if (type === null || entity === null || snack === null) {
-        errors.push(
-          `${ln}: الاسم «${mealName}» مكرّر على ${candidates.length} أصناف — عبّي أعمدة ` +
-          `«${COLS.recipes.mealType}» و«${COLS.recipes.entity}» و«${COLS.recipes.snack}» للتمييز.`,
-        );
-        return;
-      }
-      meal = mealsByFullKey.get(mealKey(mealName, type, entity, snack));
-      if (!meal) {
-        errors.push(`${ln}: ما فيه صنف «${mealName}» بهذه الوجبة/الفئة/سناك.`);
-        return;
-      }
-    }
+    const meal = resolveMeal(ln, mealName, COLS.recipes, row);
+    if (!meal) return;
 
     // ٢) المادة الأولية
     const matName = norm(row[COLS.recipes.material]);
@@ -468,10 +523,42 @@ export function planImport(
 
   const recipes = Array.from(byMeal.values());
 
+  // ── أسعار البيع ───────────────────────────────────────────────────────────
+  const prices: PricePlan[] = [];
+  const seenPriceMeal = new Set<string>();
+  const priceRows = sheets[SHEETS.prices] ?? [];
+
+  priceRows.forEach((row, i) => {
+    const ln = `«${SHEETS.prices}» سطر ${i + 2}`;
+    const mealName = norm(row[COLS.prices.meal]);
+    if (!mealName) return;
+
+    const meal = resolveMeal(ln, mealName, COLS.prices, row);
+    if (!meal) return;
+
+    if (seenPriceMeal.has(meal.id)) {
+      errors.push(`${ln}: الصنف «${mealName}» مكرّر في ورقة أسعار البيع.`);
+      return;
+    }
+    seenPriceMeal.add(meal.id);
+
+    const raw = norm(row[COLS.prices.price]);
+    // فارغ أو صفر = إزالة السعر
+    if (raw === '') { prices.push({ meal, selling_price: null }); return; }
+
+    const price = parsePositiveNumber(raw);
+    if (price === null) {
+      errors.push(`${ln}: سعر بيع «${mealName}» غير صالح.`);
+      return;
+    }
+    prices.push({ meal, selling_price: price > 0 ? price : null });
+  });
+
   return {
     newUnits,
     materials,
     recipes,
+    prices,
     errors,
     warnings,
     stats: {
@@ -481,6 +568,8 @@ export function planImport(
       materialsUnchanged: materials.filter(m => m.id && !m.changed).length,
       mealsPriced:        recipes.length,
       recipeLines:        recipes.reduce((s, r) => s + r.lines.length, 0),
+      sellingPricesSet:     prices.filter(p => p.selling_price !== null).length,
+      sellingPricesRemoved: prices.filter(p => p.selling_price === null).length,
     },
   };
 }
@@ -506,6 +595,12 @@ export function templateSamples() {
         [COLS.recipes.snack]: NO, [COLS.recipes.material]: 'زيت', [COLS.recipes.qty]: 2, [COLS.recipes.unit]: 'مل',
       },
     ],
+    prices: [
+      {
+        [COLS.prices.meal]: 'كبدة', [COLS.prices.mealType]: 'غداء',
+        [COLS.prices.entity]: 'مستفيدون', [COLS.prices.snack]: NO, [COLS.prices.price]: 12,
+      },
+    ],
   };
 }
 
@@ -518,6 +613,8 @@ export function summarizePlan(plan: ImportPlan): string[] {
   if (s.materialsUpdated)   out.push(`${s.materialsUpdated} مادة سيُحدَّث سعرها/وحدتها`);
   if (s.materialsUnchanged) out.push(`${s.materialsUnchanged} مادة بلا تغيير`);
   if (s.mealsPriced)        out.push(`${s.mealsPriced} صنف سيُستبدل تسعيره (${s.recipeLines} سطر)`);
+  if (s.sellingPricesSet)     out.push(`${s.sellingPricesSet} سعر بيع سيُضبط`);
+  if (s.sellingPricesRemoved) out.push(`${s.sellingPricesRemoved} سعر بيع سيُزال`);
   if (out.length === 0)     out.push('ما فيه أي تغيير في الملف');
   return out;
 }

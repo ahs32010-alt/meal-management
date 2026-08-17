@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  mealMargin,
   baseUnitOf,
   convertQuantity,
   costOrder,
@@ -343,6 +344,60 @@ describe('costOrder', () => {
     const c = costOrder([{ meal_id: 'unknown', meal_name: 'مجهول', quantity: 5 }], recipes);
     expect(c.unpricedItems).toHaveLength(1);
     expect(c.total).toBe(0);
+  });
+});
+
+describe('mealMargin', () => {
+  it('يحسب الربح والنسب — مثال واضح', () => {
+    // تكلفة 4، بيع 10 → ربح 6، هامش 60%، نسبة تكلفة 40%، إضافة 150%
+    const m = mealMargin(4, 10);
+    expect(m.profit).toBe(6);
+    expect(round(m.marginPct!, 2)).toBe(60);
+    expect(round(m.foodCostPct!, 2)).toBe(40);
+    expect(round(m.markupPct!, 2)).toBe(150);
+    expect(m.status).toBe('ok');
+  });
+
+  it('الهامش ونسبة التكلفة متكاملتان دائماً', () => {
+    for (const [c, p] of [[3, 7], [1.25, 9.99], [8, 8.5]]) {
+      const m = mealMargin(c, p);
+      expect(round(m.marginPct! + m.foodCostPct!, 6)).toBe(100);
+    }
+  });
+
+  it('يعلّم الخسارة لما التكلفة أعلى من البيع', () => {
+    const m = mealMargin(12, 10);
+    expect(m.profit).toBe(-2);
+    expect(round(m.marginPct!, 2)).toBe(-20);
+    expect(m.status).toBe('loss');
+  });
+
+  it('بلا سعر بيع = لا نسب ولا ربح', () => {
+    for (const p of [null, undefined, 0, -5]) {
+      const m = mealMargin(4, p as number | null);
+      expect(m.status).toBe('unpriced');
+      expect(m.profit).toBeNull();
+      expect(m.marginPct).toBeNull();
+    }
+  });
+
+  it('سعر بلا تكلفة يُعلَّم بدل ما يظهر هامش 100% مضلّلاً', () => {
+    const m = mealMargin(0, 10);
+    expect(m.status).toBe('no_cost');
+    expect(m.marginPct).toBe(100);
+    expect(m.markupPct).toBeNull();   // القسمة على تكلفة صفر
+  });
+
+  it('التعادل التام هامشه صفر ويُعدّ ربحاً لا خسارة', () => {
+    const m = mealMargin(10, 10);
+    expect(m.profit).toBe(0);
+    expect(m.marginPct).toBe(0);
+    expect(m.status).toBe('ok');
+  });
+
+  it('يتجاهل الأرقام غير الصالحة', () => {
+    expect(mealMargin(NaN, 10).cost).toBe(0);
+    expect(mealMargin(4, NaN as number).status).toBe('unpriced');
   });
 });
 

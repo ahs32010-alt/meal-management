@@ -3,6 +3,7 @@ import {
   COLS,
   SHEETS,
   buildMaterialRows,
+  buildPriceRows,
   buildRecipeRows,
   buildUnitRows,
   nameKey,
@@ -46,7 +47,17 @@ const sheet = {
   units: (rows: Record<string, string>[]) => ({ [SHEETS.units]: rows }),
   materials: (rows: Record<string, string>[]) => ({ [SHEETS.materials]: rows }),
   recipes: (rows: Record<string, string>[]) => ({ [SHEETS.recipes]: rows }),
+  prices: (rows: Record<string, string>[]) => ({ [SHEETS.prices]: rows }),
 };
+
+const priceRow = (mealName: string, price: string, extra: Partial<Record<string, string>> = {}) => ({
+  [COLS.prices.meal]: mealName,
+  [COLS.prices.mealType]: '',
+  [COLS.prices.entity]: '',
+  [COLS.prices.snack]: '',
+  [COLS.prices.price]: price,
+  ...extra,
+});
 
 const matRow = (name: string, unit: string, price: string, notes = '') => ({
   [COLS.materials.name]: name,
@@ -123,7 +134,7 @@ describe('التصدير', () => {
     const recipes: RecipeItem[] = [
       { id: 'r1', meal_id: LIVER_DISH.id, raw_material_id: OIL.id, quantity: 2, unit_id: ML.id },
     ];
-    const rows = buildRecipeRows({ units: UNITS, materials: MATERIALS, meals: MEALS, recipes });
+    const rows = buildRecipeRows({ units: UNITS, materials: MATERIALS, meals: MEALS, recipes, prices: [] });
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       [COLS.recipes.meal]: 'كبدة',
@@ -140,7 +151,7 @@ describe('التصدير', () => {
     const recipes: RecipeItem[] = [
       { id: 'r1', meal_id: 'مفقود', raw_material_id: OIL.id, quantity: 1, unit_id: ML.id },
     ];
-    expect(buildRecipeRows({ units: UNITS, materials: MATERIALS, meals: MEALS, recipes })).toHaveLength(0);
+    expect(buildRecipeRows({ units: UNITS, materials: MATERIALS, meals: MEALS, recipes, prices: [] })).toHaveLength(0);
   });
 });
 
@@ -333,5 +344,73 @@ describe('سلوك عام', () => {
       matRow('فلفل', 'برميل', '9'),
     ]), ctx);
     expect(p.errors[0]).toContain('سطر 3');   // ثاني صف بيانات = السطر الثالث
+  });
+});
+
+// ── أسعار البيع ─────────────────────────────────────────────────────────────
+
+describe('أسعار البيع', () => {
+  it('يصدّر السعر مع أعمدة تمييز الصنف', () => {
+    const rows = buildPriceRows(MEALS, [{ meal_id: LIVER_DISH.id, selling_price: 12 }]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      [COLS.prices.meal]: 'كبدة',
+      [COLS.prices.mealType]: 'غداء',
+      [COLS.prices.entity]: 'مستفيدون',
+      [COLS.prices.snack]: 'لا',
+      [COLS.prices.price]: 12,
+    });
+  });
+
+  it('يستورد سعر بيع صحيح', () => {
+    const p = planImport(sheet.prices([priceRow('كبدة', '12')]), ctx);
+    expect(p.errors).toEqual([]);
+    expect(p.prices).toHaveLength(1);
+    expect(p.prices[0].meal.id).toBe(LIVER_DISH.id);
+    expect(p.prices[0].selling_price).toBe(12);
+    expect(p.stats.sellingPricesSet).toBe(1);
+  });
+
+  it('السعر الفارغ أو الصفر يعني إزالة السعر', () => {
+    const p = planImport(sheet.prices([
+      priceRow('كبدة', ''),
+      priceRow('بسكويت', '0', {
+        [COLS.prices.mealType]: 'فطور', [COLS.prices.entity]: 'مستفيدون', [COLS.prices.snack]: 'نعم',
+      }),
+    ]), ctx);
+    expect(p.errors).toEqual([]);
+    expect(p.stats.sellingPricesRemoved).toBe(2);
+    expect(p.prices.every(x => x.selling_price === null)).toBe(true);
+  });
+
+  it('يستخدم نفس تمييز الاسم المكرّر المستخدم في الوصفات', () => {
+    const ambiguous = planImport(sheet.prices([priceRow('بسكويت', '5')]), ctx);
+    expect(ambiguous.errors[0]).toContain('مكرّر');
+
+    const resolved = planImport(sheet.prices([
+      priceRow('بسكويت', '5', {
+        [COLS.prices.mealType]: 'فطور', [COLS.prices.entity]: 'مستفيدون', [COLS.prices.snack]: 'لا',
+      }),
+    ]), ctx);
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.prices[0].meal.id).toBe(BISCUIT_A.id);
+  });
+
+  it('يرفض الصنف المكرّر داخل ورقة الأسعار', () => {
+    const p = planImport(sheet.prices([priceRow('كبدة', '12'), priceRow('كبدة', '15')]), ctx);
+    expect(p.errors.some(e => e.includes('مكرّر'))).toBe(true);
+  });
+
+  it('يرفض السعر غير الصالح والصنف غير الموجود', () => {
+    const p = planImport(sheet.prices([
+      priceRow('كبدة', 'غالي'),
+      priceRow('مندي', '20'),
+    ]), ctx);
+    expect(p.errors).toHaveLength(2);
+  });
+
+  it('الملخّص يذكر الأسعار المضبوطة والمُزالة', () => {
+    const p = planImport(sheet.prices([priceRow('كبدة', '12')]), ctx);
+    expect(summarizePlan(p).some(l => l.includes('سعر بيع'))).toBe(true);
   });
 });
