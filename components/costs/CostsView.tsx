@@ -12,6 +12,7 @@ import {
   type RecipeItem,
 } from '@/lib/costs';
 import type { Meal } from '@/lib/types';
+import CostsImportExport from './CostsImportExport';
 import RawMaterialsTab from './RawMaterialsTab';
 import MealCostsTab from './MealCostsTab';
 import OrderCostsTab from './OrderCostsTab';
@@ -154,13 +155,25 @@ export default function CostsView() {
   return (
     <div className="p-4 md:p-6 space-y-5">
       {/* الرأس */}
-      <div className="hidden md:flex items-center justify-between">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="hidden md:block">
           <h1 className="text-2xl font-bold text-slate-800">التكاليف</h1>
           <p className="text-sm text-slate-500 mt-0.5">
             حساب تكلفة أوامر التشغيل من المواد الأولية داخل كل صنف
           </p>
         </div>
+        {!loading && (
+          <div className="w-full md:w-auto">
+            <CostsImportExport
+              units={units}
+              materials={materials}
+              meals={meals}
+              recipes={recipes}
+              canImport={canAdd || canEdit}
+              onChanged={loadData}
+            />
+          </div>
+        )}
       </div>
 
       {/* التبويبات */}

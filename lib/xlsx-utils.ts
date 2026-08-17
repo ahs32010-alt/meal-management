@@ -1,3 +1,62 @@
+export type SheetRow = Record<string, string | number | boolean | null | undefined>;
+
+/** ورقة واحدة داخل ملف متعدّد الأوراق */
+export interface WorkbookSheet {
+  name: string;
+  rows: SheetRow[];
+  /** رؤوس الأعمدة بالترتيب — لازمة عشان الورقة الفارغة تنزل برؤوسها */
+  headers?: string[];
+}
+
+/**
+ * يصدّر ملف Excel فيه عدة أوراق. نستخدمه في التكاليف حيث البيانات مترابطة
+ * (وحدات ← مواد ← وصفات) فلازم تنزل وتُستورد كوحدة واحدة.
+ */
+export async function exportWorkbook(sheets: WorkbookSheet[], filename: string) {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.utils.book_new();
+
+  for (const sheet of sheets) {
+    const headers = sheet.headers ?? Object.keys(sheet.rows[0] ?? {});
+    const ws = sheet.rows.length > 0
+      ? XLSX.utils.json_to_sheet(sheet.rows, { header: headers })
+      : XLSX.utils.aoa_to_sheet([headers]);
+
+    ws['!cols'] = headers.map(h => ({
+      wch: Math.max(h.length, ...sheet.rows.map(r => String(r[h] ?? '').length), 8) + 2,
+    }));
+    // اتجاه الورقة من اليمين لليسار — الملف عربي
+    ws['!views'] = [{ RTL: true }];
+    XLSX.utils.book_append_sheet(wb, ws, sheet.name);
+  }
+
+  XLSX.writeFile(wb, filename);
+}
+
+/** يقرأ كل أوراق الملف كخريطة: اسم الورقة → صفوفها */
+export async function parseWorkbook(file: File): Promise<Record<string, Record<string, string>[]>> {
+  const XLSX = await import('xlsx');
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const wb = XLSX.read(data, { type: 'array' });
+        const out: Record<string, Record<string, string>[]> = {};
+        for (const name of wb.SheetNames) {
+          out[name] = XLSX.utils.sheet_to_json<Record<string, string>>(wb.Sheets[name], {
+            defval: '',
+            raw: false,
+          });
+        }
+        resolve(out);
+      } catch (err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 export async function exportXLSX(
   rows: Record<string, string | number | boolean | null | undefined>[],
   filename: string,
