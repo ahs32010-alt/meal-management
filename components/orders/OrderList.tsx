@@ -49,6 +49,7 @@ export default function OrderList() {
   const [pickEntityOpen, setPickEntityOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<DailyOrder | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const [search, setSearch] = useState('');
   const [pickBulkEntityOpen, setPickBulkEntityOpen] = useState(false);
@@ -69,7 +70,7 @@ export default function OrderList() {
         // ⚠️ نجلب `category` من order_items عشان لا تنقلب الفئة إلى الافتراضي
         //    (حار) في OrderModal.initSelected ويفقد المستخدم تصنيفاته.
         const baseCols = `id, date, meal_type, week_number, day_of_week, created_at`;
-        const extra = `${withSnapshot ? ', snapshot' : ''}${withEntityType ? ', entity_type' : ''}`;
+        const extra = `${withSnapshot ? ', snapshot, snapshot_at' : ''}${withEntityType ? ', entity_type' : ''}`;
         const sel = `${baseCols}${extra}, order_items(id, meal_id, display_name, extra_quantity, category, multiplier, meals(id, name, is_snack))`;
         // قراءة على دفعات — سجل الأوامر يتجاوز ١٠٠٠ صف مع الوقت
         return fetchAllRows((from, to) =>
@@ -199,6 +200,29 @@ export default function OrderList() {
         setDeleting(null);
       },
     });
+  };
+
+  /**
+   * أعداد أمر التشغيل تُجمَّد في لقطة (snapshot) وقت الحفظ عشان التقرير
+   * المطبوع ما تتغيّر أرقامه بعدين. النتيجة: أي تعديل لاحق على المستفيدين
+   * (محظور جديد، أو تعليم صنف ثابت كـ«صنف بديل») ما يظهر في الأمر ولا في
+   * تقريره. هذا الزر يعيد بناء اللقطة من الوضع الحالي.
+   */
+  const refreshSnapshot = async (id: string) => {
+    setRefreshingId(id);
+    try {
+      const res = await fetch(`/api/orders/${id}/snapshot`, { method: 'POST' });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        alert(j?.error ?? 'تعذّر تحديث أرقام أمر التشغيل');
+        return;
+      }
+      await fetchData();
+    } catch {
+      alert('تعذّر الاتصال — حاول مرة ثانية');
+    } finally {
+      setRefreshingId(null);
+    }
   };
 
   const itemLabel = (item: { display_name?: string | null; meals?: { name?: string } | null }) =>
@@ -486,6 +510,20 @@ export default function OrderList() {
                           </svg>
                           PDF
                         </Link>
+                        <button
+                          onClick={() => refreshSnapshot(order.id)}
+                          disabled={refreshingId === order.id}
+                          className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40"
+                          title={`تحديث الأرقام — الأعداد محفوظة${
+                            (order as DailyOrder & { snapshot_at?: string }).snapshot_at
+                              ? ` من ${formatDateTime((order as DailyOrder & { snapshot_at?: string }).snapshot_at!)}`
+                              : ''
+                          }. لو عدّلت محظورات مستفيد أو علّمت صنفاً ثابتاً كـ«صنف بديل» بعدها، اضغط هنا لإعادة الحساب.`}
+                        >
+                          <svg className={`w-4 h-4 ${refreshingId === order.id ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </button>
                         <button
                           onClick={() => {
                             setEditingOrder(order);

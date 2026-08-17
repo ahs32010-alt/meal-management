@@ -58,6 +58,8 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
   );
   // Always start unchecked — user must explicitly toggle it on each time
   const [fitOnePage, setFitOnePage] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
 
@@ -68,6 +70,28 @@ export default function OrderPrintView({ orderId }: { orderId: string }) {
   }, [orderId]);
 
   useEffect(() => { load(); }, [load]);
+
+  /**
+   * أرقام هذا التقرير **مجمّدة** وقت حفظ الأمر (لقطة/snapshot) — عشان الأمر
+   * المطبوع ما تتغيّر أرقامه لاحقاً. لكن لما يتعدّل شيء بعد الحفظ (مثلاً تعليم
+   * صنف ثابت كـ«صنف بديل»، أو تغيير محظورات مستفيد) التعديل ما يظهر هنا حتى
+   * يُعاد بناء اللقطة — وهذا الزر يعيد بناءها.
+   */
+  const refreshSnapshot = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await fetch(`/api/orders/${orderId}/snapshot`, { method: 'POST' });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        alert(j?.error ?? 'تعذّر تحديث أرقام التقرير');
+        return;
+      }
+      await load();
+      setRefreshedAt(new Date());
+    } finally {
+      setRefreshing(false);
+    }
+  }, [orderId, load]);
 
   // Auto-scale to fit one A4 page (297mm at 96dpi ≈ 1123px, minus 6mm margins ≈ 1080px)
   useLayoutEffect(() => {
@@ -413,6 +437,16 @@ ${contentHtml}
             />
             احتواء في صفحة واحدة
           </label>
+          {/* أرقام التقرير مجمّدة وقت حفظ الأمر — هذا الزر يعيد حسابها من
+              الوضع الحالي (محظورات/أصناف ثابتة/علامة «صنف بديل»…) */}
+          <button
+            onClick={refreshSnapshot}
+            disabled={refreshing}
+            title="أرقام هذا التقرير محفوظة من وقت حفظ أمر التشغيل. لو عدّلت محظورات مستفيد أو علّمت صنفاً ثابتاً كـ«صنف بديل» بعدها، اضغط هنا لإعادة حساب الأرقام."
+            style={{ background: refreshing ? '#475569' : '#f59e0b', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: refreshing ? 'default' : 'pointer', fontWeight: 600, fontFamily: 'inherit', fontSize: 13 }}
+          >
+            {refreshing ? '… جاري التحديث' : refreshedAt ? '✓ تم التحديث' : '↻ تحديث الأرقام'}
+          </button>
           <button
             onClick={() => {
               requestAnimationFrame(() => requestAnimationFrame(() => window.print()));

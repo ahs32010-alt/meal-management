@@ -257,6 +257,7 @@ export default function ReportView({ initialOrderId }: Props) {
   const [report, setReport] = useState<FullReport | null>(null);
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [loadingReport, setLoadingReport] = useState(false);
+  const [refreshingSnapshot, setRefreshingSnapshot] = useState(false);
   const [error, setError] = useState('');
 
   // ── Period state ─────────────────────────────────────────────────────────
@@ -307,6 +308,29 @@ export default function ReportView({ initialOrderId }: Props) {
 
   useEffect(() => {
     if (selectedOrderId) generateReport(selectedOrderId);
+  }, [selectedOrderId, generateReport]);
+
+  /**
+   * أرقام تقرير الأمر مجمّدة وقت حفظه (لقطة/snapshot) حتى ما تتغيّر بعد
+   * الطباعة. فأي تعديل لاحق — محظورات مستفيد، أو تعليم صنف ثابت كـ«صنف بديل»
+   * — ما يظهر هنا إلا بعد إعادة بناء اللقطة، وهذا ما يسوّيه هذا الزر.
+   */
+  const refreshSnapshot = useCallback(async () => {
+    if (!selectedOrderId) return;
+    setRefreshingSnapshot(true);
+    try {
+      const res = await fetch(`/api/orders/${selectedOrderId}/snapshot`, { method: 'POST' });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j?.error ?? 'تعذّر تحديث أرقام التقرير');
+        return;
+      }
+      await generateReport(selectedOrderId);
+    } catch {
+      setError('حدث خطأ في الاتصال');
+    } finally {
+      setRefreshingSnapshot(false);
+    }
   }, [selectedOrderId, generateReport]);
 
   // ── Generate period report ────────────────────────────────────────────────
@@ -360,6 +384,20 @@ export default function ReportView({ initialOrderId }: Props) {
               فترة زمنية
             </button>
           </div>
+          {mode === 'daily' && report && (
+            <button
+              type="button"
+              onClick={refreshSnapshot}
+              disabled={refreshingSnapshot}
+              title="أرقام التقرير محفوظة من وقت حفظ أمر التشغيل. لو عدّلت بعدها محظورات مستفيد أو علّمت صنفاً ثابتاً كـ«صنف بديل»، اضغط هنا لإعادة حساب الأرقام."
+              className="no-print flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors disabled:opacity-50"
+            >
+              <svg className={`w-4 h-4 ${refreshingSnapshot ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              {refreshingSnapshot ? 'جاري التحديث…' : 'تحديث الأرقام'}
+            </button>
+          )}
           {mode === 'daily' && report && (
             <a
               href={`/orders/${selectedOrderId}/print`}

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { uuidSchema } from '@/lib/validation';
 import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
 import { buildOrderReport, saveOrderSnapshot } from '@/lib/order-report';
+import { todayISO } from '@/lib/date-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,12 +32,12 @@ export async function GET(
     );
   }
 
-  // 1) If a snapshot exists for this order, return it (frozen view).
-  //    If the snapshot column doesn't exist yet (migration not run), skip
-  //    silently and fall through to live computation.
+  // 1) نقرأ اللقطة المحفوظة + تاريخ الأمر.
+  //    لو عمود snapshot ما زال غير موجود (الـmigration ما اتشغّل) نتجاهل
+  //    بصمت ونكمل للحساب الحيّ.
   const snapshotQuery = await supabase
     .from('daily_orders')
-    .select('snapshot')
+    .select('snapshot, date')
     .eq('id', params.id)
     .single();
 
@@ -46,13 +47,25 @@ export async function GET(
   if (snapshotQuery.error && !snapshotColumnMissing) {
     return NextResponse.json({ error: 'Order not found' }, { status: 404 });
   }
-  if (snapshotQuery.data?.snapshot) {
+
+  // الأوامر القادمة (تاريخها اليوم أو بعده) تُحسب من الوضع الحالي في كل مرة:
+  // هي اللي بتُطبخ وتُطبع، فلازم تعكس آخر تعديلات المستفيدين (محظور جديد،
+  // صنف ثابت معلَّم كـ«صنف بديل»…). أما الأوامر الماضية فتبقى مجمّدة كسجلّ
+  // تاريخي لا يتغيّر — وتُحدَّث يدوياً فقط بزر «تحديث الأرقام».
+  const orderDate = (snapshotQuery.data as { date?: string } | null)?.date;
+  const isUpcoming = !!orderDate && orderDate >= todayISO();
+
+  if (!isUpcoming && snapshotQuery.data?.snapshot) {
     return NextResponse.json(snapshotQuery.data.snapshot);
   }
 
-  // 2) No snapshot yet (legacy order or migration not run) — compute live.
+  // 2) حساب حيّ — إما أمر قادم، أو أمر قديم بلا لقطة.
   const report = await buildOrderReport(supabase, params.id);
   if (!report) {
+    // لو تعذّر الحساب الحيّ لأي سبب، ما نضيّع على المستخدم اللقطة الموجودة.
+    if (snapshotQuery.data?.snapshot) {
+      return NextResponse.json(snapshotQuery.data.snapshot);
+    }
     return NextResponse.json({ error: 'Order has no items or no beneficiaries' }, { status: 400 });
   }
 
