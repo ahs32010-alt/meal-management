@@ -615,7 +615,7 @@ export default function OrderModal({ meals, totalBeneficiaries, exclusionCounts,
                 }}
                 className="w-4 h-4 accent-violet-600 cursor-pointer"
               />
-              <span className="text-sm text-slate-700 font-medium">إظهار الأصناف الثابتة في أمر التشغيل</span>
+              <span className="text-sm text-slate-700 font-medium">إظهار الأصناف اليومية الإضافية في أمر التشغيل</span>
             </label>
 
             {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>}

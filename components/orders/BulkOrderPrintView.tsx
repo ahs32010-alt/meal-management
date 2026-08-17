@@ -184,7 +184,7 @@ function OrderPage({ report, showFixed, showCustom, isFirst, fitOnePage }: { rep
         </div>
       )}
 
-      {showFixed && <CompactGrid title="أصناف يومية ثابتة" color={PALETTE.fixed} items={fixedSummary} numKey="qty" columns={4} />}
+      {showFixed && <CompactGrid title="الأصناف اليومية الإضافية" color={PALETTE.fixed} items={fixedSummary} numKey="qty" columns={4} />}
       {itemsSummary.length > 0 && <CompactGrid title="إحصاء الأصناف" color={PALETTE.stats} items={itemsSummary} numKey="quantity" columns={4} />}
 
       {showCustom && withCustom.length > 0 && (
@@ -196,7 +196,7 @@ function OrderPage({ report, showFixed, showCustom, isFirst, fitOnePage }: { rep
               <th style={{ ...s.bensTh, textAlign: 'center', width: 36 }}>الفيلا</th>
               <th style={s.bensTh}>الاسم</th>
               <th style={s.bensTh}>الأصناف المستبعدة</th>
-              <th style={s.bensTh}>البدائل والأصناف الثابتة</th>
+              <th style={s.bensTh}>البدائل والأصناف اليومية الإضافية</th>
             </tr></thead>
             <tbody>
               {withCustom.map(detail => {
@@ -368,7 +368,7 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 12, userSelect: 'none' }}>
             <input type="checkbox" checked={showFixed} onChange={e => { setShowFixed(e.target.checked); localStorage.setItem('orderPrintShowFixed', e.target.checked ? '1' : '0'); }} style={{ cursor: 'pointer', accentColor: '#7c3aed' }} />
-            إظهار الأصناف الثابتة
+            إظهار الأصناف اليومية الإضافية
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 12, userSelect: 'none' }}>
             <input type="checkbox" checked={showCustom} onChange={e => { setShowCustom(e.target.checked); localStorage.setItem('orderPrintShowCustom', e.target.checked ? '1' : '0'); }} style={{ cursor: 'pointer', accentColor: '#6d28d9' }} />

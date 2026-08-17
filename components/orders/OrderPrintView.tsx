@@ -414,7 +414,7 @@ ${contentHtml}
               }}
               style={{ cursor: 'pointer', accentColor: '#7c3aed' }}
             />
-            إظهار الأصناف الثابتة
+            إظهار الأصناف اليومية الإضافية
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 12, userSelect: 'none' }}>
             <input
@@ -523,7 +523,7 @@ ${contentHtml}
 
         {/* ── Fixed items — 4-column compact grid ── */}
         {showFixedSection && fixedSummary.length > 0 && (
-          <CompactGrid title="أصناف يومية ثابتة" color={PALETTE.fixed} items={fixedSummary} numKey="qty" columns={4} />
+          <CompactGrid title="الأصناف اليومية الإضافية" color={PALETTE.fixed} items={fixedSummary} numKey="qty" columns={4} />
         )}
 
         {/* ── Items summary — 4-column compact grid ── */}
@@ -544,7 +544,7 @@ ${contentHtml}
                   <th style={{ ...s.bensTh, textAlign: 'center', width: 36 }}>الفيلا</th>
                   <th style={s.bensTh}>الاسم</th>
                   <th style={s.bensTh}>الأصناف المستبعدة</th>
-                  <th style={s.bensTh}>البدائل والأصناف اليومية الثابتة</th>
+                  <th style={s.bensTh}>البدائل والأصناف اليومية الإضافية</th>
                 </tr>
               </thead>
               <tbody>

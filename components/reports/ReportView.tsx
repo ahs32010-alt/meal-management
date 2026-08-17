@@ -539,7 +539,7 @@ export default function ReportView({ initialOrderId }: Props) {
               {report.fixedSummary?.length > 0 && (
                 <div className="card overflow-hidden">
                   <div className="px-5 py-3 bg-violet-700 flex items-center justify-between">
-                    <h3 className="font-bold text-white text-sm">الأصناف الثابتة اليومية</h3>
+                    <h3 className="font-bold text-white text-sm">الأصناف اليومية الإضافية</h3>
                     <span className="text-violet-200 text-xs">المجموع: {report.fixedSummary.reduce((s, x) => s + (x.qty || 0), 0)}</span>
                   </div>
                   <div className="p-4 grid grid-cols-3 md:grid-cols-6 gap-2">
