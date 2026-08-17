@@ -767,7 +767,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           ))}
         </div>
 
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
+        <form ref={bodyRef} onSubmit={handleSubmit} className="flex-1 min-h-0 overflow-y-auto">
 
           {/* ── Tab: Info ── */}
           {activeTab === 'info' && (
