@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Meal, ItemCategory } from '@/lib/types';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 /**
  * Builds the full report payload for an order from CURRENT database state.
@@ -71,12 +72,16 @@ export async function buildOrderReport(
   // نجرّبه أولاً وحده، ولو ما كان موجود نكمل بباقي سلسلة الإسقاط بدونه.
   let withFixedAlt = true;
 
+  // قراءة على دفعات — قائمة المستفيدين هي أساس كل الأعداد، فلو قصّها السقف
+  // الافتراضي (١٠٠٠ صف) تطلع كل كميات أمر التشغيل ناقصة.
   const fetchBens = async (withFixedCategory: boolean, withEntityType: boolean, withMealCategory: boolean) => {
     const mealCols = `id, name, english_name, type, is_snack${withMealCategory ? ', category' : ''}`;
     const fixedCols = `id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category, suppress_if_meal_ids' : ''}${withFixedAlt ? ', is_alternative' : ''}`;
     const sel = `*, exclusions(id, meal_id, alternative_meal_id, meals:meals!exclusions_meal_id_fkey(${mealCols})), fixed_meals:beneficiary_fixed_meals(${fixedCols}, meals!meal_id(${mealCols}))`;
-    const q = supabase.from('beneficiaries').select(sel).order('name');
-    return withEntityType ? q.eq('entity_type', orderEntityType) : q;
+    return fetchAllRows((from, to) => {
+      const q = supabase.from('beneficiaries').select(sel).order('name').order('id').range(from, to);
+      return withEntityType ? q.eq('entity_type', orderEntityType) : q;
+    });
   };
 
   // نحاول كل الأعمدة، ثم نسقط واحدة بواحدة عند ظهور أخطاء العمود/الترقية

@@ -19,6 +19,7 @@ import {
   MEAL_TYPE_LABELS,
 } from '@/lib/types';
 import { MENU_DAYS } from '@/lib/menu-utils';
+import { fetchAllRows } from '@/lib/fetch-all';
 import { buildMenuPeriodReport } from '@/lib/menu-period-report';
 import { resolveOne, type RankedMatch } from './normalize';
 import { parseQuestion } from './parse';
@@ -129,7 +130,9 @@ class Ctx {
 
   getMenu(): Promise<MenuItemRow[]> {
     return (this.menu ??= (async () => {
-      const { data } = await this.supabase.from('menu_items').select('*, meals(*)');
+      // قراءة على دفعات — menu_items يتجاوز سقف الـ١٠٠٠ صف مع تراكم الأسابيع
+      const { data } = await fetchAllRows((from, to) =>
+        this.supabase.from('menu_items').select('*, meals(*)').order('id').range(from, to));
       return (data as unknown as MenuItemRow[]) ?? [];
     })());
   }

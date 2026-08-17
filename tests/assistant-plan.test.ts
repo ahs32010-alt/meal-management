@@ -312,6 +312,30 @@ describe('planFromText — قائمة الطعام', () => {
     expect(r).toMatchObject({ type: 'problem', title: 'لا جديد' });
   });
 
+  it('يرفض الإضافة لخانة ممتلئة بدل صنف يختفي من الشبكة', async () => {
+    // الشبكة تعرض ٨ صفوف أساسية فقط — أي صنف تاسع كان يُكتب ولا يُرى أبداً
+    const full = Array.from({ length: 8 }, (_, i) => ({
+      id: `mi-${i}`, week_number: 2, day_of_week: 6, meal_type: 'breakfast',
+      meal_id: `other-${i}`, category: 'hot', position: i, entity_type: 'beneficiary',
+    }));
+    const { client } = db({ menu_items: full });
+    const r = await planFromText(client, 'أضف بيض لفطور السبت الأسبوع الثاني', NOW);
+    expect(r).toMatchObject({ type: 'problem', title: 'الخانة ممتلئة' });
+  });
+
+  it('يرقّم السناك داخل قسمه لا مع الأصناف الأساسية', async () => {
+    const { client } = db({
+      meals: [...BASE.meals, { id: 'm-cake', name: 'كيك', type: 'breakfast', is_snack: true, category: 'snack', entity_type: 'beneficiary' }],
+      menu_items: [
+        { id: 'mi-1', week_number: 2, day_of_week: 6, meal_type: 'breakfast', meal_id: 'm-foul', category: 'hot', position: 0, entity_type: 'beneficiary' },
+        { id: 'mi-2', week_number: 2, day_of_week: 6, meal_type: 'breakfast', meal_id: 'm-egg', category: 'hot', position: 1, entity_type: 'beneficiary' },
+      ],
+    });
+    const plan = asPlan(await planFromText(client, 'أضف كيك لفطور السبت الأسبوع الثاني', NOW));
+    // ١٠٠ + ٠ (أول سناك في الخانة) — وليس ١٠٠ + ٢ (عدد كل الأصناف)
+    expect((plan.ops[0] as { values: Row }).values.position).toBe(100);
+  });
+
   it('يحذف من القائمة', async () => {
     const { client } = db({
       menu_items: [

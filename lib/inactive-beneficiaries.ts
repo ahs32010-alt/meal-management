@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 /**
  * يرجّع مجموعة معرّفات المستفيدين/المرافقين المعطّلين مؤقتاً (is_active = false).
@@ -11,12 +12,15 @@ export async function fetchInactiveBeneficiaryIds(
   supabase: SupabaseClient,
 ): Promise<Set<string>> {
   try {
-    const { data, error } = await supabase
-      .from('beneficiaries')
-      .select('id')
-      .eq('is_active', false);
+    const { data, error } = await fetchAllRows<{ id: string }>((from, to) =>
+      supabase
+        .from('beneficiaries')
+        .select('id')
+        .eq('is_active', false)
+        .order('id')
+        .range(from, to));
     if (error || !data) return new Set();
-    return new Set((data as { id: string }[]).map(r => r.id));
+    return new Set(data.map(r => r.id));
   } catch {
     return new Set();
   }

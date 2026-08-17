@@ -14,6 +14,8 @@ class FakeQuery implements PromiseLike<{ data: Row[]; error: null }> {
   select() { return this; }
   order() { return this; }
   limit(n: number) { this.rows = this.rows.slice(0, n); return this; }
+  // يحاكي .range() الحقيقي — الكود يقرأ الجداول الكبيرة على دفعات
+  range(from: number, to: number) { this.rows = this.rows.slice(from, to + 1); return this; }
   eq(col: string, val: unknown) { this.rows = this.rows.filter((r) => r[col] === val); return this; }
   in(col: string, vals: unknown[]) { this.rows = this.rows.filter((r) => vals.includes(r[col])); return this; }
   then<A, B = never>(

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
+import { fetchAllRows } from '@/lib/fetch-all';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
@@ -114,8 +115,11 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       // Also tries to filter by entity_type — if that column doesn't exist yet
       // (companions migration not run), falls back to unfiltered query but
       // refuses to render companions data (we only want beneficiaries view safely).
+      // قراءة على دفعات — القائمة تتجاوز سقف الـ١٠٠٠ صف الافتراضي فيقصّها
+      // PostgREST بصمت، فيختفي مستفيدون من الصفحة بلا أي رسالة خطأ.
       const fetchBens = (withFixedCategory: boolean, withEntityType: boolean, withFlags: boolean) => {
         const flagCols = withFlags ? ', no_fish, no_pasta_sandwich, low_carb, is_active' : '';
+        return fetchAllRows((from, to) => {
         const q = supabase
           .from('beneficiaries')
           .select(`
@@ -131,8 +135,11 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               meals!meal_id(id, name, type, is_snack)
             )
           `)
-          .order('name');
+          .order('name')
+          .order('id')
+          .range(from, to);
         return withEntityType ? q.eq('entity_type', entityType) : q;
+        });
       };
 
       // أعمدة خيارات الستيكر (no_fish...) غير موجودة → نعيد بدونها

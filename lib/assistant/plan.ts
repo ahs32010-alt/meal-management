@@ -18,6 +18,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { EntityType, ItemCategory, MealType } from '@/lib/types';
 import { CATEGORY_LABELS, DAY_LABELS, ENTITY_TYPE_LABELS, MEAL_TYPE_LABELS } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
+import { MAIN_ROWS_PER_MEAL, SNACK_ROWS_PER_MEAL, mainPosition, snackPosition } from '@/lib/menu-utils';
 import type { PageKey, PermissionAction } from '@/lib/permissions';
 import { rankMatches, resolveOne, type RankedMatch } from './normalize';
 import { parseCommand, stripLeadingLam, type Command, type CommandGap, type GroupTarget, type PersonField } from './commands';
@@ -646,7 +647,10 @@ async function planAddMenuItem(
     .select('*')
     .eq('week_number', wk.week)
     .eq('meal_type', cmd.mealType);
-  const slotRows = (slotRaw as unknown as Array<{ id: string; day_of_week: number; meal_id: string; position?: number; entity_type?: string }>) ?? [];
+  const slotRows = (slotRaw as unknown as Array<{ id: string; day_of_week: number; meal_id: string; category?: ItemCategory | null; position?: number; entity_type?: string }>) ?? [];
+  const isSnackRow = (r: { category?: ItemCategory | null }) => r.category === 'snack';
+  const addingSnack = category === 'snack';
+  const capacity = addingSnack ? SNACK_ROWS_PER_MEAL : MAIN_ROWS_PER_MEAL;
 
   const steps: PlanStep[] = [];
   const ops: Op[] = [];
@@ -660,7 +664,19 @@ async function planAddMenuItem(
       steps.push({ tone: 'change', text: `${dayLabel(day)}: «${meal.item.name}» موجود مسبقاً — لا تغيير.` });
       continue;
     }
-    const position = (category === 'snack' ? 100 : 0) + inSlot.length;
+    // العدّ داخل القسم نفسه فقط، وباصطلاح lib/menu-utils — الحساب القديم كان
+    // يجمع الأساسي والسناك معاً فيعطي أرقاماً خارج نطاق القسم.
+    const sameSection = inSlot.filter(r => isSnackRow(r) === addingSnack);
+    if (sameSection.length >= capacity) {
+      // الشبكة تعرض ٨ صفوف أساسية و٤ سناك فقط — الزائد يختفي من الشاشة بصمت
+      steps.push({
+        tone: 'change',
+        text: `${dayLabel(day)}: الخانة ممتلئة (${capacity} ${addingSnack ? 'سناك' : 'صنف'}) — ما أُضيف «${meal.item.name}».`,
+      });
+      warnings.push(`${dayLabel(day)}: احذف صنفاً من الخانة قبل إضافة «${meal.item.name}».`);
+      continue;
+    }
+    const position = addingSnack ? snackPosition(sameSection.length) : mainPosition(sameSection.length);
     steps.push({
       tone: 'add',
       text: `الأسبوع ${wk.week} — ${dayLabel(day)} (${MEAL_TYPE_LABELS[cmd.mealType]}): إضافة «${meal.item.name}».`,
@@ -687,7 +703,10 @@ async function planAddMenuItem(
   }
 
   if (ops.length === 0) {
-    return problem('لا جديد', `«${meal.item.name}» موجود مسبقاً في كل الخانات المطلوبة.`);
+    // نميّز «موجود مسبقاً» عن «الخانة ممتلئة» — السبب يحدّد ما على المستخدم فعله
+    return warnings.length > 0
+      ? problem('الخانة ممتلئة', warnings.join(' '))
+      : problem('لا جديد', `«${meal.item.name}» موجود مسبقاً في كل الخانات المطلوبة.`);
   }
 
   return {

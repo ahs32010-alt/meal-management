@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { supabase } from '@/lib/supabase-client';
+import { fetchAllRows } from '@/lib/fetch-all';
 import { logActivity } from '@/lib/activity-log';
 import type { Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
@@ -80,16 +81,21 @@ export default function BulkOrderModal({ meals, entityType, onClose, onSaved }: 
     const neededWeeks = [...new Set(slots.map(s => s.week))];
     // entity_type و extra_quantity أعمدة اختيارية (حسب الترقيات المشغّلة) —
     // نسقط كل واحد لوحده بدل ما يفشل الاستعلام كله ويطلع المنيو فاضي.
-    const tryFetchMenu = async (withEntity: boolean, withExtraQty: boolean) => {
-      const q = supabase
-        .from('menu_items')
-        .select(
-          `meal_id, week_number, day_of_week, meal_type, category, position, multiplier${withExtraQty ? ', extra_quantity' : ''}, meals(id, name, is_snack)`,
-        )
-        .in('week_number', neededWeeks)
-        .eq('meal_type', mealType);
-      return withEntity ? q.eq('entity_type', entityType) : q;
-    };
+    // قراءة على دفعات — لو قصّ السقف الافتراضي (١٠٠٠ صف) هذا الاستعلام تُنشأ
+    // أوامر التشغيل بأصناف ناقصة بدون أي رسالة خطأ.
+    const tryFetchMenu = async (withEntity: boolean, withExtraQty: boolean) =>
+      fetchAllRows((from, to) => {
+        const q = supabase
+          .from('menu_items')
+          .select(
+            `meal_id, week_number, day_of_week, meal_type, category, position, multiplier${withExtraQty ? ', extra_quantity' : ''}, meals(id, name, is_snack)`,
+          )
+          .in('week_number', neededWeeks)
+          .eq('meal_type', mealType)
+          .order('id')
+          .range(from, to);
+        return withEntity ? q.eq('entity_type', entityType) : q;
+      });
 
     let menuRes = await tryFetchMenu(true, true);
     if (menuRes.error && /extra_quantity/i.test(menuRes.error.message)) {

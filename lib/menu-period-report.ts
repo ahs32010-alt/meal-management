@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
 import { MEAL_SECTIONS, slotKey } from '@/lib/menu-utils';
 import { fetchInactiveBeneficiaryIds } from '@/lib/inactive-beneficiaries';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 type MenuItemRow = {
   week_number: number;
@@ -79,17 +80,23 @@ export async function buildMenuPeriodReport(
   // أقل من العدد المكتوب في خلية قائمة الطعام ومن أمر التشغيل.
   let withExtraQty = true;
 
+  // قراءة على دفعات — menu_items و beneficiaries قد يتجاوزان سقف الـ١٠٠٠ صف
+  // فتطلع أعداد التقرير ناقصة بدون أي خطأ ظاهر.
   const fetchItems = async (withEntityType: boolean, withMealCategory: boolean) => {
     const mealCols = `id, name, english_name, type, is_snack${withMealCategory ? ', category' : ''}`;
-    let q = supabase
-      .from('menu_items')
-      .select(
-        `week_number, day_of_week, meal_type, meal_id, category, multiplier${withExtraQty ? ', extra_quantity' : ''}${withEntityType ? ', entity_type' : ''}, meals(${mealCols})`,
-      )
-      .in('week_number', weekNumbers)
-      .in('meal_type', mealTypes);
-    if (params.entity_type && withEntityType) q = q.eq('entity_type', params.entity_type);
-    return q;
+    return fetchAllRows((from, to) => {
+      let q = supabase
+        .from('menu_items')
+        .select(
+          `week_number, day_of_week, meal_type, meal_id, category, multiplier${withExtraQty ? ', extra_quantity' : ''}${withEntityType ? ', entity_type' : ''}, meals(${mealCols})`,
+        )
+        .in('week_number', weekNumbers)
+        .in('meal_type', mealTypes)
+        .order('id')
+        .range(from, to);
+      if (params.entity_type && withEntityType) q = q.eq('entity_type', params.entity_type);
+      return q;
+    });
   };
 
   // علامة «صنف بديل» على الصنف الثابت — عمود اختياري
@@ -107,8 +114,10 @@ export async function buildMenuPeriodReport(
     const sel =
       `id, exclusions(meal_id, alternative_meal_id), ` +
       `fixed_meals:beneficiary_fixed_meals(${fixedCols}, meals(${mealCols}))`;
-    const q = supabase.from('beneficiaries').select(sel);
-    return withEntityTypeFilter && params.entity_type ? q.eq('entity_type', params.entity_type) : q;
+    return fetchAllRows((from, to) => {
+      const q = supabase.from('beneficiaries').select(sel).order('id').range(from, to);
+      return withEntityTypeFilter && params.entity_type ? q.eq('entity_type', params.entity_type) : q;
+    });
   };
 
   let [itemsRes, bensRes] = await Promise.all([fetchItems(true, true), fetchBens(true, true, true)]);

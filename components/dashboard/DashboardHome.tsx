@@ -6,6 +6,7 @@ import dynamic from 'next/dynamic';
 
 const ApprovalsList = dynamic(() => import('@/components/approvals/ApprovalsList'), { ssr: false });
 import { supabase } from '@/lib/supabase-client';
+import { fetchAllRows } from '@/lib/fetch-all';
 import type { MealType } from '@/lib/types';
 import { formatDate } from '@/lib/date-utils';
 import { useCurrentUser } from '@/lib/use-current-user';
@@ -152,7 +153,9 @@ export default function DashboardHome() {
 
       const [{ data: ordersArr }, { data: exclRaw }] = await Promise.all([
         supabase.from('daily_orders').select('id, date, meal_type').gte('date', from).lte('date', to),
-        supabase.from('exclusions').select('meal_id, meals(name, type)'),
+        // exclusions تعدّى سقف الـ١٠٠٠ صف — نقرأه على دفعات وإلا الإحصائية ناقصة
+        fetchAllRows((from_, to_) =>
+          supabase.from('exclusions').select('meal_id, meals(name, type)').order('id').range(from_, to_)),
       ]);
 
       const allOrders = ordersArr ?? [];
@@ -177,10 +180,14 @@ export default function DashboardHome() {
 
       let mealUsage: MealUsage[] = [];
       if (orderIds.length > 0) {
-        const { data: itemsData } = await supabase
-          .from('order_items')
-          .select('order_id, meal_id, meals(id, name, type, is_snack)')
-          .in('order_id', orderIds);
+        // order_items يتجاوز ١٠٠٠ صف بسهولة — قراءة على دفعات
+        const { data: itemsData } = await fetchAllRows((from_, to_) =>
+          supabase
+            .from('order_items')
+            .select('order_id, meal_id, meals(id, name, type, is_snack)')
+            .in('order_id', orderIds)
+            .order('id')
+            .range(from_, to_));
 
         const filteredOrderIds = new Set(
           mealTypeFilter === 'all'

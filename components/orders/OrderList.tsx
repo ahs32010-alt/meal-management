@@ -6,6 +6,7 @@ import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { fetchInactiveBeneficiaryIds } from '@/lib/inactive-beneficiaries';
+import { fetchAllRows } from '@/lib/fetch-all';
 import type { DailyOrder, Meal, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, DAY_LABELS } from '@/lib/types';
 import { formatDate, formatDateTime } from '@/lib/date-utils';
@@ -112,10 +113,14 @@ export default function OrderList() {
         return r;
       };
 
+      // exclusions تعدّى ١٠٠٠ صف — لازم قراءة مقسّمة على دفعات، وإلا PostgREST
+      // يقصّه بصمت فتطلع محظورات ناقصة وأعداد أعلى من الحقيقة.
       const [mealsResult, bensResult, exclusionsResult, inactiveSet] = await Promise.all([
         fetchMealsList(),
-        supabase.from('beneficiaries').select(bensSelect),
-        supabase.from('exclusions').select(exclSelect),
+        fetchAllRows((from, to) =>
+          supabase.from('beneficiaries').select(bensSelect).order('id').range(from, to)),
+        fetchAllRows((from, to) =>
+          supabase.from('exclusions').select(exclSelect).order('id').range(from, to)),
         fetchInactiveBeneficiaryIds(supabase),
       ]);
 

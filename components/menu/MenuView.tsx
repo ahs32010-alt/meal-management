@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { fetchInactiveBeneficiaryIds } from '@/lib/inactive-beneficiaries';
+import { fetchAllRows } from '@/lib/fetch-all';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
@@ -19,8 +20,16 @@ import {
   SNACK_ROWS_PER_MEAL,
   buildSlotMap,
   slotKey,
+  splitSlot,
+  normalizeSlot,
+  effectiveCategory,
+  mainPosition,
+  snackPosition,
+  positionRowIndex,
+  isSnackPosition,
   type WeekNumber,
 } from '@/lib/menu-utils';
+import { applyMenuImport } from '@/lib/menu-import';
 import ImportModeDialog, { type ImportMode } from '@/components/shared/ImportModeDialog';
 
 interface CellEditState {
@@ -48,6 +57,9 @@ interface CellProps {
   mealsById: Map<string, Meal>;
   benTotal: number;
   benExclusions: Record<string, number>;
+  /** هل اكتملت قراءة المستفيدين والمحظورات؟ العدد المكتوب يُحفظ كفرق عن العدد
+   *  المحسوب، فلو حُفظ قبل وصول البيانات يصير الفرق خاطئاً ويقفز العدد لاحقاً. */
+  benReady: boolean;
   search: string;
   canEdit: boolean;
   isSnack: boolean;
@@ -60,7 +72,7 @@ interface CellProps {
 }
 
 function Cell({
-  item, pendingCreate, mealsById, benTotal, benExclusions,
+  item, pendingCreate, mealsById, benTotal, benExclusions, benReady,
   search, canEdit, isSnack,
   hasPendingDelete, hasPendingUpdate,
   onEdit, onClear, onSetMultiplier, onSetExtraQty,
@@ -100,9 +112,7 @@ function Cell({
     );
   }
 
-  const mealCat = (item.meals as { category?: ItemCategory } | null)?.category;
-  const effectiveCat: ItemCategory = mealCat ?? item.category ?? (item.meals?.is_snack ? 'snack' : 'hot');
-  const theme = CATEGORY_THEME[effectiveCat];
+  const theme = CATEGORY_THEME[effectiveCategory(item)];
   const mult = item.multiplier ?? 1;
   const extraQty = item.extra_quantity ?? 0;
   const directCount = Math.max(0, benTotal - (benExclusions[item.meal_id] ?? 0));
@@ -157,12 +167,15 @@ function Cell({
           <input
             type="number"
             value={countDraft ?? String(totalCount)}
-            onFocus={e => { setCountDraft(String(totalCount)); e.target.select(); }}
-            onChange={e => setCountDraft(e.target.value)}
+            readOnly={!benReady}
+            onFocus={e => { if (benReady) { setCountDraft(String(totalCount)); e.target.select(); } }}
+            onChange={e => { if (benReady) setCountDraft(e.target.value); }}
             onBlur={() => {
               if (countDraft !== null) {
                 const desired = parseInt(countDraft);
-                if (!isNaN(desired) && desired !== totalCount)
+                // العدد يُخزَّن كفرق عن (المستفيدون − المحظورون) × المضاعف، فلا
+                // نحسبه إلا وأعداد المستفيدين مقروءة بالكامل.
+                if (benReady && !isNaN(desired) && desired !== totalCount)
                   onSetExtraQty(item, desired - directCount * mult);
                 setCountDraft(null);
               }
@@ -172,10 +185,16 @@ function Cell({
               if (e.key === 'Escape') { setCountDraft(null); e.currentTarget.blur(); }
             }}
             onClick={e => e.stopPropagation()}
-            title={hasBenData
-              ? `${directCount} × ${mult}${extraQty !== 0 ? ` + ${extraQty}` : ''} = ${totalCount}\nاضغط Enter للحفظ`
-              : 'اكتب الكمية واضغط Enter'}
-            className="shrink-0 w-14 text-center text-xs font-bold rounded py-0.5 text-emerald-700 bg-emerald-50 border border-emerald-300 focus:outline-none focus:ring-1 focus:ring-emerald-400"
+            title={!benReady
+              ? 'جاري قراءة أعداد المستفيدين — انتظر قبل تعديل العدد'
+              : hasBenData
+                ? `${directCount} × ${mult}${extraQty !== 0 ? ` + ${extraQty}` : ''} = ${totalCount}\nاضغط Enter للحفظ`
+                : 'اكتب الكمية واضغط Enter'}
+            className={`shrink-0 w-14 text-center text-xs font-bold rounded py-0.5 border focus:outline-none focus:ring-1 ${
+              benReady
+                ? 'text-emerald-700 bg-emerald-50 border-emerald-300 focus:ring-emerald-400'
+                : 'text-slate-400 bg-slate-50 border-slate-200 cursor-wait'
+            }`}
           />
           {multInput}
         </>
@@ -218,6 +237,8 @@ export default function MenuView() {
   const [meals, setMeals] = useState<Meal[]>([]);
   const [benTotal, setBenTotal] = useState(0);
   const [benExclusions, setBenExclusions] = useState<Record<string, number>>({});
+  const [benReady, setBenReady] = useState(false);
+  const [countsWarning, setCountsWarning] = useState('');
   const [activeWeek, setActiveWeek] = useState<WeekNumber>(1);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<CellEditState | null>(null);
@@ -234,16 +255,65 @@ export default function MenuView() {
     }
   }, []);
 
+  /**
+   * إصلاح ذاتي صامت لصفوف قديمة أرقامها متضاربة (بقايا استيراد بمنطق قديم):
+   * نُثبّت `category` على فئة الصنف ونجعل `position` متسلسلاً بلا فجوات ولا
+   * تكرار. الترتيب الناتج مطابق تماماً للمعروض حالياً — فما يتحرّك شيء على
+   * الشاشة — لكنه يمنع تبادل صفين لهما نفس الـposition في التحميلات القادمة.
+   * يُجمَّع في أقل عدد استعلامات ممكن (٣٦ مجموعة كحد أقصى).
+   */
+  const repairMenuPositions = useCallback(async (items: MenuItem[]) => {
+    const groups = new Map<string, { category: ItemCategory; position: number; ids: string[] }>();
+    for (const [, slotItems] of buildSlotMap(items)) {
+      for (const { item, category, position } of normalizeSlot(slotItems)) {
+        if (item.position === position && item.category === category) continue;
+        const k = `${category}|${position}`;
+        const g = groups.get(k);
+        if (g) g.ids.push(item.id); else groups.set(k, { category, position, ids: [item.id] });
+      }
+    }
+    if (groups.size === 0) return;
+
+    for (const { category, position, ids } of groups.values()) {
+      const { error } = await supabase.from('menu_items').update({ category, position }).in('id', ids);
+      if (error) return; // بلا ضجيج — العرض صحيح أصلاً بفضل الترتيب الثابت
+    }
+
+    const fix = new Map<string, { category: ItemCategory; position: number }>();
+    for (const { category, position, ids } of groups.values()) {
+      for (const id of ids) fix.set(id, { category, position });
+    }
+    setAllItems(prev => prev.map(i => {
+      const f = fix.get(i.id);
+      return f ? { ...i, ...f } : i;
+    }));
+    void logActivity({
+      action: 'update',
+      entity_type: 'meal',
+      entity_name: `قائمة الطعام — توحيد ترتيب ${fix.size} صنف`,
+      details: { repaired: fix.size, source: 'menu_position_repair' },
+    });
+  }, [supabase]);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
+    // أعداد الفئة السابقة ما تصلح للفئة الجديدة — نصفّرها حتى تصل الأعداد الصحيحة
+    setBenReady(false);
+    setCountsWarning('');
     // نحاول الفلترة بـentity_type أولاً، ولو العمود ما موجود (الـmigration ما اتشغّل)
     // نرجع لجميع الصفوف. للمرافقين نظهر تنبيه.
+    // قراءة على دفعات — جدول menu_items يكبر مع كل أسبوع/فئة وقد يتجاوز سقف
+    // الـ١٠٠٠ صف فتختفي أصناف من الشبكة بدون أي رسالة خطأ.
     const tryFetchItems = async (withEntity: boolean, withMealCategory: boolean, withExtraQty: boolean = true) => {
       const mealCols = `id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}${withMealCategory ? ', category' : ''}`;
-      const q = supabase
-        .from('menu_items')
-        .select(`id, week_number, day_of_week, meal_type, meal_id, category, position, multiplier${withExtraQty ? ', extra_quantity' : ''}${withEntity ? ', entity_type' : ''}, created_at, meals(${mealCols})`);
-      return withEntity ? q.eq('entity_type', entityType) : q;
+      return fetchAllRows((from, to) => {
+        const q = supabase
+          .from('menu_items')
+          .select(`id, week_number, day_of_week, meal_type, meal_id, category, position, multiplier${withExtraQty ? ', extra_quantity' : ''}${withEntity ? ', entity_type' : ''}, created_at, meals(${mealCols})`)
+          .order('id')
+          .range(from, to);
+        return withEntity ? q.eq('entity_type', entityType) : q;
+      });
     };
     const tryFetchMeals = async (withEntity: boolean, withCategory: boolean) => {
       const cols = `id, name, english_name, type, is_snack${withEntity ? ', entity_type' : ''}${withCategory ? ', category' : ''}, created_at`;
@@ -290,36 +360,55 @@ export default function MenuView() {
       }
     }
 
-    if (itemsRes.data) setAllItems(itemsRes.data as unknown as MenuItem[]);
+    const loadedItems = itemsRes.data ? (itemsRes.data as unknown as MenuItem[]) : null;
+    if (loadedItems) setAllItems(loadedItems);
     if (mealsRes.data) setMeals(mealsRes.data as unknown as Meal[]);
 
     // جلب إجمالي المستفيدين والمحظورات لعرض الأعداد الفعلية في الخلايا
     try {
+      // ⚠️ exclusions جدول كبير (تعدّى ١٠٠٠ صف) — بدون قراءة على دفعات يقصّه
+      // PostgREST بصمت فتظهر أعداد أكبر من الحقيقة في خلايا المنيو.
       const [bensRes, exclRes, inactiveSet] = await Promise.all([
-        supabase.from('beneficiaries').select('id, entity_type'),
-        supabase.from('exclusions').select('beneficiary_id, meal_id, beneficiaries!inner(entity_type)'),
+        fetchAllRows<{ id: string; entity_type?: string }>((from, to) =>
+          supabase.from('beneficiaries').select('id, entity_type').order('id').range(from, to)),
+        fetchAllRows<{ beneficiary_id?: string; meal_id: string; beneficiaries?: { entity_type?: string } | { entity_type?: string }[] }>((from, to) =>
+          supabase
+            .from('exclusions')
+            .select('beneficiary_id, meal_id, beneficiaries!inner(entity_type)')
+            .order('id')
+            .range(from, to)),
         fetchInactiveBeneficiaryIds(supabase),
       ]);
-      if (!bensRes.error && bensRes.data) {
+      if (bensRes.error || !bensRes.data || exclRes.error || !exclRes.data) {
+        // ما نعرض أعداداً نصف مقروءة ولا نسمح بتعديلها — الصمت هنا كان يعني
+        // أرقاماً خاطئة تُحفظ على أنها «كمية إضافية» وتظل تزيد وتنقص بعدها.
+        setCountsWarning('تعذّرت قراءة أعداد المستفيدين/المحظورات — الأعداد المعروضة غير مؤكدة، وتعديل العدد معطّل حتى تُقرأ.');
+      } else {
         setBenTotal(
-          (bensRes.data as Array<{ id: string; entity_type?: string }>)
-            .filter(b => (b.entity_type ?? 'beneficiary') === entityType && !inactiveSet.has(b.id)).length
+          bensRes.data.filter(b => (b.entity_type ?? 'beneficiary') === entityType && !inactiveSet.has(b.id)).length
         );
-      }
-      if (!exclRes.error && exclRes.data) {
         const counts: Record<string, number> = {};
-        for (const ex of exclRes.data as Array<{ beneficiary_id?: string; meal_id: string; beneficiaries?: { entity_type?: string } | { entity_type?: string }[] }>) {
+        for (const ex of exclRes.data) {
           if (ex.beneficiary_id && inactiveSet.has(ex.beneficiary_id)) continue;
           const ben = Array.isArray(ex.beneficiaries) ? ex.beneficiaries[0] : ex.beneficiaries;
           if ((ben?.entity_type ?? 'beneficiary') !== entityType) continue;
           counts[ex.meal_id] = (counts[ex.meal_id] ?? 0) + 1;
         }
         setBenExclusions(counts);
+        setBenReady(true);
       }
-    } catch { /* غير حرج — يرجع لعرض ×مضاعف */ }
+    } catch {
+      setCountsWarning('تعذّرت قراءة أعداد المستفيدين/المحظورات — الأعداد المعروضة غير مؤكدة، وتعديل العدد معطّل حتى تُقرأ.');
+    }
 
     setLoading(false);
-  }, [supabase, entityType]);
+
+    // إصلاح ذاتي صامت لصفوف قديمة أرقامها متضاربة (بقايا استيراد بمنطق قديم):
+    // نُثبّت الفئة على فئة الصنف ونجعل الـposition متسلسلاً بلا فجوات. الترتيب
+    // الناتج مطابق للمعروض حالياً، فما يتحرّك شيء على الشاشة — لكنه يمنع تبادل
+    // الصفوف عشوائياً في التحميلات القادمة.
+    if (loadedItems && isAdmin) void repairMenuPositions(loadedItems);
+  }, [supabase, entityType, isAdmin, repairMenuPositions]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -340,8 +429,9 @@ export default function MenuView() {
       const position = Number(p.position ?? 0);
       const mealId = p.meal_id as string | undefined;
       if (!mealId || !mealType || !week || Number.isNaN(day)) continue;
-      const isSnack = position >= 100;
-      const rowIndex = position % 100;
+      // الفئة أوثق من الـposition لطلبات قديمة كُتبت باصطلاح مختلف
+      const isSnack = p.category === 'snack' || isSnackPosition(position);
+      const rowIndex = positionRowIndex(position);
       const key = `${week}|${day}|${mealType}|${isSnack ? 's' : 'm'}|${rowIndex}`;
       m.set(key, { mealId, multiplier: Number(p.multiplier ?? 1) });
     }
@@ -355,11 +445,23 @@ export default function MenuView() {
   }, [meals]);
 
   // For a given (week, day, meal_type) slot, return arrays of mains and snacks.
-  const slotMainsAndSnacks = (week: WeekNumber, day: number, mealType: MealType) => {
-    const items = slotMap.get(slotKey(week, day, mealType)) ?? [];
-    const mains = items.filter(i => i.category !== 'snack');
-    const snacks = items.filter(i => i.category === 'snack');
-    return { mains, snacks };
+  // الفصل يعتمد فئة الصنف نفسه (المصدر الموحّد) بترتيب ثابت — لا على النسخة
+  // المخزّنة في menu_items التي قد تتقادم فيقفز الصنف بين الأساسي والسناك.
+  const slotMainsAndSnacks = (week: WeekNumber, day: number, mealType: MealType) =>
+    splitSlot(slotMap.get(slotKey(week, day, mealType)) ?? []);
+
+  /**
+   * الفئة والترتيب لصف يُكتب الآن — مصدر واحد لكل مسارات الكتابة (تحرير مباشر
+   * أو طلب موافقة). الفئة تُؤخذ من الصنف نفسه، والـposition يتبع اصطلاح
+   * lib/menu-utils (أساسي 0.. / سناك 100..) فما تختلط الأرقام مع الاستيراد.
+   */
+  const newCellPlacement = (mealId: string, isSnack: boolean, appendIndex: number) => {
+    const meal = mealsById.get(mealId) ?? null;
+    const category = effectiveCategory({ category: isSnack ? 'snack' : 'hot', meals: meal });
+    return {
+      category,
+      position: isSnack ? snackPosition(appendIndex) : mainPosition(appendIndex),
+    };
   };
 
   const handleSetCell = async (
@@ -400,9 +502,7 @@ export default function MenuView() {
         const r = await enqueueGenericUpdate(supabase, currentUser, 'menu_item', existing.id, slotLabel, { meal_id: mealId });
         if (!r.ok) alert(`⚠ ${r.error}`);
       } else {
-        const category: ItemCategory = isSnack ? 'snack' : 'hot';
-        const baseOffset = isSnack ? 100 : 0;
-        const position = baseOffset + rowIndex;
+        const { category, position } = newCellPlacement(mealId, isSnack, list.length);
         // entity_name فريد لكل صف عشان dedup ما يستبدل صف بآخر —
         // المستخدم يقدر يعبّي عدّة صفوف لنفس الخانة.
         const createLabel = `${slotLabel} #${rowIndex + 1}`;
@@ -421,18 +521,17 @@ export default function MenuView() {
     }
 
     if (existing) {
-      // Update row in place: change meal_id (keep category)
+      // تبديل الصنف في نفس الصف — والفئة تُحدَّث معه، وإلا بقيت فئة الصنف
+      // القديم مخزّنة فيقفز الصف بين القسم الأساسي وقسم السناك لاحقاً.
+      const { category } = newCellPlacement(mealId, isSnack, 0);
       await supabase
         .from('menu_items')
-        .update({ meal_id: mealId })
+        .update({ meal_id: mealId, category })
         .eq('id', existing.id);
     } else {
-      // Insert new — derive category and position
-      const category: ItemCategory = isSnack ? 'snack' : 'hot';
-      // position within full slot: snacks always after mains; we use a large offset for snacks
+      // صف جديد — يُضاف في نهاية قسمه تماماً كما يظهر في الشبكة
       const allInSlot = slotMap.get(slotKey(week, day, mealType)) ?? [];
-      const baseOffset = isSnack ? 100 : 0;
-      const position = baseOffset + rowIndex;
+      const { category, position } = newCellPlacement(mealId, isSnack, list.length);
 
       // Avoid unique violation if the same meal already exists in this slot
       const dupSameMeal = allInSlot.find(i => i.meal_id === mealId);
@@ -536,60 +635,56 @@ export default function MenuView() {
     setImportStatus('importing');
     setImportMsg('');
     try {
+      if (meals.length === 0) {
+        setImportStatus('error');
+        setImportMsg('قاعدة الأصناف لم تُقرأ بعد — أعد تحميل الصفحة ثم جرّب مرة أخرى');
+        return;
+      }
+
       const { importMenuXLSX } = await import('./menu-xlsx');
       const { rows, errors, weeks } = await importMenuXLSX(file, meals);
 
-      if (rows.length === 0 && errors.length === 0) {
+      // لا نكتب أي شيء ما دام في الملف مشكلة واحدة. سابقاً كان الاستيراد يمشي
+      // جزئياً: يمسح الأسبوع كاملاً ثم يُدرج الصفوف التي انقرأت فقط — فكل صنف
+      // تعذّرت قراءته يختفي من المنيو نهائياً بلا رجعة.
+      if (errors.length > 0) {
+        setImportStatus('error');
+        setImportMsg(
+          `لم يُنفَّذ أي تعديل — صحّح الملف أولاً (${errors.length} مشكلة): ` +
+          errors.slice(0, 6).join(' • ') + (errors.length > 6 ? ' …' : '')
+        );
+        return;
+      }
+      if (rows.length === 0) {
         setImportStatus('error');
         setImportMsg('لم يُعثر على أصناف صالحة في الملف');
         return;
       }
 
-      // وضع الاستبدال: نمسح أصناف كل أسبوع موجود في الملف (مقيّد بـentity_type الحالي
-      // عشان استيراد منيو المرافقين ما يمسح منيو المستفيدين والعكس) قبل الإدراج.
-      // وضع الإضافة: نُبقي على المنيو الحالي ونضيف أصناف الملف فوقه.
-      if (mode === 'replace' && weeks.length > 0) {
-        await supabase
-          .from('menu_items')
-          .delete()
-          .in('week_number', weeks)
-          .eq('entity_type', entityType);
-      }
-      if (rows.length > 0) {
-        // نختم كل صف بـentity_type الحالي قبل الإدراج
-        const stamped = rows.map(r => ({ ...r, entity_type: entityType }));
-        const { error } = await supabase.from('menu_items').insert(stamped);
-        if (error) {
-          // لو عمود extra_quantity ما موجود (الـmigration ما اتشغّل)، أعد المحاولة بدونه
-          // عشان الاستيراد ينجح والكميات الإضافية تُتجاهل بدل ما يتعطّل كل شيء.
-          if (/extra_quantity|column/i.test(error.message)) {
-            const fallback = stamped.map(row => {
-              const r = { ...row };
-              delete (r as Record<string, unknown>).extra_quantity;
-              return r;
-            });
-            const { error: e2 } = await supabase.from('menu_items').insert(fallback);
-            if (e2) throw e2;
-          } else {
-            throw error;
-          }
-        }
-      }
+      // تطبيق كـ«فرق» بدل مسح الأسبوع وإعادة إدراجه: نكتب المتغيّر فقط، وفي وضع
+      // الاستبدال نحذف — بالمعرّف — ما لم يعد له وجود في الملف. النتيجة أن تنزيل
+      // الملف ورفعه بدون تعديل عملية محايدة تماماً.
+      const res = await applyMenuImport(supabase, rows, weeks, entityType, mode);
 
       void logActivity({
-        action: 'create',
+        action: 'update',
         entity_type: 'meal',
         entity_name: `استيراد قائمة الطعام (${rows.length} صنف) — ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`,
-        details: { count: rows.length, errors_count: errors.length, for_entity: entityType, source: 'menu_xlsx_import' },
+        details: {
+          count: rows.length, weeks, mode, for_entity: entityType,
+          inserted: res.inserted, updated: res.updated, deleted: res.deleted, unchanged: res.unchanged,
+          source: 'menu_xlsx_import',
+        },
       });
 
-      setImportStatus(errors.length > 0 ? 'error' : 'done');
+      setImportStatus('done');
       setImportMsg(
-        `تم استيراد ${rows.length} صنف` +
-        (errors.length ? ` — ${errors.length} خطأ: ${errors.slice(0, 5).join(' • ')}` : '')
+        res.inserted + res.updated + res.deleted === 0
+          ? `الملف مطابق للمنيو الحالي — ما تغيّر شيء (${res.unchanged} صنف)`
+          : `تم الاستيراد: ${res.inserted} إضافة، ${res.updated} تعديل، ${res.deleted} حذف، ${res.unchanged} بلا تغيير`
       );
       await fetchData();
-      if (errors.length === 0) setTimeout(() => setImportStatus('idle'), 4000);
+      setTimeout(() => setImportStatus('idle'), 6000);
     } catch (err) {
       setImportStatus('error');
       setImportMsg(`حدث خطأ أثناء الاستيراد: ${err instanceof Error ? err.message : String(err)}`);
@@ -647,11 +742,18 @@ export default function MenuView() {
         </div>
       )}
 
+      {/* تنبيه: الأعداد غير مؤكدة — أفضل من عرض رقم ناقص بصمت */}
+      {countsWarning && (
+        <div className="px-4 py-2.5 rounded-lg text-sm font-medium bg-amber-50 text-amber-800 border border-amber-200">
+          ⚠️ {countsWarning}
+        </div>
+      )}
+
       {/* اختيار طريقة استيراد المنيو */}
       <ImportModeDialog
         isOpen={pendingFile !== null}
         description="كيف تريد التعامل مع المنيو الحالي للأسابيع الموجودة في الملف؟"
-        replaceWarning="سيتم حذف أصناف المنيو الحالية للأسابيع الموجودة في الملف قبل الإضافة."
+        replaceWarning="أي صنف موجود حالياً في أسابيع الملف ولا يظهر فيه سيُحذف. الأصناف المطابقة تبقى كما هي."
         onChoose={(mode) => {
           const file = pendingFile;
           setPendingFile(null);
@@ -761,11 +863,13 @@ export default function MenuView() {
                         return (
                           <td key={d.value} className="border border-slate-200 align-middle p-0">
                             <Cell
+                              key={cellItem?.id ?? 'empty'}
                               item={cellItem}
                               pendingCreate={pendingCreateBySlot.get(pKey) ?? null}
                               mealsById={mealsById}
                               benTotal={benTotal}
                               benExclusions={benExclusions}
+                              benReady={benReady}
                               search={search}
                               canEdit={canEdit}
                               isSnack={false}
@@ -800,11 +904,13 @@ export default function MenuView() {
                         return (
                           <td key={d.value} className="border border-slate-200 align-middle p-0">
                             <Cell
+                              key={cellItem?.id ?? 'empty'}
                               item={cellItem}
                               pendingCreate={pendingCreateBySlot.get(pKey) ?? null}
                               mealsById={mealsById}
                               benTotal={benTotal}
                               benExclusions={benExclusions}
+                              benReady={benReady}
                               search={search}
                               canEdit={canEdit}
                               isSnack={true}
@@ -841,10 +947,13 @@ export default function MenuView() {
           editing={editing}
           meals={meals}
           existingMealIds={
-            (slotMap.get(slotKey(editing.week, editing.day, editing.meal_type)) ?? [])
-              .filter(i => (editing.isSnack ? i.category === 'snack' : i.category !== 'snack'))
-              .map((i, idx) => idx === editing.rowIndex ? null : i.meal_id)
-              .filter((x): x is string => !!x)
+            // نفس تقسيم الشبكة بالضبط، وإلا اختلف «مستخدم» عمّا يراه المستخدم
+            (() => {
+              const { mains, snacks } = slotMainsAndSnacks(editing.week, editing.day, editing.meal_type);
+              return (editing.isSnack ? snacks : mains)
+                .map((i, idx) => idx === editing.rowIndex ? null : i.meal_id)
+                .filter((x): x is string => !!x);
+            })()
           }
           onClose={() => setEditing(null)}
           onPick={async (mealId) => {

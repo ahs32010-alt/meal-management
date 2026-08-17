@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useLayoutEffect, useRef, useMemo } from 'react';
 import { supabase } from '@/lib/supabase-client';
+import { fetchAllRows } from '@/lib/fetch-all';
 import type { Beneficiary } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import { fetchInactiveBeneficiaryIds } from '@/lib/inactive-beneficiaries';
@@ -325,10 +326,14 @@ export default function LunchDinnerStickersView() {
     const cols = 'id, name, english_name, code, category, villa, diet_type, notes, created_at';
     const flagCols = 'no_fish, no_pasta_sandwich, low_carb';
 
-    const attempt = (select: string, useEntity: boolean) => {
-      const q = supabase.from('beneficiaries').select(select);
-      return (useEntity ? q.eq('entity_type', 'beneficiary') : q).order('name');
-    };
+    // قراءة على دفعات — بدونها يقصّ PostgREST القائمة عند ١٠٠٠ صف بصمت
+    // فيطبع الستيكرات ناقصة بلا أي تنبيه.
+    const attempt = (select: string, useEntity: boolean) =>
+      fetchAllRows((from, to) => {
+        const q = supabase.from('beneficiaries').select(select);
+        return (useEntity ? q.eq('entity_type', 'beneficiary') : q)
+          .order('name').order('id').range(from, to);
+      });
 
     // تدرّج: مع الأعمدة الجديدة → بدونها (الـmigration ما اشتغل) → بدون entity_type
     let res = await attempt(`${cols}, ${flagCols}, entity_type`, true);
