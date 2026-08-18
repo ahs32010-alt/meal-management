@@ -193,6 +193,7 @@ html { scroll-behavior: smooth; }
   html.dark .text-amber-600 { color: var(--d-amber) !important; }
   html.dark .text-amber-700 { color: var(--d-amber-2) !important; }
   html.dark .border-amber-100 { border-color: rgba(251, 191, 36, 0.28) !important; }
+  html.dark .border-amber-200 { border-color: rgba(251, 191, 36, 0.32) !important; }
 
   /* Purple / Violet → lavender */
   html.dark .bg-purple-50  { background-color: rgba(167, 139, 250, 0.12) !important; }
@@ -208,6 +209,8 @@ html { scroll-behavior: smooth; }
   html.dark .bg-indigo-100 { background-color: rgba(129, 140, 248, 0.18) !important; }
   html.dark .text-indigo-600 { color: #a5b4fc !important; }
   html.dark .text-indigo-700 { color: #c7d2fe !important; }
+  html.dark .border-indigo-100 { border-color: rgba(129, 140, 248, 0.28) !important; }
+  html.dark .border-indigo-200 { border-color: rgba(129, 140, 248, 0.32) !important; }
 
   /* Red / Rose → soft rose */
   html.dark .bg-red-50   { background-color: rgba(251, 113, 133, 0.12) !important; }

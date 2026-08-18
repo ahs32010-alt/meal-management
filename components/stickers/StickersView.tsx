@@ -7,6 +7,7 @@ import type { DailyOrder, ReportData, ItemCategory, EntityType } from '@/lib/typ
 import { MEAL_TYPE_LABELS, MEAL_TYPE_EN, CATEGORY_ORDER, CATEGORY_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, DAY_LABELS } from '@/lib/types';
 import { formatDate, formatDateFull } from '@/lib/date-utils';
 import { transliterate } from '@/lib/transliterate';
+import OrderSelect from '@/components/shared/OrderSelect';
 import {
   GROUP_COLORS,
   CATEGORY_THEME,
@@ -753,20 +754,18 @@ export default function StickersView() {
 
       {/* Order selector */}
       <div className="card p-4 no-print">
-        <label className="label">اختر أمر التشغيل</label>
-        {loadingOrders ? <div className="input-field text-slate-400">جاري التحميل...</div> : (
-          <select value={selectedOrderId} onChange={e => { setSelectedOrderId(e.target.value); loadReport(e.target.value); }} className="input-field">
-            <option value="">-- اختر أمر تشغيل --</option>
-            {orders.map(o => {
-              const e: EntityType = o.entity_type === 'companion' ? 'companion' : 'beneficiary';
-              return (
-                <option key={o.id} value={o.id}>
-                  {formatDate(o.date)} — {MEAL_TYPE_LABELS[o.meal_type]} — {ENTITY_TYPE_LABELS_PLURAL[e]}
-                </option>
-              );
-            })}
-          </select>
-        )}
+        <OrderSelect
+          orders={orders}
+          value={selectedOrderId}
+          loading={loadingOrders}
+          highlight="breakfast"
+          onChange={id => {
+            setSelectedOrderId(id);
+            // مسح الاختيار يمسح الستيكرات معه، لا يترك ستيكرات أمر ملغى معروضة
+            if (id) loadReport(id);
+            else { setReport(null); setSplits({}); setError(''); }
+          }}
+        />
       </div>
 
       {loading && (

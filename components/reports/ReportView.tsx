@@ -7,6 +7,7 @@ import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from
 import { formatDate, formatDateFull, formatNow } from '@/lib/date-utils';
 import { MENU_DAYS, WEEK_NUMBERS, WEEK_TITLES } from '@/lib/menu-utils';
 import type { MenuPeriodReport } from '@/lib/menu-period-report';
+import OrderSelect from '@/components/shared/OrderSelect';
 
 // ── Styles ──────────────────────────────────────────────────────────────────
 const MEAL_TYPE_STYLES: Record<string, string> = {
@@ -307,7 +308,9 @@ export default function ReportView({ initialOrderId }: Props) {
   }, []);
 
   useEffect(() => {
+    // مسح الاختيار يمسح التقرير معه — وإلا بقيت أرقام أمر ملغى معروضة
     if (selectedOrderId) generateReport(selectedOrderId);
+    else { setReport(null); setError(''); }
   }, [selectedOrderId, generateReport]);
 
   /**
@@ -443,26 +446,12 @@ export default function ReportView({ initialOrderId }: Props) {
       {mode === 'daily' && (
         <>
           <div className="card p-4 no-print">
-            <label className="label">اختر أمر التشغيل</label>
-            {loadingOrders
-              ? <div className="input-field text-slate-400">جاري التحميل...</div>
-              : (
-                <select
-                  value={selectedOrderId}
-                  onChange={e => setSelectedOrderId(e.target.value)}
-                  className="input-field"
-                >
-                  <option value="">— اختر أمر تشغيل —</option>
-                  {orders.map(o => {
-                    const e: EntityType = o.entity_type === 'companion' ? 'companion' : 'beneficiary';
-                    return (
-                      <option key={o.id} value={o.id}>
-                        {formatDate(o.date)} — {MEAL_TYPE_LABELS[o.meal_type]} — {ENTITY_TYPE_LABELS_PLURAL[e]}
-                      </option>
-                    );
-                  })}
-                </select>
-              )}
+            <OrderSelect
+              orders={orders}
+              value={selectedOrderId}
+              loading={loadingOrders}
+              onChange={setSelectedOrderId}
+            />
           </div>
 
           {loadingReport && (
