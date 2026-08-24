@@ -510,6 +510,19 @@ export default function OrderList() {
                           </svg>
                           PDF
                         </Link>
+                        {/* الوضع الصوتي — لمن يشغّل المطبخ ولا يقرأ أي لغة */}
+                        <Link
+                          href={`/kitchen/${order.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-50 text-violet-700 rounded-lg text-xs font-semibold hover:bg-violet-100 transition-colors"
+                          title="ينطق «إحصاء الأصناف» بندًا بندًا — للمطبخ"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4v8a4.5 4.5 0 002.5-4z" />
+                          </svg>
+                          صوتي
+                        </Link>
                         <button
                           onClick={() => refreshSnapshot(order.id)}
                           disabled={refreshingId === order.id}

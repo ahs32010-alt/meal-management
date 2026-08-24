@@ -18,7 +18,7 @@ import {
 } from 'docx';
 import type { Beneficiary } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
-import { hasCustomization, type LdMealCustomization } from './ld-types';
+import { hasCustomization, LD_CATEGORY, type LdMealCustomization } from './ld-types';
 
 const DIET_TYPE_EN: Record<string, string> = {
   'عادي': 'Normal diet',
@@ -222,7 +222,12 @@ function bottomCell(ben: Beneficiary, ctx: Ctx, bg?: string, custom?: LdMealCust
     const altEn = c.alternatives.map(a => a.en).filter(Boolean);
 
     children.push(new Paragraph({ spacing: { before: 60, after: 40 }, border: { bottom: BLACK(18) }, children: [new TextRun({ text: '', size: sz(2) })] }));
-    children.push(center([new TextRun({ text: `تخصيصات ${c.mealAr} — ${c.mealEn}`, bold: true, size: sz(8.5 * scale), underline: {}, rightToLeft: true })], 30));
+    // الوجبة + تصنيف الكيس (حار/بارد/سناك) بلونه — نفس سطر الصفحة
+    const cat = c.category ? LD_CATEGORY[c.category] : null;
+    children.push(center([
+      new TextRun({ text: `تخصيصات ${c.mealAr} ${c.mealEn}`, bold: true, size: sz(8.5 * scale), underline: {}, rightToLeft: true }),
+      ...(cat ? [new TextRun({ text: ` · ${cat.ar} ${cat.en}`, bold: true, size: sz(8.5 * scale), color: cat.hex.replace('#', ''), rightToLeft: true })] : []),
+    ], 30));
 
     if (exAr.length) {
       children.push(center([
@@ -254,8 +259,12 @@ export async function exportLunchDinnerStickers(
   widthCm: number,
   heightCm: number,
   dietColors: Record<string, string> = {},
-  /** تخصيصات الوجبة لكل مستفيد (مفتاحها id) — تبويب «حسب الوجبة» فقط */
-  customs: Record<string, LdMealCustomization> = {},
+  /**
+   * تخصيصات كل ستيكر، موازية لـ`beneficiaries` بالفهرس — تبويب «حسب الوجبة».
+   * مصفوفة لا خريطة بالـid عمداً: المستفيد الواحد قد يتكرّر في القائمة بستيكر
+   * لكل تصنيف (حار/بارد/سناك)، فخريطة بالـid تدهس تخصيصاته ببعضها.
+   */
+  customs: (LdMealCustomization | null | undefined)[] = [],
   filename = 'ستيكرات-الغداء-والعشاء.docx',
 ): Promise<void> {
   const header = headerUrl ? await loadImage(headerUrl) : null;
@@ -273,13 +282,13 @@ export async function exportLunchDinnerStickers(
   const usable = contentH - 120; // هامش أمان ضد فيض الصفحة
   // صف الأعلى (محتوى متغيّر) يأخذ مساحة أكبر لتفادي القص؛ صف الوسط (الاسم) محتواه معروف.
   // مع التخصيصات ينتقل جزء من مساحة الأعلى والوسط للأسفل — محظور/بديل يحتاج أسطراً إضافية.
-  const anyCustom = beneficiaries.some(b => hasCustomization(customs[b.id]));
+  const anyCustom = customs.some(c => hasCustomization(c));
   const r1 = Math.round(usable * (anyCustom ? 0.34 : 0.40));
   const r3 = Math.round(usable * (anyCustom ? 0.42 : 0.30));
   const r2 = usable - r1 - r3;
   const rowHpx = (r1 / 1440) * 96; // ارتفاع صف الأعلى بالبكسل (لتحجيم الهيدر)
 
-  const sections = beneficiaries.map(ben => {
+  const sections = beneficiaries.map((ben, i) => {
     const dietKey = ben.diet_type?.trim();
     const bg = dietKey ? dietColors[dietKey]?.replace('#', '') : undefined;
     const frame = new Table({
@@ -288,7 +297,7 @@ export async function exportLunchDinnerStickers(
       rows: [
         new TableRow({ height: { value: r1, rule: HeightRule.EXACT }, cantSplit: true, children: [topCell(ben, ctx, rowHpx, bg)] }),
         new TableRow({ height: { value: r2, rule: HeightRule.EXACT }, cantSplit: true, children: [midCell(ben, ctx, bg)] }),
-        new TableRow({ height: { value: r3, rule: HeightRule.EXACT }, cantSplit: true, children: [bottomCell(ben, ctx, bg, customs[ben.id])] }),
+        new TableRow({ height: { value: r3, rule: HeightRule.EXACT }, cantSplit: true, children: [bottomCell(ben, ctx, bg, customs[i])] }),
       ],
     });
     return {

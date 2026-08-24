@@ -20,6 +20,7 @@ import { transliterate } from '@/lib/transliterate';
 import LdOrderPicker from './LdOrderPicker';
 import StickerCard from './ld-sticker-card';
 import { fetchStickerBeneficiaries } from './ld-fetch';
+import { splitDetailByCategory } from './ld-split';
 import { DietColorsPanel, HeaderControls, SizeFields, type LdSettings } from './ld-settings';
 import type { LdMealCustomization } from './ld-types';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
@@ -28,6 +29,8 @@ import type { LdMealCustomization } from './ld-types';
 const LD_MEALS: MealType[] = ['lunch', 'dinner'];
 
 interface StickerRow {
+  /** مفتاح فريد للستيكر — المستفيد قد يكون له أكثر من ستيكر (واحد لكل تصنيف) */
+  key: string;
   ben: Beneficiary;
   custom: LdMealCustomization;
   hasCustom: boolean;
@@ -126,28 +129,29 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
       return isSnack ? `${out} (snak)` : out;
     };
 
-    return report.beneficiaryDetails.map(detail => {
+    return report.beneficiaryDetails.flatMap(detail => {
       // لقطة التقرير لا تحمل رموز الخيارات (لا يفضل السمك…)، وقد تكون قديمة في
       // الاسم/الفيلا/الملاحظات. فالبيانات الحيّة تفوز، واللقطة تسدّ النقص فقط —
       // بهذا يخرج نفس الشخص بنفس الستيكر في التبويبين.
       const full = benMap.get(detail.beneficiary.id);
       const ben: Beneficiary = full ? { ...detail.beneficiary, ...full } : detail.beneficiary;
 
-      const excluded = detail.excludedItems
-        .filter(i => i.meal?.name?.trim())
-        .map(i => ({ ar: i.meal.name, en: tr(i.meal.name, i.meal.is_snack) }));
-
-      const alternatives = [
-        ...detail.excludedItems
-          .filter(i => i.alternative?.name?.trim())
-          .map(i => ({ ar: i.alternative!.name, en: tr(i.alternative!.name, i.alternative!.is_snack) })),
-        ...(detail.fixedItems ?? [])
-          .filter(f => f.meal?.name?.trim())
-          .map(f => ({ ar: f.meal.name, en: tr(f.meal.name, f.meal.is_snack) })),
-      ];
-
-      const custom: LdMealCustomization = { mealAr, mealEn, excluded, alternatives };
-      return { ben, custom, hasCustom: excluded.length > 0 || alternatives.length > 0 };
+      // الفصل بالتصنيف — دالة نقيّة مشتركة، مختبَرة في tests/ld-split.test.ts
+      return splitDetailByCategory(detail).map(group => {
+        const excluded = group.excluded
+          .map(e => ({ ar: e.meal.name, en: tr(e.meal.name, e.meal.is_snack) }));
+        const alternatives = [
+          ...group.excluded.filter(e => e.alternative?.name?.trim())
+            .map(e => ({ ar: e.alternative!.name, en: tr(e.alternative!.name, e.alternative!.is_snack) })),
+          ...group.fixed.map(f => ({ ar: f.meal.name, en: tr(f.meal.name, f.meal.is_snack) })),
+        ];
+        return {
+          key: `${ben.id}__${group.category ?? 'none'}`,
+          ben,
+          custom: { mealAr, mealEn, category: group.category, excluded, alternatives },
+          hasCustom: excluded.length > 0 || alternatives.length > 0,
+        };
+      });
     });
   }, [report, benMap, customDict, mealAr, mealEn]);
 
@@ -170,17 +174,20 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   }, [rows]);
 
   const withCustomCount = rows.filter(r => r.hasCustom).length;
+  // كم ستيكر زاد بسبب الفصل بالتصنيف (مستفيد له حار وبارد = ستيكران)
+  const splitExtra = rows.length - (report?.beneficiaryDetails.length ?? 0);
 
   // ── التصدير ───────────────────────────────────────────────────────────────
   const handleExport = async () => {
     if (!visibleRows.length) return;
     setExporting(true);
     try {
-      const customs: Record<string, LdMealCustomization> = {};
-      visibleRows.forEach(r => { customs[r.ben.id] = r.custom; });
+      // مصفوفة موازية لا خريطة بالـid: المستفيد الواحد قد يكون له عدة ستيكرات
+      // (حار/بارد/سناك) فالمفتاح بالـid يدهس بعضه.
       const { exportLunchDinnerStickers } = await import('./ld-word-export');
       await exportLunchDinnerStickers(
-        visibleRows.map(r => r.ben), headerUrl, w, h, dietColors, customs,
+        visibleRows.map(r => r.ben), headerUrl, w, h, dietColors,
+        visibleRows.map(r => r.custom),
         report ? `ستيكرات-${mealAr}-${report.order.date}.docx` : undefined,
       );
     } catch (e) {
@@ -196,7 +203,7 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
     setProgress({ done: 0, total: visibleRows.length });
     try {
       const nodes = visibleRows
-        .map(r => nodesRef.current.get(r.ben.id))
+        .map(r => nodesRef.current.get(r.key))
         .filter((el): el is HTMLDivElement => !!el);
       if (!nodes.length) { alert('لا توجد ستيكرات للتصدير — انتظر تحميل الصفحة كاملة ثم أعد المحاولة'); return; }
       const { exportLunchDinnerStickersPdf } = await import('./ld-pdf-export');
@@ -248,7 +255,8 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
               <p className="text-sm font-semibold text-slate-700">
                 {orderInfo}
                 <span className="text-slate-400 font-normal mr-2">
-                  — {visibleRows.length} ستيكر ({withCustomCount} عنده تخصيصات)
+                  — {visibleRows.length} ستيكر ({withCustomCount} فيه تخصيصات
+                  {splitExtra > 0 ? `، ${splitExtra} مفصول بالتصنيف` : ''})
                 </span>
               </p>
               <div className="flex items-center gap-2 flex-wrap">
@@ -311,11 +319,11 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
         </div>
       ) : (
         <div className="flex flex-wrap gap-4 justify-center md:justify-start">
-          {visibleRows.map(({ ben, custom }) => (
-            <StickerCard key={ben.id} ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
+          {visibleRows.map(({ key, ben, custom }) => (
+            <StickerCard key={key} ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
               bgColor={ben.diet_type?.trim() ? dietColors[ben.diet_type.trim()] : undefined}
               custom={custom}
-              innerRef={el => setNode(ben.id, el)} />
+              innerRef={el => setNode(key, el)} />
           ))}
         </div>
       )}

@@ -11,7 +11,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import type { Beneficiary } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
-import { hasCustomization, type LdMealCustomization } from './ld-types';
+import { hasCustomization, LD_CATEGORY, type LdMealCustomization } from './ld-types';
 
 // ترجمة إنجليزية لأنواع الأنظمة الغذائية الشائعة — تُعرض كسطر ثانٍ تحت العربي.
 export const DIET_TYPE_EN: Record<string, string> = {
@@ -112,13 +112,19 @@ function CustomizationBlock({ custom, s, heightCm }: {
   const exEn = custom.excluded.map(e => e.en).filter(Boolean);
   const altAr = custom.alternatives.map(a => a.ar).filter(Boolean);
   const altEn = custom.alternatives.map(a => a.en).filter(Boolean);
+  const cat = custom.category ? LD_CATEGORY[custom.category] : null;
 
   return (
     // سقف الارتفاع يحمي القالب: التخصيصات الطويلة تُقصّ ولا تدفع الستيكر خارج مقاسه
     <div className="shrink-0 overflow-hidden" style={{ maxHeight: `${heightCm * 0.36}cm`, marginTop: 2 * s }}>
       <div className="border-t-[3px] border-black" style={{ marginBottom: 3 * s }} />
-      <div className="text-center font-bold underline" style={{ fontSize: 10 * s, marginBottom: 2 * s }}>
-        تخصيصات {custom.mealAr} — {custom.mealEn}
+      {/* سطر واحد: الوجبة + تصنيف هذا الكيس (حار/بارد/سناك) بلونه — فيعرف
+          المطبخ أي ستيكر يروح مع أي كيس حين ينفصل المستفيد على أكثر من ستيكر */}
+      <div className="text-center leading-tight" style={{ fontSize: 10 * s, marginBottom: 2 * s }}>
+        <span className="font-bold underline">تخصيصات {custom.mealAr} {custom.mealEn}</span>
+        {cat && (
+          <span className="font-extrabold" style={{ color: cat.hex }}> · {cat.ar} {cat.en}</span>
+        )}
       </div>
 
       {exAr.length > 0 && (
