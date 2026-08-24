@@ -10,13 +10,43 @@ import type { PlanProblem } from '@/lib/assistant/plan';
 import type { AskOption, DialogContext, Pending } from '@/lib/assistant/interpret';
 import AnswerCard from './AnswerCard';
 import AskCard from './AskCard';
+import AiAnswerCard, { type AiMeta } from './AiAnswerCard';
 import PlanCard, { type ClientPlan } from './PlanCard';
+
+/**
+ * وضعان للمساعد:
+ *  • `local` — المحرّك الحتمي داخل النظام. سريع، مجاني، بلا خدمة خارجية،
+ *    ويجاوب بأشكال منظّمة (بطاقات وجداول).
+ *  • `ai`    — نموذج لغوي (Gemini أو Claude) يفهم الصياغات الحرّة ويركّب
+ *    جواباً من عدة قراءات. يحتاج مفتاحاً على الخادم.
+ *
+ * الوضعان يشتركان في **نفس** مسار التنفيذ: أي تعديل يمر بمعاينة وتأكيد
+ * و/api/assistant/execute بكل فحوصه. اختلاف الفهم لا يعني اختلاف الصلاحيات.
+ */
+type Mode = 'local' | 'ai';
+
+interface ProviderInfo {
+  id: string;
+  label: string;
+  configured: boolean;
+}
+
+const MODE_KEY = 'kha:assistant-mode';
+const PROVIDER_KEY = 'kha:assistant-provider';
 
 const ASK_EXAMPLES = [
   'متى يُقدَّم البرتقال؟',
   'كم عدد المستفيدين اللي ياكلون برتقال الأسبوع الجاي؟',
   'مين ممنوع عليه السمك؟',
   'توزيع المستفيدين حسب الفيلا',
+];
+
+/** أمثلة الوضع الذكي: صياغات حرّة تحتاج تركيب جواب من عدة قراءات. */
+const AI_EXAMPLES = [
+  'كم شخص ما يأكل الدجاج؟',
+  'أعطني المستفيدين اللي عندهم وجبات ثابتة',
+  'اعرض لي ملخص تشغيل اليوم',
+  'كم نحتاج وجبة بديلة بكرة؟',
 ];
 
 const DO_EXAMPLES = [
@@ -37,6 +67,9 @@ interface Turn {
   askData?: { question: string; options: AskOption[] };
   navigate?: { href: string; label: string };
   askAnswered?: string;
+  /** رد الوضع الذكي — نص Markdown يصيّره AiAnswerCard. */
+  aiText?: string;
+  aiMeta?: AiMeta;
   planState?: PlanState;
   applied?: number;
   planError?: string;
@@ -62,12 +95,65 @@ export default function AssistantView({ compact = false }: ViewProps) {
   // ذاكرة الحوار — تُمرَّر مع كل طلب فيبقى الخادم بلا حالة.
   const [context, setContext] = useState<DialogContext | undefined>();
   const [pending, setPending] = useState<Pending | undefined>();
+
+  // ── الوضع الذكي ──────────────────────────────────────────────────────────
+  const [mode, setMode] = useState<Mode>('local');
+  const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
+  const [providerId, setProviderId] = useState<string | undefined>();
+  // تاريخ الحوار مع النموذج، وهوية من أنتجه. شكله خاص بمزوّده فما نخلط بينهما.
+  const aiHistory = useRef<{ messages: unknown; provider?: string }>({ messages: [] });
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [turns, busy]);
+
+  // نسأل الخادم أي مزوّد مهيّأ. لو ما فيه ولا واحد، ما نعرض المبدّل أصلاً بدل
+  // أن نعد المستخدم بوضع يفشل عند أول ضغطة.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/assistant/providers')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        const list = (data.providers ?? []) as ProviderInfo[];
+        setProviders(list);
+
+        const available = list.filter((p) => p.configured);
+        if (available.length === 0) return;
+
+        try {
+          const savedProvider = localStorage.getItem(PROVIDER_KEY);
+          const valid = available.find((p) => p.id === savedProvider);
+          setProviderId(valid ? valid.id : available[0].id);
+          if (localStorage.getItem(MODE_KEY) === 'ai') setMode('ai');
+        } catch {
+          setProviderId(available[0].id);
+        }
+      })
+      .catch(() => {
+        // تعذّر السؤال — نبقى على المحرّك الحتمي، وهو يعمل دائماً.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const aiAvailable = (providers ?? []).some((p) => p.configured);
+  const configured = (providers ?? []).filter((p) => p.configured);
+
+  const switchMode = (next: Mode) => {
+    setMode(next);
+    try { localStorage.setItem(MODE_KEY, next); } catch { /* تخزين محجوب */ }
+  };
+
+  const switchProvider = (next: string) => {
+    setProviderId(next);
+    // تبديل المزوّد يبدأ حواراً جديداً: تاريخ Claude لا يُقرأ عند Gemini.
+    aiHistory.current = { messages: [] };
+    try { localStorage.setItem(PROVIDER_KEY, next); } catch { /* تخزين محجوب */ }
+  };
 
   const patch = (id: number, next: Partial<Turn>) =>
     setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, ...next } : t)));
@@ -93,6 +179,66 @@ export default function AssistantView({ compact = false }: ViewProps) {
 
     setQuestion('');
     setBusy(true);
+
+    // ── الوضع الذكي ────────────────────────────────────────────────────────
+    // يختلف عن الحتمي في الفهم فقط. أي خطة يرجّعها تدخل **نفس** مسار التأكيد
+    // والتنفيذ أدناه، بنفس التوقيع وفحص الصلاحيات.
+    if (mode === 'ai') {
+      try {
+        const res = await fetch('/api/assistant/ai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question: q,
+            provider: providerId,
+            history: aiHistory.current.messages,
+            historyProvider: aiHistory.current.provider,
+          }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          patch(id, { error: (data as { error?: string })?.error ?? 'تعذّر تنفيذ الطلب' });
+          return;
+        }
+
+        // التاريخ يتراكم عبر الأدوار — منه يفهم النموذج «خلّه لبكرة».
+        aiHistory.current = {
+          messages: [
+            ...(Array.isArray(aiHistory.current.messages) ? aiHistory.current.messages : []),
+            ...(Array.isArray(data.history) ? data.history : []),
+          ],
+          provider: data.historyProvider ?? providerId,
+        };
+
+        const meta: AiMeta = {
+          provider: data.provider,
+          model: data.model,
+          toolsUsed: data.toolsUsed,
+          fellBack: data.fellBack,
+        };
+
+        if (data.navigate) {
+          patch(id, { aiText: data.text, aiMeta: meta, navigate: data.navigate });
+          router.push(data.navigate.href);
+        } else if (data.plan) {
+          patch(id, {
+            aiText: data.text,
+            aiMeta: meta,
+            plan: data.plan as ClientPlan & { replay?: unknown },
+            planState: 'pending',
+          });
+        } else {
+          patch(id, { aiText: data.text, aiMeta: meta });
+        }
+      } catch {
+        patch(id, { error: 'تعذّر الاتصال بالخادم' });
+      } finally {
+        setBusy(false);
+        inputRef.current?.focus();
+      }
+      return;
+    }
 
     try {
       const res = await fetch('/api/assistant', {
@@ -196,6 +342,7 @@ export default function AssistantView({ compact = false }: ViewProps) {
     setTurns([]);
     setContext(undefined);
     setPending(undefined);
+    aiHistory.current = { messages: [], provider: providerId };
   };
 
   if (loading) return <div className="p-6 text-center text-slate-500 text-sm">جارٍ التحميل…</div>;
@@ -217,23 +364,76 @@ export default function AssistantView({ compact = false }: ViewProps) {
         <div className="mb-4">
           <h1 className="text-xl font-bold text-slate-800">المساعد الذكي</h1>
           <p className="text-sm text-slate-500 mt-1 leading-relaxed">
-            كلّمه بالعربي بأي صياغة. يفهم أسماء المستفيدين والأصناف من بياناتك، ويسألك عن الناقص،
-            ويتذكّر آخر شخص وصنف — فتقدر تقول «وحط له بيض السبت». كل شيء محلي بدون خدمة خارجية.
+            {mode === 'local'
+              ? 'كلّمه بالعربي بأي صياغة. يفهم أسماء المستفيدين والأصناف من بياناتك، ويسألك عن الناقص، ويتذكّر آخر شخص وصنف — فتقدر تقول «وحط له بيض السبت». كل شيء محلي بدون خدمة خارجية.'
+              : 'يقرأ بياناتك بأدوات محدّدة ويركّب الجواب منها — لا يخترع رقماً. وأي تعديل يعرضه للمعاينة وينتظر تأكيدك، بنفس الصلاحيات وسجل النشاط.'}
           </p>
+        </div>
+      )}
+
+      {/* مبدّل الوضع — يظهر فقط لو فيه مزوّد مهيّأ على الخادم */}
+      {aiAvailable && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+            <button
+              type="button"
+              onClick={() => switchMode('local')}
+              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${
+                mode === 'local' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              المحرّك المحلي
+            </button>
+            <button
+              type="button"
+              onClick={() => switchMode('ai')}
+              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${
+                mode === 'ai' ? 'bg-violet-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              الوضع الذكي
+            </button>
+          </div>
+
+          {/* اختيار المزوّد — يظهر فقط لو أكثر من واحد مهيّأ */}
+          {mode === 'ai' && configured.length > 1 && (
+            <select
+              value={providerId ?? ''}
+              onChange={(e) => switchProvider(e.target.value)}
+              className="text-xs font-semibold rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-300"
+              title="تبديل المزوّد يبدأ حواراً جديداً"
+            >
+              {configured.map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+          )}
+
+          {mode === 'ai' && (
+            <span className="text-[11px] text-slate-400">
+              يقرأ فقط — التعديل يبقى بمعاينة وتأكيد
+            </span>
+          )}
         </div>
       )}
 
       {turns.length === 0 && (
         <div className={`grid gap-3 mb-4 ${compact ? '' : 'md:grid-cols-2'}`}>
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-xs font-semibold text-slate-500 mb-2">اسأل</div>
+          <div className={`rounded-2xl border bg-white p-4 ${mode === 'ai' ? 'border-violet-200' : 'border-slate-200'}`}>
+            <div className={`text-xs font-semibold mb-2 ${mode === 'ai' ? 'text-violet-600' : 'text-slate-500'}`}>
+              اسأل
+            </div>
             <div className="flex flex-col gap-1.5 items-start">
-              {ASK_EXAMPLES.map((e) => (
+              {(mode === 'ai' ? AI_EXAMPLES : ASK_EXAMPLES).map((e) => (
                 <button
                   key={e}
                   type="button"
                   onClick={() => send(e)}
-                  className="text-start px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 text-sm hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors w-full"
+                  className={`text-start px-3 py-1.5 rounded-lg border text-sm transition-colors w-full ${
+                    mode === 'ai'
+                      ? 'border-violet-200 bg-violet-50 text-violet-800 hover:bg-violet-100'
+                      : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700'
+                  }`}
                 >
                   {e}
                 </button>
@@ -268,6 +468,8 @@ export default function AssistantView({ compact = false }: ViewProps) {
             </div>
 
             {t.answer && <AnswerCard answer={t.answer} onSuggestion={(q) => send(q)} />}
+
+            {t.aiText && <AiAnswerCard text={t.aiText} meta={t.aiMeta} />}
 
             {t.navigate && (
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 flex items-center justify-between gap-3">

@@ -14,6 +14,7 @@ export async function exportLunchDinnerStickersPdf(
   widthCm: number,
   heightCm: number,
   onProgress?: (done: number, total: number) => void,
+  filename = 'ستيكرات-الغداء-والعشاء.pdf',
 ): Promise<{ captured: number; failed: number }> {
   const wMm = widthCm * 10;
   const hMm = heightCm * 10;
@@ -64,6 +65,6 @@ export async function exportLunchDinnerStickersPdf(
     throw new Error('فشل التقاط جميع الستيكرات — تأكد من تحميل الصفحة كاملة ثم أعد المحاولة');
   }
 
-  pdf.save('ستيكرات-الغداء-والعشاء.pdf');
+  pdf.save(filename);
   return { captured, failed };
 }

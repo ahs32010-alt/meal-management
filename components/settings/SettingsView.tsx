@@ -10,11 +10,12 @@ import UsersManager from './UsersManager';
 import ActivityLogView from './ActivityLogView';
 import BackupRestoreView from './BackupRestoreView';
 import ExtrasView from './ExtrasView';
+import OfflineSettings from '@/components/offline/OfflineSettings';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { logActivity } from '@/lib/activity-log';
 import ImportModeDialog, { type ImportMode } from '@/components/shared/ImportModeDialog';
 
-type Tab = 'translit' | 'users' | 'activity' | 'extras' | 'backup';
+type Tab = 'translit' | 'users' | 'activity' | 'extras' | 'offline' | 'backup';
 
 interface Row {
   mealId: string;
@@ -377,6 +378,16 @@ export default function SettingsView() {
         >
           إعدادات إضافية
         </button>
+        <button
+          onClick={() => setTab('offline')}
+          className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${
+            tab === 'offline'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          العمل بلا إنترنت
+        </button>
         {isAdmin && (
           <button
             onClick={() => setTab('backup')}
@@ -394,7 +405,8 @@ export default function SettingsView() {
       {tab === 'users' && isAdmin ? <UsersManager />
         : tab === 'backup' && isAdmin ? <BackupRestoreView />
         : tab === 'activity' ? <ActivityLogView />
-        : tab === 'extras' ? <ExtrasView /> : (
+        : tab === 'extras' ? <ExtrasView />
+        : tab === 'offline' ? <OfflineSettings /> : (
       <div className="card overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 bg-slate-50 flex items-center gap-3">
           <div className="flex-1">

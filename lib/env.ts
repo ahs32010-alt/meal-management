@@ -5,6 +5,17 @@ const envSchema = z.object({
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(20, 'NEXT_PUBLIC_SUPABASE_ANON_KEY is required'),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(20).optional(),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+
+  // ── مزوّدو الذكاء الاصطناعي للمساعد ──────────────────────────────────────
+  // كلها اختيارية: النظام يشتغل كاملاً بالمحرّك الحتمي بدونها.
+  // ولا واحد منها يبدأ بـNEXT_PUBLIC_ عمداً — المفاتيح لا تصل المتصفح أبداً.
+  ANTHROPIC_API_KEY: z.string().trim().min(1).optional(),
+  /** مفتاح Google AI Studio المجاني (aistudio.google.com/apikey). */
+  GEMINI_API_KEY: z.string().trim().min(1).optional(),
+  /** تجاوز النموذج الافتراضي عند الحاجة — مفيد للنزول لنموذج أرخص. */
+  GEMINI_MODEL: z.string().trim().min(1).optional(),
+  /** المزوّد المفضَّل. لو مفتاحه ناقص يسقط النظام تلقائياً للمتوفّر. */
+  ASSISTANT_AI_PROVIDER: z.enum(['gemini', 'claude']).optional(),
 });
 
 const publicSchema = envSchema.pick({

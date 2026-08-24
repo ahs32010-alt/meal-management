@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { useCurrentUser, clearCurrentUserCache } from '@/lib/use-current-user';
+import { purgeDataCache } from '@/lib/offline/data-cache';
 import { can, type PageKey } from '@/lib/permissions';
 import ThemeToggle from '@/components/layout/ThemeToggle';
 import { usePendingCount } from '@/lib/use-pending-count';
@@ -190,6 +191,11 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
     try { await supabase.removeAllChannels(); } catch {}
     try { await supabase.auth.signOut(); } catch {}
     clearCurrentUserCache();
+    // مخزون العمل بلا إنترنت يحوي أسماء المستفيدين وبياناتهم، وتابلت المطبخ
+    // مشترك — فالخروج يمسحه. قشرة التطبيق (الحِزم والخطوط) تبقى: مسحها يعطّل
+    // الفتح بلا نت بلا أي فائدة أمنية.
+    try { await purgeDataCache(); } catch {}
+    try { sessionStorage.removeItem('kha:warmed'); } catch {}
     router.push('/login');
   };
 

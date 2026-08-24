@@ -9,6 +9,7 @@ import BottomNav from '@/components/layout/BottomNav';
 import ThemeToggle from '@/components/layout/ThemeToggle';
 import CuteThemeApplier from '@/components/layout/CuteThemeApplier';
 import Footer from '@/components/layout/Footer';
+import OfflineProvider from '@/components/offline/OfflineProvider';
 
 const PAGE_TITLES: Record<string, string> = {
   '/':              'الرئيسية',
@@ -71,10 +72,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       />
 
       <main className={`min-h-screen transition-all duration-300 ${desktopOpen ? 'md:mr-64' : 'md:mr-0'}`}>
+        {/* شريط حالة الاتصال — يظهر فقط عند الانقطاع أو توفّر تحديث */}
+        <OfflineProvider />
+
         {/* Mobile top bar — native app-style */}
         <div
-          className="md:hidden sticky top-0 z-20 bg-white border-b border-slate-200 px-4 flex items-center gap-3"
+          className="md:hidden sticky z-20 bg-white border-b border-slate-200 px-4 flex items-center gap-3"
           style={{
+            // ينزل بقدر ارتفاع شريط الحالة حتى لا يختفي تحته حين يظهر
+            top: 'var(--kha-banner-h, 0px)',
             paddingTop: 'calc(env(safe-area-inset-top, 0) + 10px)',
             paddingBottom: 10,
           }}
@@ -89,7 +95,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Desktop top bar — ظاهر فقط لما السايدبار مخفي */}
         {!desktopOpen && (
-          <div className="hidden md:flex sticky top-0 z-20 bg-white border-b border-slate-200 px-4 py-2 items-center justify-between">
+          <div
+            className="hidden md:flex sticky z-20 bg-white border-b border-slate-200 px-4 py-2 items-center justify-between"
+            style={{ top: 'var(--kha-banner-h, 0px)' }}
+          >
             <button
               onClick={toggleDesktop}
               className="flex items-center gap-2 px-3 py-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors text-sm font-medium"

@@ -18,6 +18,7 @@ import {
 } from 'docx';
 import type { Beneficiary } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
+import { hasCustomization, type LdMealCustomization } from './ld-types';
 
 const DIET_TYPE_EN: Record<string, string> = {
   'عادي': 'Normal diet',
@@ -174,8 +175,8 @@ function midCell(ben: Beneficiary, ctx: Ctx, bg?: string): TableCell {
       children: [new TableCell({
         margins: { top: 80, bottom: 80, left: 80, right: 80 }, verticalAlign: VerticalAlign.CENTER,
         children: [
-          center([new TextRun({ text: ben.name, bold: true, size: sz(fitPt(ben.name, 16 * scale, contentPt * 0.9)), rightToLeft: true })], ben.english_name ? 24 : 0),
-          ...(ben.english_name ? [center([new TextRun({ text: ben.english_name, bold: true, size: sz(fitPt(ben.english_name, 12 * scale, contentPt * 0.9)) })], 0)] : []),
+          center([new TextRun({ text: ben.name, bold: true, size: sz(fitPt(ben.name, 12.5 * scale, contentPt * 0.9)), rightToLeft: true })], ben.english_name ? 20 : 0),
+          ...(ben.english_name ? [center([new TextRun({ text: ben.english_name, bold: true, size: sz(fitPt(ben.english_name, 9.5 * scale, contentPt * 0.9)) })], 0)] : []),
         ],
       })],
     })],
@@ -183,8 +184,12 @@ function midCell(ben: Beneficiary, ctx: Ctx, bg?: string): TableCell {
   return new TableCell({ ...shade(bg), borders: noBorders, verticalAlign: VerticalAlign.CENTER, margins: { top: 0, bottom: 0, left: 60, right: 60 }, children: [nameBox] });
 }
 
-// أسفل الستيكر: فاصل + الحساسيات + الملاحظات
-function bottomCell(ben: Beneficiary, ctx: Ctx, bg?: string): TableCell {
+// ألوان قسم التخصيصات — نفس دلالة ستيكرات الفطور (محظور أحمر، بديل أزرق)
+const EXCL_COLOR = 'B91C1C';
+const ALT_COLOR = '1D4ED8';
+
+// أسفل الستيكر: فاصل + الحساسيات + الملاحظات + تخصيصات الوجبة (إن وُجدت)
+function bottomCell(ben: Beneficiary, ctx: Ctx, bg?: string, custom?: LdMealCustomization | null): TableCell {
   const { scale } = ctx;
   const children: (Paragraph | Table)[] = [];
 
@@ -208,6 +213,38 @@ function bottomCell(ben: Beneficiary, ctx: Ctx, bg?: string): TableCell {
     children.push(center([new TextRun({ text: String(ben.notes), size: sz(9 * scale), rightToLeft: true })], 0, 24));
   }
 
+  // تخصيصات الوجبة — آخر الستيكر (تبويب «حسب الوجبة» فقط)
+  if (hasCustomization(custom)) {
+    const c = custom!;
+    const exAr = c.excluded.map(e => e.ar).filter(Boolean);
+    const exEn = c.excluded.map(e => e.en).filter(Boolean);
+    const altAr = c.alternatives.map(a => a.ar).filter(Boolean);
+    const altEn = c.alternatives.map(a => a.en).filter(Boolean);
+
+    children.push(new Paragraph({ spacing: { before: 60, after: 40 }, border: { bottom: BLACK(18) }, children: [new TextRun({ text: '', size: sz(2) })] }));
+    children.push(center([new TextRun({ text: `تخصيصات ${c.mealAr} — ${c.mealEn}`, bold: true, size: sz(8.5 * scale), underline: {}, rightToLeft: true })], 30));
+
+    if (exAr.length) {
+      children.push(center([
+        new TextRun({ text: 'محظور: ', bold: true, size: sz(9 * scale), color: EXCL_COLOR, rightToLeft: true }),
+        new TextRun({ text: exAr.join('، '), bold: true, size: sz(9 * scale), color: EXCL_COLOR, rightToLeft: true }),
+      ], 0));
+      if (exEn.length) {
+        children.push(center([new TextRun({ text: `NO: ${exEn.join(' | ')}`, bold: true, size: sz(8 * scale), color: EXCL_COLOR })], 0));
+      }
+    }
+
+    if (altAr.length) {
+      children.push(center([
+        new TextRun({ text: 'بديل: ', bold: true, size: sz(9 * scale), color: ALT_COLOR, rightToLeft: true }),
+        new TextRun({ text: altAr.join('، '), bold: true, size: sz(9 * scale), color: ALT_COLOR, rightToLeft: true }),
+      ], 0, 30));
+      if (altEn.length) {
+        children.push(center([new TextRun({ text: `YES: ${altEn.join(' | ')}`, bold: true, size: sz(8 * scale), color: ALT_COLOR })], 0));
+      }
+    }
+  }
+
   return new TableCell({ ...shade(bg), borders: noBorders, verticalAlign: VerticalAlign.BOTTOM, margins: { top: 0, bottom: 40, left: 60, right: 60 }, children });
 }
 
@@ -217,6 +254,9 @@ export async function exportLunchDinnerStickers(
   widthCm: number,
   heightCm: number,
   dietColors: Record<string, string> = {},
+  /** تخصيصات الوجبة لكل مستفيد (مفتاحها id) — تبويب «حسب الوجبة» فقط */
+  customs: Record<string, LdMealCustomization> = {},
+  filename = 'ستيكرات-الغداء-والعشاء.docx',
 ): Promise<void> {
   const header = headerUrl ? await loadImage(headerUrl) : null;
   const logo = await loadImage('/logo-hope.png');
@@ -231,9 +271,11 @@ export async function exportLunchDinnerStickers(
   // بهامش أمان — فالجدول ارتفاعه ثابت ويستحيل أن يتجاوز إلى صفحة ثانية.
   const contentH = convertMillimetersToTwip(heightCm * 10 - MARGIN_MM * 2);
   const usable = contentH - 120; // هامش أمان ضد فيض الصفحة
-  // صف الأعلى (محتوى متغيّر) يأخذ مساحة أكبر لتفادي القص؛ صف الوسط (الاسم) محتواه معروف
-  const r1 = Math.round(usable * 0.40);
-  const r3 = Math.round(usable * 0.30);
+  // صف الأعلى (محتوى متغيّر) يأخذ مساحة أكبر لتفادي القص؛ صف الوسط (الاسم) محتواه معروف.
+  // مع التخصيصات ينتقل جزء من مساحة الأعلى والوسط للأسفل — محظور/بديل يحتاج أسطراً إضافية.
+  const anyCustom = beneficiaries.some(b => hasCustomization(customs[b.id]));
+  const r1 = Math.round(usable * (anyCustom ? 0.34 : 0.40));
+  const r3 = Math.round(usable * (anyCustom ? 0.42 : 0.30));
   const r2 = usable - r1 - r3;
   const rowHpx = (r1 / 1440) * 96; // ارتفاع صف الأعلى بالبكسل (لتحجيم الهيدر)
 
@@ -246,7 +288,7 @@ export async function exportLunchDinnerStickers(
       rows: [
         new TableRow({ height: { value: r1, rule: HeightRule.EXACT }, cantSplit: true, children: [topCell(ben, ctx, rowHpx, bg)] }),
         new TableRow({ height: { value: r2, rule: HeightRule.EXACT }, cantSplit: true, children: [midCell(ben, ctx, bg)] }),
-        new TableRow({ height: { value: r3, rule: HeightRule.EXACT }, cantSplit: true, children: [bottomCell(ben, ctx, bg)] }),
+        new TableRow({ height: { value: r3, rule: HeightRule.EXACT }, cantSplit: true, children: [bottomCell(ben, ctx, bg, customs[ben.id])] }),
       ],
     });
     return {
@@ -268,7 +310,7 @@ export async function exportLunchDinnerStickers(
   });
 
   const blob = await Packer.toBlob(doc);
-  triggerDownload(blob, 'ستيكرات-الغداء-والعشاء.docx');
+  triggerDownload(blob, filename);
 }
 
 function triggerDownload(blob: Blob, filename: string) {
