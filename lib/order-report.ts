@@ -132,9 +132,32 @@ export async function buildOrderReport(
         .range(from, to));
   };
 
-  // القراءتان لا تعتمد إحداهما على الأخرى — كانتا متسلسلتين فتدفع كل نداء
-  // للتقرير رحلة شبكة زائدة (~٤٥٠ms). الآن معاً.
-  const [bensRes, ovRes] = await Promise.all([loadBens(), loadOverrides()]);
+  /**
+   * أسماء كل الأصناف مقدَّماً.
+   *
+   * كانت تُقرأ في مرحلة **ثالثة** تنتظر وصول المحظورات لتعرف أي بديل تسأل عنه
+   * — رحلة شبكة كاملة (~٣٠٠ms) في نهاية السلسلة. وجدول `meals` كله ٣٠٥ صفوف
+   * (٧٠ كيلوبايت)، فقراءته مع البقية أرخص من انتظار دور ثالث.
+   */
+  const loadAllMeals = async (): Promise<{ data: Meal[] | null }> => {
+    // العمود `category` اختياري (قبل تشغيل meals-category-migration) — نسقطه عند الحاجة
+    const attempt = (withCategory: boolean) =>
+      fetchAllRows((from, to) =>
+        supabase.from('meals')
+          .select(`id, name, english_name, type, is_snack${withCategory ? ', category' : ''}`)
+          .order('id').range(from, to));
+    let res = await attempt(true);
+    if (res.error) res = await attempt(false);
+    return { data: res.error ? null : (res.data as unknown as Meal[]) };
+  };
+
+  // الثلاثة لا تعتمد إحداها على الأخرى — كانت متسلسلة فتدفع كل نداء للتقرير
+  // رحلتَي شبكة زائدتين. الآن معاً في مرحلة واحدة.
+  const [bensRes, ovRes, allMealsRes] = await Promise.all([
+    loadBens(),
+    loadOverrides(),
+    loadAllMeals(),
+  ]);
   // الـquery select ديناميكي فما يقدر TypeScript يستنتج النوع — نعرّف نوع
   // محلّي يطابق شكل الصف ونقصّ النتيجة إليه.
   type BenRow = {
@@ -168,15 +191,22 @@ export async function buildOrderReport(
     for (const ov of list) if (ov.target_meal_id) altIds.add(ov.target_meal_id);
   }
 
+  // البدائل تُلتقط من قائمة الأصناف المقروءة سلفاً — بلا رحلة شبكة إضافية.
+  // لو تعذّرت تلك القراءة (عمود ناقص مثلاً) نرجع للسؤال عن المطلوب وحده.
   const altMealMap: Record<string, Meal> = { ...mealMap };
   if (altIds.size > 0) {
-    const { data: altMeals } = await supabase
-      .from('meals')
-      .select('id, name, english_name, type, is_snack')
-      .in('id', Array.from(altIds));
-    (altMeals || []).forEach((m: { id: string; name: string; english_name?: string; type: string; is_snack: boolean }) => {
-      altMealMap[m.id] = m as Meal;
-    });
+    const preloaded = allMealsRes.data;
+    if (preloaded) {
+      for (const m of preloaded) if (altIds.has(m.id)) altMealMap[m.id] = m;
+    } else {
+      const { data: altMeals } = await supabase
+        .from('meals')
+        .select('id, name, english_name, type, is_snack')
+        .in('id', Array.from(altIds));
+      (altMeals || []).forEach((m: { id: string; name: string; english_name?: string; type: string; is_snack: boolean }) => {
+        altMealMap[m.id] = m as Meal;
+      });
+    }
   }
 
   const mainQty: Record<string, number> = {};

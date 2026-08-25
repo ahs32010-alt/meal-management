@@ -21,6 +21,7 @@ import LdOrderPicker from './LdOrderPicker';
 import StickerCard from './ld-sticker-card';
 import { fetchStickerBeneficiaries } from './ld-fetch';
 import { splitDetailByCategory } from './ld-split';
+import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import { DietColorsPanel, HeaderControls, SizeFields, type LdSettings } from './ld-settings';
 import type { LdMealCustomization } from './ld-types';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
@@ -68,6 +69,8 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   // ── أوامر التشغيل (غداء/عشاء فقط) ─────────────────────────────────────────
   useEffect(() => {
     const loadOrders = async () => {
+      const cached = readSnapshot<DailyOrder[]>('ld:orders');
+      if (cached) { setOrders(cached); setLoadingOrders(false); }
       // قراءة على دفعات — بدونها يقصّ PostgREST القائمة عند ١٠٠٠ أمر بصمت
       // الـselect ديناميكي فما يقدر TypeScript يستنتج شكل الصف — نقصّه يدوياً
       const fetchOrders = (withEntity: boolean) =>
@@ -81,7 +84,11 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
             .range(from, to));
       let res = await fetchOrders(true);
       if (res.error) res = await fetchOrders(false);
-      if (res.data) setOrders(res.data as unknown as DailyOrder[]);
+      if (res.data) {
+        const fresh = res.data as unknown as DailyOrder[];
+        setOrders(fresh);
+        writeSnapshot('ld:orders', fresh);
+      }
       setLoadingOrders(false);
     };
     void loadOrders();

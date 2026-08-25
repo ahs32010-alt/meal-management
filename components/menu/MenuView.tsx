@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { fetchInactiveBeneficiaryIds } from '@/lib/inactive-beneficiaries';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import { logActivity } from '@/lib/activity-log';
 import { changeDetails } from '@/lib/activity-diff';
 import { useCurrentUser } from '@/lib/use-current-user';
@@ -304,7 +305,12 @@ export default function MenuView() {
   }, [supabase]);
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
+    // آخر لقطة تُرسم فوراً بدل شاشة فاضية — الطلب ينطلق تحت ويستبدلها.
+    // راجع lib/view-snapshot.ts: لا يمنع طلباً ولا يؤجّله.
+    const snapKey = `menu:${entityType}`;
+    const snap = readSnapshot<{ items: MenuItem[]; meals: Meal[] }>(snapKey);
+    if (snap) { setAllItems(snap.items); setMeals(snap.meals); setLoading(false); }
+    else { setLoading(true); }
     // أعداد الفئة السابقة ما تصلح للفئة الجديدة — نصفّرها حتى تصل الأعداد الصحيحة
     setBenReady(false);
     setCountsWarning('');
@@ -369,8 +375,10 @@ export default function MenuView() {
     }
 
     const loadedItems = itemsRes.data ? (itemsRes.data as unknown as MenuItem[]) : null;
+    const loadedMeals = mealsRes.data ? (mealsRes.data as unknown as Meal[]) : null;
     if (loadedItems) setAllItems(loadedItems);
-    if (mealsRes.data) setMeals(mealsRes.data as unknown as Meal[]);
+    if (loadedMeals) setMeals(loadedMeals);
+    if (loadedItems && loadedMeals) writeSnapshot(snapKey, { items: loadedItems, meals: loadedMeals });
 
     // جلب إجمالي المستفيدين والمحظورات لعرض الأعداد الفعلية في الخلايا
     try {

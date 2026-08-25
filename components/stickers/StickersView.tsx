@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase-client';
+import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import { fetchAllRows } from '@/lib/fetch-all';
 import type { DailyOrder, ReportData, ItemCategory, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, MEAL_TYPE_EN, CATEGORY_ORDER, CATEGORY_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, DAY_LABELS } from '@/lib/types';
@@ -519,6 +520,8 @@ export default function StickersView() {
 
   useEffect(() => {
     const loadOrders = async () => {
+      const cached = readSnapshot<DailyOrder[]>('stickers:orders');
+      if (cached) { setOrders(cached); setLoadingOrders(false); }
       // قراءة على دفعات — بدونها يقصّ PostgREST القائمة عند ١٠٠٠ أمر بصمت
       // فتختفي أوامر من قائمة الاختيار بلا أي مؤشّر.
       const fetchOrders = (withEntity: boolean) =>
@@ -535,7 +538,10 @@ export default function StickersView() {
         const fb = await fetchOrders(false);
         data = fb.data;
       }
-      if (data) setOrders(data as DailyOrder[]);
+      if (data) {
+        setOrders(data as DailyOrder[]);
+        writeSnapshot('stickers:orders', data as DailyOrder[]);
+      }
       setLoadingOrders(false);
     };
     loadOrders();

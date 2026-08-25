@@ -16,6 +16,18 @@ const envSchema = z.object({
   GEMINI_MODEL: z.string().trim().min(1).optional(),
   /** المزوّد المفضَّل. لو مفتاحه ناقص يسقط النظام تلقائياً للمتوفّر. */
   ASSISTANT_AI_PROVIDER: z.enum(['gemini', 'claude']).optional(),
+
+  // ── بوت تليقرام (اختياري بالكامل) ────────────────────────────────────────
+  /** مفتاح البوت من @BotFather. بدونه لا يوجد بوت أصلاً. */
+  TELEGRAM_BOT_TOKEN: z.string().trim().min(1).optional(),
+  /**
+   * سرّ مشترك يرسله تليقرام في ترويسة كل تحديث.
+   * مسار الويب‑هوك عام بطبيعته، وهذا السرّ هو ما يميّز تليقرام عن غيره —
+   * فبدونه يرفض المسار كل طلب.
+   */
+  TELEGRAM_WEBHOOK_SECRET: z.string().trim().min(16).optional(),
+  /** نطاق الموقع — لبناء عنوان الويب‑هوك وروابط الصفحات في ردود البوت. */
+  NEXT_PUBLIC_APP_URL: z.string().url().optional(),
 });
 
 const publicSchema = envSchema.pick({

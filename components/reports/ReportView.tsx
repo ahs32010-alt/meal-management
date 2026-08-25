@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '@/lib/supabase-client';
+import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import type { DailyOrder, Meal, EntityType, MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import { formatDate, formatDateFull, formatNow } from '@/lib/date-utils';
@@ -278,6 +279,10 @@ export default function ReportView({ initialOrderId }: Props) {
   // ── Load orders (daily mode) ──────────────────────────────────────────────
   useEffect(() => {
     const loadOrders = async () => {
+      // قائمة الأوامر وحدها تُرسم فوراً من آخر لقطة. أرقام التقرير نفسها لا
+      // تُخزَّن أبداً — عليها يُطبخ، فلا تُعرض إلا طازجة من الخادم.
+      const cached = readSnapshot<DailyOrder[]>('reports:orders');
+      if (cached) { setOrders(cached); setLoadingOrders(false); }
       const first = await supabase
         .from('daily_orders')
         .select('id, date, meal_type, entity_type, created_at')
@@ -290,7 +295,10 @@ export default function ReportView({ initialOrderId }: Props) {
           .order('date', { ascending: false });
         data = fallback.data;
       }
-      if (data) setOrders(data as DailyOrder[]);
+      if (data) {
+        setOrders(data as DailyOrder[]);
+        writeSnapshot('reports:orders', data as DailyOrder[]);
+      }
       setLoadingOrders(false);
     };
     loadOrders();
