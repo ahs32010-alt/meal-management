@@ -1188,7 +1188,10 @@ async function findOrder(
   mealType: MealType,
   entityType?: EntityType,
 ): Promise<OrderRow | undefined> {
-  const { data } = await supabase.from('daily_orders').select('*').eq('date', date).eq('meal_type', mealType);
+  // بلا عمود `snapshot` — ٨٢ كيلوبايت للأمر الواحد ولا حاجة له هنا
+  const { data } = await supabase.from('daily_orders')
+    .select('id, date, meal_type, created_at, week_number, snapshot_at, day_of_week, entity_type')
+    .eq('date', date).eq('meal_type', mealType);
   const rows = (data as unknown as OrderRow[]) ?? [];
   return entityType ? rows.find((r) => entityOf(r.entity_type) === entityType) : rows[0];
 }

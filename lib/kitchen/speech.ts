@@ -15,15 +15,33 @@
  */
 
 /**
- * سرعات النطق.
+ * سرعات النطق — تسري على **المصدرين**.
  *
- * الافتراضي **عادي** لا بطيء: التجربة الأولى كانت على 0.82 فطلعت مملّة —
- * والمشغّل يسمع ٢٠–٣٧ بنداً، فربع ثانية زائدة في كل بند تعني دقيقة ضائعة.
- * ومع ذلك نترك الخيار: جودة الأصوات تختلف بين الأجهزة، وبعضها يحتاج إبطاءً.
+ * صوت الجهاز يقبل السرعة مباشرة (`utterance.rate`). والصوت المولَّد ملفٌ
+ * سرعته ثابتة وقت التوليد، لكن `audio.playbackRate` يسرّعه عند التشغيل بلا
+ * إعادة توليد ولا استهلاك حصة — فالمقاطع المخزّنة تبقى كما هي.
+ *
+ * والمدى يصل إلى 1.8: الأصوات المولَّدة تخرج متأنّية، والمشغّل يسمع ٢٠–٣٧
+ * بنداً فكل جزء ثانية زائد يتضاعف.
  */
-export const SPEECH_RATES = { slow: 0.85, normal: 1, fast: 1.2 } as const;
-export type SpeechRateKey = keyof typeof SPEECH_RATES;
-export const DEFAULT_RATE_KEY: SpeechRateKey = 'normal';
+export const SPEECH_RATE_PRESETS = [0.9, 1, 1.2, 1.4, 1.6, 1.8] as const;
+export const DEFAULT_RATE = 1;
+export const MIN_RATE = SPEECH_RATE_PRESETS[0];
+export const MAX_RATE = SPEECH_RATE_PRESETS[SPEECH_RATE_PRESETS.length - 1];
+
+/**
+ * يقصّ أي سرعة داخل المدى المسموح — قيمة خارجه يرفضها المتصفح صامتاً.
+ *
+ * والغياب يُردّ إلى الافتراضي لا إلى الحدّ الأدنى: `Number(null)` يساوي صفراً
+ * وهو رقم صالح، فكانت القيمة الغائبة تُقصّ إلى **أبطأ** سرعة. النتيجة صوت
+ * بطيء بلا سبب ظاهر — وهو عَرَضٌ يصعب على المستخدم ربطه بسببه.
+ */
+export function clampRate(value: unknown): number {
+  if (value === null || value === undefined || value === '') return DEFAULT_RATE;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_RATE;
+  return Math.min(Math.max(n, MIN_RATE), MAX_RATE);
+}
 
 import { numberToSaudiWords } from './numbers';
 
@@ -137,7 +155,7 @@ export function speak(text: string, options: SpeakOptions = {}): void {
   window.speechSynthesis.cancel();
 
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = options.rate ?? SPEECH_RATES[DEFAULT_RATE_KEY];
+  utterance.rate = clampRate(options.rate ?? DEFAULT_RATE);
   utterance.lang = options.voice?.lang ?? 'ar-SA';
   if (options.voice) utterance.voice = options.voice;
   if (options.onEnd) utterance.onend = () => options.onEnd?.();

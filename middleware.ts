@@ -1,5 +1,6 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+import { cachedByToken } from '@/lib/auth-cache';
 
 function hasSupabaseAuthCookie(request: NextRequest): boolean {
   return request.cookies
@@ -42,9 +43,21 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  /**
+   * `getUser()` يتحقّق من الرمز عبر الشبكة (٣٣٥–٤٨٠ms في هذا المشروع)، وهذا
+   * الوسيط يعمل في **كل تنقّل** — فكان نصف ثانية يضيع قبل رسم أي صفحة.
+   *
+   * `getSession()` يقرأ الكوكيز محلياً بلا شبكة، فنأخذ منه الرمز ونستخدمه
+   * مفتاحاً لذاكرة قصيرة: نفس الرمز لا يُتحقَّق منه أكثر من مرّة كل ١٥ ثانية.
+   * التحقّق نفسه لم يتغيّر ولم يضعف — الرمز المزوّر يُرفض في أول نداء كما كان،
+   * والبيانات محميّة بـRLS في كل طلب على أي حال.
+   */
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+
+  const user = token
+    ? await cachedByToken(token, async () => (await supabase.auth.getUser()).data.user)
+    : (await supabase.auth.getUser()).data.user;
 
   if (!user && !isLoginPage) {
     const url = request.nextUrl.clone();

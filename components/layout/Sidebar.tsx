@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { useCurrentUser, clearCurrentUserCache } from '@/lib/use-current-user';
+import { clearSnapshots } from '@/lib/view-snapshot';
 import { purgeDataCache } from '@/lib/offline/data-cache';
 import { can, type PageKey } from '@/lib/permissions';
 import ThemeToggle from '@/components/layout/ThemeToggle';
@@ -191,6 +192,9 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
     try { await supabase.removeAllChannels(); } catch {}
     try { await supabase.auth.signOut(); } catch {}
     clearCurrentUserCache();
+    // لقطات العرض في الذاكرة تحمل أسماء مستفيدين — والتابلت مشترك، فالخروج
+    // يمسحها مع مخزون البيانات لا يتركها للمستخدم التالي.
+    clearSnapshots();
     // مخزون العمل بلا إنترنت يحوي أسماء المستفيدين وبياناتهم، وتابلت المطبخ
     // مشترك — فالخروج يمسحه. قشرة التطبيق (الحِزم والخطوط) تبقى: مسحها يعطّل
     // الفتح بلا نت بلا أي فائدة أمنية.

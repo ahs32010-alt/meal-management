@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
+import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
@@ -321,7 +322,10 @@ export default function MealList() {
   }, []);
 
   const fetchMeals = useCallback(async () => {
-    setLoading(true);
+    // آخر لقطة تُرسم فوراً، والطلب يستبدلها بمجرّد وصوله — راجع lib/view-snapshot.ts
+    const snapKey = `meals:${entityType}`;
+    const snap = readSnapshot<Meal[]>(snapKey);
+    if (snap) { setMeals(snap); setLoading(false); } else { setLoading(true); }
     try {
       // نحاول الفلترة بـentity_type أولاً، ولو العمود ما موجود (الـmigration ما اتشغّل)
       // نرجع لجميع الصفوف (و للمرافقين نظهر تنبيه).
@@ -350,7 +354,11 @@ export default function MealList() {
         }
       }
       if (res.error) throw res.error;
-      if (res.data) setMeals(res.data as unknown as Meal[]);
+      if (res.data) {
+        const fresh = res.data as unknown as Meal[];
+        setMeals(fresh);
+        writeSnapshot(snapKey, fresh);
+      }
     } catch (err) {
       console.error('Fetch meals error:', err);
     } finally {

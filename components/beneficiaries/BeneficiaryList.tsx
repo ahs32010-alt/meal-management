@@ -5,6 +5,7 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import {
   BENEFICIARY_HEADERS,
   COL_ACTIVE,
@@ -124,7 +125,17 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   const entityPlural   = ENTITY_TYPE_LABELS_PLURAL[entityType];
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
+    // ارسم آخر لقطة فوراً بدل شاشة فاضية — الطلب ينطلق تحت ويستبدلها بمجرّد
+    // وصوله، فالمعروض يبقى طازجاً والانتظار وحده هو الذي اختفى.
+    const snapKey = `bens:${entityType}`;
+    const snap = readSnapshot<{ bens: Beneficiary[]; meals: Meal[] }>(snapKey);
+    if (snap) {
+      setBeneficiaries(snap.bens);
+      setMeals(snap.meals);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
 
     try {
       // Try with the category column on fixed_meals first; if migration not run,
@@ -166,39 +177,40 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         });
       };
 
-      let bensResult = await fetchBens(true, true, true);
-      // عمود is_alternative غير موجود (الترقية ما اتشغّلت) → نسقطه وحده
-      if (bensResult.error && /is_alternative/i.test(bensResult.error.message)) {
-        withFixedAlt = false;
-        bensResult = await fetchBens(true, true, true);
-      }
-      // أعمدة خيارات الستيكر (no_fish...) غير موجودة → نعيد بدونها
-      let withFlags = true;
-      if (bensResult.error && /no_fish|no_pasta_sandwich|low_carb|is_active/i.test(bensResult.error.message)) {
-        withFlags = false;
-        bensResult = await fetchBens(true, true, false);
-      }
-      // entity_type column missing → migration not yet run.
-      if (bensResult.error && /entity_type|column/i.test(bensResult.error.message)) {
-        // Companions view requires the migration. Show an empty state with hint.
-        if (entityType === 'companion') {
-          alert(
-            'صفحة المرافقين تحتاج تشغيل ملف الترقية:\n' +
-            'supabase/companions-migration.sql\n\n' +
-            'شغّله مرة وحدة في Supabase SQL Editor ثم حدّث الصفحة.'
-          );
-          setBeneficiaries([]);
-          setLoading(false);
-          return;
+      // سلسلة إسقاط الأعمدة للمستفيدين — تُغلَّف في دالة حتى تنطلق **بالتوازي**
+      // مع قراءة الأصناف. القراءتان مستقلّتان تماماً، وكانتا متسلسلتين فتدفع
+      // الصفحة رحلة شبكة كاملة (~٤٥٠ms) بلا سبب.
+      const loadBens = async (): Promise<{
+        result: Awaited<ReturnType<typeof fetchBens>>;
+        withFlags: boolean;
+        companionsNeedMigration?: boolean;
+      }> => {
+        let res = await fetchBens(true, true, true);
+        // عمود is_alternative غير موجود (الترقية ما اتشغّلت) → نسقطه وحده
+        if (res.error && /is_alternative/i.test(res.error.message)) {
+          withFixedAlt = false;
+          res = await fetchBens(true, true, true);
         }
-        bensResult = await fetchBens(true, false, withFlags);
-      }
-      if (bensResult.error && /category|column/i.test(bensResult.error.message)) {
-        bensResult = await fetchBens(false, true, withFlags);
-        if (bensResult.error && /entity_type|column/i.test(bensResult.error.message)) {
-          bensResult = await fetchBens(false, false, withFlags);
+        // أعمدة خيارات الستيكر (no_fish...) غير موجودة → نعيد بدونها
+        let withFlags = true;
+        if (res.error && /no_fish|no_pasta_sandwich|low_carb|is_active/i.test(res.error.message)) {
+          withFlags = false;
+          res = await fetchBens(true, true, false);
         }
-      }
+        // entity_type column missing → migration not yet run.
+        if (res.error && /entity_type|column/i.test(res.error.message)) {
+          // Companions view requires the migration. Show an empty state with hint.
+          if (entityType === 'companion') return { result: res, withFlags, companionsNeedMigration: true };
+          res = await fetchBens(true, false, withFlags);
+        }
+        if (res.error && /category|column/i.test(res.error.message)) {
+          res = await fetchBens(false, true, withFlags);
+          if (res.error && /entity_type|column/i.test(res.error.message)) {
+            res = await fetchBens(false, false, withFlags);
+          }
+        }
+        return { result: res, withFlags };
+      };
 
       // الأصناف المعروضة في معالج التخصيصات لازم تكون من نفس فئة المستفيد،
       // ونجلب category كذلك عشان BeneficiaryModal يقرأ الفئة من الصنف نفسه
@@ -208,16 +220,34 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         const q = supabase.from('meals').select(cols).order('type').order('is_snack').order('name');
         return withEntity ? q.eq('entity_type', entityType) : q;
       };
-      let mealsResult = await fetchMeals(true, true);
-      if (mealsResult.error && /category|column/i.test(mealsResult.error.message)) {
-        mealsResult = await fetchMeals(true, false);
-      }
-      if (mealsResult.error && /entity_type|column/i.test(mealsResult.error.message)) {
-        mealsResult = await fetchMeals(false, true);
-        if (mealsResult.error && /category|column/i.test(mealsResult.error.message)) {
-          mealsResult = await fetchMeals(false, false);
+      const loadMeals = async () => {
+        let res = await fetchMeals(true, true);
+        if (res.error && /category|column/i.test(res.error.message)) {
+          res = await fetchMeals(true, false);
         }
+        if (res.error && /entity_type|column/i.test(res.error.message)) {
+          res = await fetchMeals(false, true);
+          if (res.error && /category|column/i.test(res.error.message)) {
+            res = await fetchMeals(false, false);
+          }
+        }
+        return res;
+      };
+
+      // القراءتان معاً — لا واحدة تنتظر الأخرى
+      const [bensOut, mealsResult] = await Promise.all([loadBens(), loadMeals()]);
+
+      if (bensOut.companionsNeedMigration) {
+        alert(
+          'صفحة المرافقين تحتاج تشغيل ملف الترقية:\n' +
+          'supabase/companions-migration.sql\n\n' +
+          'شغّله مرة وحدة في Supabase SQL Editor ثم حدّث الصفحة.'
+        );
+        setBeneficiaries([]);
+        setLoading(false);
+        return;
       }
+      const bensResult = bensOut.result;
 
       // كل الأصناف (الفئتين) لبناء ملف Excel — قراءة خفيفة على دفعات
       void (async () => {
@@ -227,13 +257,11 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       })();
 
       // ✅ FIX 1: لازم نحفظ المستفيدين فعلياً
-      if (bensResult.data) {
-        setBeneficiaries((bensResult.data ?? []) as unknown as Beneficiary[]);
-      }
-
-      if (mealsResult.data) {
-        setMeals(mealsResult.data as unknown as Meal[]);
-      }
+      const freshBens = bensResult.data ? (bensResult.data as unknown as Beneficiary[]) : null;
+      const freshMeals = mealsResult.data ? (mealsResult.data as unknown as Meal[]) : null;
+      if (freshBens) setBeneficiaries(freshBens);
+      if (freshMeals) setMeals(freshMeals);
+      if (freshBens && freshMeals) writeSnapshot(snapKey, { bens: freshBens, meals: freshMeals });
 
     } catch (err) {
       console.error('Fetch error:', err);

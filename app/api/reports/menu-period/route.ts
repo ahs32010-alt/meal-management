@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase-server';
+import { getCachedUser } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
 import { buildMenuPeriodReport } from '@/lib/menu-period-report';
@@ -9,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request) {
   const supabase = createClient();
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getCachedUser(supabase);
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const limit = rateLimit({

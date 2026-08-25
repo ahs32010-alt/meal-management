@@ -86,24 +86,55 @@ export async function buildOrderReport(
   };
 
   // نحاول كل الأعمدة، ثم نسقط واحدة بواحدة عند ظهور أخطاء العمود/الترقية
-  let bensRes = await fetchBens(true, true, true);
-  if (bensRes.error && /is_alternative/i.test(bensRes.error.message)) {
-    withFixedAlt = false;
-    bensRes = await fetchBens(true, true, true);
-  }
-  if (bensRes.error && /category|column/i.test(bensRes.error.message)) {
-    // إما fixed_meals.category أو meals.category — جرّب الإسقاط بالترتيب
-    bensRes = await fetchBens(false, true, true);
-    if (bensRes.error && /category|column/i.test(bensRes.error.message)) {
-      bensRes = await fetchBens(true, true, false);
-      if (bensRes.error && /category|column/i.test(bensRes.error.message)) {
-        bensRes = await fetchBens(false, true, false);
+  const loadBens = async () => {
+    let res = await fetchBens(true, true, true);
+    if (res.error && /is_alternative/i.test(res.error.message)) {
+      withFixedAlt = false;
+      res = await fetchBens(true, true, true);
+    }
+    if (res.error && /category|column/i.test(res.error.message)) {
+      // إما fixed_meals.category أو meals.category — جرّب الإسقاط بالترتيب
+      res = await fetchBens(false, true, true);
+      if (res.error && /category|column/i.test(res.error.message)) {
+        res = await fetchBens(true, true, false);
+        if (res.error && /category|column/i.test(res.error.message)) {
+          res = await fetchBens(false, true, false);
+        }
       }
     }
-  }
-  if (bensRes.error && /entity_type|column/i.test(bensRes.error.message)) {
-    bensRes = await fetchBens(false, false, false);
-  }
+    if (res.error && /entity_type|column/i.test(res.error.message)) {
+      res = await fetchBens(false, false, false);
+    }
+    return res;
+  };
+
+  /**
+   * قرارات الخانة (beneficiary_menu_overrides) لهذه الخانة وحدها — تبديل أو
+   * حذف أو إضافة يخص (أسبوع + يوم + وجبة) هذا الأمر.
+   *
+   * ⚠️ ضمانتان:
+   *  ١) الأمر الذي لا يحمل `week_number` (أمر قديم) لا يُقرأ له أي قرار — يُحسب
+   *     بالمنطق القديم حرفياً.
+   *  ٢) لو الجدول غير موجود (الترقية ما اتشغّلت) نكمل بلا قرارات بصمت — نفس
+   *     نمط الإسقاط في بقية المشروع، فما ينكسر شيء قبل تشغيل الـmigration.
+   */
+  const orderWeekNumber = typeof order.week_number === 'number' ? order.week_number : null;
+  const loadOverrides = async () => {
+    if (orderWeekNumber === null) return null;
+    return fetchAllRows<PersonalMenuOverride & { beneficiary_id: string }>((from, to) =>
+      supabase
+        .from('beneficiary_menu_overrides')
+        .select('id, beneficiary_id, week_number, day_of_week, meal_type, action, base_meal_id, target_meal_id, quantity, is_alternative')
+        .eq('week_number', orderWeekNumber)
+        .eq('day_of_week', orderDayOfWeek)
+        .eq('meal_type', order.meal_type)
+        .order('id')
+        .range(from, to));
+  };
+
+  // القراءتان لا تعتمد إحداهما على الأخرى — كانتا متسلسلتين فتدفع كل نداء
+  // للتقرير رحلة شبكة زائدة (~٤٥٠ms). الآن معاً.
+  const [bensRes, ovRes] = await Promise.all([loadBens(), loadOverrides()]);
   // الـquery select ديناميكي فما يقدر TypeScript يستنتج النوع — نعرّف نوع
   // محلّي يطابق شكل الصف ونقصّ النتيجة إليه.
   type BenRow = {
@@ -119,34 +150,12 @@ export async function buildOrderReport(
 
   if (beneficiaries.length === 0) return null;
 
-  /**
-   * قرارات الخانة (beneficiary_menu_overrides) لهذه الخانة وحدها — تبديل أو
-   * حذف أو إضافة يخص (أسبوع + يوم + وجبة) هذا الأمر.
-   *
-   * ⚠️ ضمانتان:
-   *  ١) الأمر الذي لا يحمل `week_number` (أمر قديم) لا يُقرأ له أي قرار — يُحسب
-   *     بالمنطق القديم حرفياً.
-   *  ٢) لو الجدول غير موجود (الترقية ما اتشغّلت) نكمل بلا قرارات بصمت — نفس
-   *     نمط الإسقاط في بقية المشروع، فما ينكسر شيء قبل تشغيل الـmigration.
-   */
-  const orderWeekNumber = typeof order.week_number === 'number' ? order.week_number : null;
   const overridesByBen = new Map<string, PersonalMenuOverride[]>();
-  if (orderWeekNumber !== null) {
-    const ovRes = await fetchAllRows<PersonalMenuOverride & { beneficiary_id: string }>((from, to) =>
-      supabase
-        .from('beneficiary_menu_overrides')
-        .select('id, beneficiary_id, week_number, day_of_week, meal_type, action, base_meal_id, target_meal_id, quantity, is_alternative')
-        .eq('week_number', orderWeekNumber)
-        .eq('day_of_week', orderDayOfWeek)
-        .eq('meal_type', order.meal_type)
-        .order('id')
-        .range(from, to));
-    if (!ovRes.error && ovRes.data) {
-      for (const ov of ovRes.data) {
-        const list = overridesByBen.get(ov.beneficiary_id) ?? [];
-        list.push(ov);
-        overridesByBen.set(ov.beneficiary_id, list);
-      }
+  if (ovRes && !ovRes.error && ovRes.data) {
+    for (const ov of ovRes.data) {
+      const list = overridesByBen.get(ov.beneficiary_id) ?? [];
+      list.push(ov);
+      overridesByBen.set(ov.beneficiary_id, list);
     }
   }
 

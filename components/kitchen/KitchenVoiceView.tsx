@@ -22,15 +22,26 @@ import { MEAL_TYPE_LABELS, type MealType } from '@/lib/types';
 import {
   arabicVoices,
   buildUtteranceText,
-  DEFAULT_RATE_KEY,
+  clampRate,
+  DEFAULT_RATE,
   isSpeechSupported,
   loadVoices,
   pickArabicVoice,
   speak,
-  SPEECH_RATES,
+  SPEECH_RATE_PRESETS,
   stopSpeaking,
-  type SpeechRateKey,
 } from '@/lib/kitchen/speech';
+import { numberToSaudiWords } from '@/lib/kitchen/numbers';
+import VoiceSetupGuide from './VoiceSetupGuide';
+import {
+  ClipCache,
+  createSequencePlayer,
+  fetchTtsCatalog,
+  TtsError,
+  type SequencePlayer,
+  type TtsCatalog,
+  type TtsProviderOption,
+} from '@/lib/kitchen/tts-client';
 import {
   kitchenItemsFromReport,
   nextPendingIndex,
@@ -48,8 +59,18 @@ const VOICE_KEY = 'kha:kitchen-voice';
 const RATE_KEY = 'kha:kitchen-rate';
 const REPEAT_KEY = 'kha:kitchen-repeat';
 
-const RATE_LABEL: Record<SpeechRateKey, string> = { slow: 'بطيء', normal: 'عادي', fast: 'سريع' };
-const RATE_ORDER: SpeechRateKey[] = ['slow', 'normal', 'fast'];
+const TTS_VOICE_KEY = 'kha:kitchen-tts-voice';
+const TTS_PROVIDER_KEY = 'kha:kitchen-tts-provider';
+
+const SOURCE_KEY = 'kha:kitchen-source';
+
+/**
+ * مصدر الصوت.
+ *  • `device` — أصوات الجهاز: فوري ومجاني، لكن جودته من الجهاز لا منّا،
+ *    وجهاز بلا حزمة عربية ينطق العربي بمحرّك إنجليزي فيخرج لفظاً مكسوراً.
+ *  • `server` — مولَّد على الخادم ومخزَّن: جودة ثابتة لا تعتمد على الجهاز.
+ */
+type VoiceSource = 'device' | 'server';
 
 interface OrderMeta {
   date: string;
@@ -68,8 +89,22 @@ export default function KitchenVoiceView({ orderId }: { orderId: string }) {
   const [voice, setVoice] = useState<SpeechSynthesisVoice | null>(null);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [voiceChecked, setVoiceChecked] = useState(false);
-  const [rateKey, setRateKey] = useState<SpeechRateKey>(DEFAULT_RATE_KEY);
+  const [rate, setRate] = useState<number>(DEFAULT_RATE);
+  const [catalog, setCatalog] = useState<TtsCatalog | null>(null);
+  const [ttsProvider, setTtsProvider] = useState<string | null>(null);
+  const [ttsVoice, setTtsVoice] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [source, setSource] = useState<VoiceSource>('device');
+  const [sourceResolved, setSourceResolved] = useState(false);
+  const [prewarm, setPrewarm] = useState<{ done: number; total: number } | null>(null);
+  /** كم مقطعاً جاهز من كم — يوضّح للمستخدم أثر نفاد الحصة بدل رسالة مجرّدة. */
+  const [coverage, setCoverage] = useState<{ ready: number; total: number } | null>(null);
+  const [ttsError, setTtsError] = useState<string | null>(null);
+
+  const clipCacheRef = useRef<ClipCache | null>(null);
+  const playerRef = useRef<SequencePlayer | null>(null);
+  if (clipCacheRef.current === null) clipCacheRef.current = new ClipCache('');
+  if (playerRef.current === null) playerRef.current = createSequencePlayer(clipCacheRef.current);
 
   const autoRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -123,29 +158,98 @@ export default function KitchenVoiceView({ orderId }: { orderId: string }) {
         chosen = arabic.find((v) => v.name === savedName) ?? null;
       } catch { /* تخزين محجوب */ }
 
-      setVoice(chosen ?? pickArabicVoice(all));
+      const best = chosen ?? pickArabicVoice(all);
+      setVoice(best);
       setVoiceChecked(true);
+
+      // القرار الافتراضي يُبنى على الواقع لا على تفضيل نظري: جهاز بلا صوت
+      // عربي ينطق «كبدة» بمحرّك إنجليزي، فنحوّله للصوت المولَّد تلقائياً بدل
+      // أن يسمع المستخدم لفظاً مكسوراً ويظن النظام معطوباً.
+      let saved: string | null = null;
+      try { saved = localStorage.getItem(SOURCE_KEY); } catch { /* محجوب */ }
+      setSource(saved === 'device' || saved === 'server' ? saved : best ? 'device' : 'server');
+      setSourceResolved(true);
     });
 
     try {
-      const savedRate = localStorage.getItem(RATE_KEY) as SpeechRateKey | null;
-      if (savedRate && savedRate in SPEECH_RATES) setRateKey(savedRate);
+      const savedRate = localStorage.getItem(RATE_KEY);
+      if (savedRate !== null) setRate(clampRate(Number(savedRate)));
       setRepeatCount(localStorage.getItem(REPEAT_KEY) === '1');
+
     } catch { /* تخزين محجوب */ }
+
+    // الكتالوج من الخادم: أي مزوّد مهيّأ وما أصواته. بلا ذلك نعرض أصواتاً
+    // قد لا تكون متاحة أصلاً.
+    void fetchTtsCatalog().then((data) => {
+      if (!data) return;
+      setCatalog(data);
+
+      let savedProvider: string | null = null;
+      let savedVoice: string | null = null;
+      try {
+        savedProvider = localStorage.getItem(TTS_PROVIDER_KEY);
+        savedVoice = localStorage.getItem(TTS_VOICE_KEY);
+      } catch { /* تخزين محجوب */ }
+
+      const provider =
+        data.providers.find((p) => p.id === savedProvider) ??
+        data.providers.find((p) => p.id === data.active) ??
+        data.providers[0];
+      if (!provider) return;
+
+      const voice =
+        provider.voices.find((v) => v.id === savedVoice)?.id ?? provider.defaultVoice;
+
+      setTtsProvider(provider.id);
+      setTtsVoice(voice);
+      clipCacheRef.current?.setVoice(voice, provider.id);
+    });
   }, []);
+
+  // السرعة تسري على المشغّل فوراً — المقاطع المخزّنة لا تُعاد.
+  useEffect(() => {
+    playerRef.current?.setRate(rate);
+  }, [rate]);
 
   const chooseVoice = (name: string) => {
     const next = voices.find((v) => v.name === name) ?? null;
     setVoice(next);
     try { localStorage.setItem(VOICE_KEY, name); } catch { /* تخزين محجوب */ }
     // عيّنة فورية — الاختيار بالأذن لا بالاسم.
-    if (next) speak(buildUtteranceText('كبدة', 57, false), { voice: next, rate: SPEECH_RATES[rateKey] });
+    if (next) speak(buildUtteranceText('كبدة', 57, false), { voice: next, rate });
   };
 
-  const chooseRate = (key: SpeechRateKey) => {
-    setRateKey(key);
-    try { localStorage.setItem(RATE_KEY, key); } catch { /* تخزين محجوب */ }
-    speak(buildUtteranceText('كبدة', 57, false), { voice, rate: SPEECH_RATES[key] });
+  /** عيّنة بالمصدر الحالي — الحكم على السرعة والصوت بالأذن لا بالاسم. */
+  const preview = (nextRate = rate) => {
+    if (source === 'server') {
+      playerRef.current?.setRate(nextRate);
+      void playerRef.current?.play(['كبدة', 'سبعة وخمسين'], undefined, (err) => setTtsError(err.message));
+      return;
+    }
+    speak(buildUtteranceText('كبدة', 57, false), { voice, rate: nextRate });
+  };
+
+  const chooseRate = (value: number) => {
+    const next = clampRate(value);
+    setRate(next);
+    playerRef.current?.setRate(next);
+    try { localStorage.setItem(RATE_KEY, String(next)); } catch { /* تخزين محجوب */ }
+    preview(next);
+  };
+
+  const chooseTtsVoice = (id: string, providerId = ttsProvider ?? undefined) => {
+    setTtsVoice(id);
+    if (providerId) setTtsProvider(providerId);
+    // المقاطع المحمّلة بالقديم تُلغى، وإلا سمع المستخدم القديم بعد التبديل.
+    clipCacheRef.current?.setVoice(id, providerId);
+    setPrewarm(null);
+    setCoverage(null);
+    setTtsError(null);
+    try {
+      localStorage.setItem(TTS_VOICE_KEY, id);
+      if (providerId) localStorage.setItem(TTS_PROVIDER_KEY, providerId);
+    } catch { /* تخزين محجوب */ }
+    preview(rate);
   };
 
   const toggleRepeat = () => {
@@ -158,10 +262,15 @@ export default function KitchenVoiceView({ orderId }: { orderId: string }) {
 
   // إيقاف النطق عند مغادرة الشاشة — وإلا استمر الصوت بعد إغلاقها.
   useEffect(() => {
+    const cache = clipCacheRef.current;
+    const player = playerRef.current;
     return () => {
       autoRef.current = false;
       if (timerRef.current) clearTimeout(timerRef.current);
       stopSpeaking();
+      player?.stop();
+      // تابلت المطبخ يبقى مفتوحاً طول اليوم — object URLs غير المحرَّرة تتراكم.
+      cache?.release();
     };
   }, []);
 
@@ -191,28 +300,120 @@ export default function KitchenVoiceView({ orderId }: { orderId: string }) {
       if (!item) return;
 
       setActive(index);
-      speak(buildUtteranceText(item.name, item.count, repeatCount), {
-        voice,
-        rate: SPEECH_RATES[rateKey],
-        onEnd: () => {
-          setActive((current) => (current === index ? null : current));
-          if (!chain || !autoRef.current) return;
-          timerRef.current = setTimeout(() => {
-            if (!autoRef.current) return;
-            const nextIndex = nextPendingIndex(list, done, index);
-            if (nextIndex === null) {
-              autoRef.current = false;
-              setAutoPlay(false);
-              return;
-            }
-            play(nextIndex, true);
-          }, GAP_MS);
-        },
-        onError: () => setActive(null),
-      });
+      setTtsError(null);
+
+      const advance = () => {
+        setActive((current) => (current === index ? null : current));
+        if (!chain || !autoRef.current) return;
+        timerRef.current = setTimeout(() => {
+          if (!autoRef.current) return;
+          const nextIndex = nextPendingIndex(list, done, index);
+          if (nextIndex === null) {
+            autoRef.current = false;
+            setAutoPlay(false);
+            return;
+          }
+          play(nextIndex, true);
+        }, GAP_MS);
+      };
+
+      const speakOnDevice = () =>
+        speak(buildUtteranceText(item.name, item.count, repeatCount), {
+          voice,
+          rate,
+          onEnd: advance,
+          onError: () => setActive(null),
+        });
+
+      if (source === 'server') {
+        // مقطعان منفصلان: الاسم ثم العدد — راجع lib/kitchen/tts-client.ts.
+        const words = numberToSaudiWords(item.count);
+        const texts = repeatCount ? [item.name, words, words] : [item.name, words];
+        void playerRef.current?.play(texts, advance, (err) => {
+          setTtsError(err.message);
+          // الصوت المولَّد تعذّر — لكن السكوت أسوأ من صوت رديء. لو على الجهاز
+          // صوت عربي ننزل إليه ونكمل بدل أن تتعطّل الشاشة أمام المشغّل.
+          if (voice) {
+            setTtsError(`${err.message} — رجعنا لصوت الجهاز مؤقتاً.`);
+            speakOnDevice();
+            return;
+          }
+          setActive(null);
+          autoRef.current = false;
+          setAutoPlay(false);
+        });
+        return;
+      }
+
+      speakOnDevice();
     },
-    [items, voice, repeatCount, rateKey, done],
+    [items, voice, repeatCount, rate, done, source],
   );
+
+
+
+  /**
+   * تحميل مقاطع الأمر مسبقاً.
+   *
+   * بلا ذلك ينتظر المشغّل ثانيتين عند أول ضغطة على كل بند — وهو يضغط عشرات
+   * المرات. وبالتحميل تعمل الشاشة بلا إنترنت بعده، لأن الـservice worker
+   * يخزّن ردود `/api`.
+   */
+  const prewarmClips = useCallback(async () => {
+    const list = items ?? [];
+    const cache = clipCacheRef.current;
+    if (!cache || list.length === 0) return;
+
+    const texts = Array.from(
+      new Set(list.flatMap((i) => [i.name, numberToSaudiWords(i.count)])),
+    ).filter((t) => !cache.has(t));
+
+    if (texts.length === 0) {
+      setCoverage({ ready: list.length * 2, total: list.length * 2 });
+      return;
+    }
+    setPrewarm({ done: 0, total: texts.length });
+    setTtsError(null);
+
+    let ready = 0;
+    for (let i = 0; i < texts.length; i++) {
+      try {
+        await cache.get(texts[i]);
+        ready++;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'تعذّر تحميل بعض المقاطع';
+        setTtsError(message);
+        // نفاد الحصة يومي — المحاولة أربعين مرة بعده لا تغيّر شيئاً إلا أنها
+        // تبطئ الشاشة وتملأ السجل. نتوقّف ونُبقي ما جهّزناه.
+        if (err instanceof TtsError && err.quota) break;
+      }
+      setPrewarm({ done: i + 1, total: texts.length });
+    }
+
+    setPrewarm(null);
+    const allTexts = new Set(list.flatMap((i) => [i.name, numberToSaudiWords(i.count)]));
+    setCoverage({
+      ready: [...allTexts].filter((t) => cache.has(t)).length,
+      total: allTexts.size,
+    });
+    void ready;
+  }, [items]);
+
+  // نحمّل تلقائياً حين يكون المصدر هو الخادم والبنود جاهزة.
+  useEffect(() => {
+    if (!sourceResolved || source !== 'server' || !items?.length) return;
+    void prewarmClips();
+  }, [sourceResolved, source, items, prewarmClips]);
+
+  const chooseSource = (next: VoiceSource) => {
+    stopSpeaking();
+    playerRef.current?.stop();
+    autoRef.current = false;
+    setAutoPlay(false);
+    setActive(null);
+    setSource(next);
+    try { localStorage.setItem(SOURCE_KEY, next); } catch { /* محجوب */ }
+  };
 
   const toggleAutoPlay = () => {
     if (autoRef.current) {
@@ -220,6 +421,7 @@ export default function KitchenVoiceView({ orderId }: { orderId: string }) {
       setAutoPlay(false);
       if (timerRef.current) clearTimeout(timerRef.current);
       stopSpeaking();
+      playerRef.current?.stop();
       setActive(null);
       return;
     }
@@ -281,14 +483,52 @@ export default function KitchenVoiceView({ orderId }: { orderId: string }) {
           هذا المتصفح لا يدعم النطق. استخدم Chrome على أندرويد أو Safari على آيفون/آيباد.
         </div>
       )}
-      {voiceChecked && isSpeechSupported() && !voice && (
-        <div className="m-4 p-4 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-sm leading-relaxed">
-          ما فيه صوت عربي مثبَّت على هذا الجهاز — سينطق الأسماء بلكنة غير عربية.
-          <br />
-          <span className="text-amber-300/80">
-            أندرويد: الإعدادات ← اللغات والإدخال ← تحويل النص إلى كلام ← تنزيل العربية.
-            آيفون/آيباد: الإعدادات ← تسهيلات الاستخدام ← المحتوى المنطوق ← الأصوات ← العربية.
-          </span>
+      {voiceChecked && isSpeechSupported() && !voice && source === 'device' && (
+        <div className="m-4 space-y-3">
+          <div className="p-4 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-100 text-sm leading-relaxed">
+            <div className="font-bold mb-1">ما فيه صوت عربي على هذا الجهاز</div>
+            فينطق النص العربي بمحرّك إنجليزي، ويطلع الاسم بلفظ لاتيني مكسور — وهذا سبب الصوت السيّئ.
+          </div>
+          <VoiceSetupGuide onUseServer={() => chooseSource('server')} />
+        </div>
+      )}
+
+      {ttsError && (
+        <div className="m-4 p-4 rounded-xl bg-red-500/15 border border-red-500/40 text-red-100 text-sm leading-relaxed">
+          <div className="font-bold mb-1">{ttsError}</div>
+          {coverage && coverage.ready < coverage.total && (
+            <div className="text-red-300/90 text-xs mt-2">
+              جاهز {coverage.ready} من {coverage.total} مقطع. الجاهز يشتغل الآن، والباقي يحتاج
+              حصة الغد — أو حلّاً دائماً (اقرأ «مصدر الصوت» في ⚙️).
+            </div>
+          )}
+          {voice && (
+            <button
+              type="button"
+              onClick={() => chooseSource('device')}
+              className="mt-3 w-full h-12 rounded-xl bg-slate-700 font-bold active:bg-slate-600"
+            >
+              استخدم صوت الجهاز بدلاً منه
+            </button>
+          )}
+        </div>
+      )}
+
+      {prewarm && (
+        <div className="m-4 p-4 rounded-xl bg-slate-800 border border-slate-700 text-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-slate-300">جارٍ تجهيز الصوت…</span>
+            <span className="tabular-nums text-slate-400">{prewarm.done}/{prewarm.total}</span>
+          </div>
+          <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
+            <div
+              className="h-full bg-violet-500 transition-all"
+              style={{ width: prewarm.total ? `${(prewarm.done / prewarm.total) * 100}%` : '0%' }}
+            />
+          </div>
+          <p className="text-xs text-slate-500 mt-2">
+            مرة واحدة فقط — بعدها تشتغل فوراً وبلا إنترنت.
+          </p>
         </div>
       )}
 
@@ -315,6 +555,7 @@ export default function KitchenVoiceView({ orderId }: { orderId: string }) {
                     onClick={() => {
                       autoRef.current = false;
                       setAutoPlay(false);
+                      playerRef.current?.stop();
                       play(index, false);
                     }}
                     className="flex-1 flex items-center gap-3 p-4 text-start min-w-0 active:opacity-80"
@@ -449,25 +690,64 @@ export default function KitchenVoiceView({ orderId }: { orderId: string }) {
               </button>
             </div>
 
-            {/* السرعة */}
+            {/* مصدر الصوت — أهم خيار في اللوحة، فهو أولها */}
             <div className="mb-6">
-              <div className="text-sm font-semibold text-slate-400 mb-2">السرعة</div>
-              <div className="grid grid-cols-3 gap-2">
-                {RATE_ORDER.map((key) => (
+              <div className="text-sm font-semibold text-slate-400 mb-2">مصدر الصوت</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => chooseSource('device')}
+                  className={`p-4 rounded-xl border-2 text-start ${
+                    source === 'device' ? 'bg-emerald-600/20 border-emerald-500' : 'bg-slate-700/50 border-slate-600'
+                  }`}
+                >
+                  <span className="block font-bold">صوت الجهاز</span>
+                  <span className="block text-xs text-slate-400 mt-0.5">
+                    {voice ? 'فوري ومجاني' : 'غير متاح — لا صوت عربي'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => chooseSource('server')}
+                  className={`p-4 rounded-xl border-2 text-start ${
+                    source === 'server' ? 'bg-violet-600/25 border-violet-500' : 'bg-slate-700/50 border-slate-600'
+                  }`}
+                >
+                  <span className="block font-bold">صوت النظام</span>
+                  <span className="block text-xs text-slate-400 mt-0.5">جودة ثابتة، لا تعتمد على الجهاز</span>
+                </button>
+              </div>
+              {source === 'server' && (
+                <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+                  يُولَّد مرة واحدة لكل صنف ورقم ثم يُحفظ — فلا ينتظر بعدها ولا يحتاج إنترنت.
+                </p>
+              )}
+            </div>
+
+            {/* السرعة — تسري على المصدرين. كانت معطّلة مع الصوت المولَّد،
+                وهو خطأ: الملف سرعته ثابتة لكن `playbackRate` يسرّعه فوراً. */}
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-slate-400">السرعة</span>
+                <span className="text-sm font-bold tabular-nums text-slate-300">{rate}×</span>
+              </div>
+              <div className="grid grid-cols-6 gap-1.5">
+                {SPEECH_RATE_PRESETS.map((value) => (
                   <button
-                    key={key}
+                    key={value}
                     type="button"
-                    onClick={() => chooseRate(key)}
-                    className={`h-14 rounded-xl font-bold border-2 ${
-                      rateKey === key
+                    onClick={() => chooseRate(value)}
+                    className={`h-14 rounded-xl font-bold text-sm tabular-nums border-2 ${
+                      rate === value
                         ? 'bg-emerald-600 border-emerald-400'
                         : 'bg-slate-700 border-slate-600 text-slate-300'
                     }`}
                   >
-                    {RATE_LABEL[key]}
+                    {value}×
                   </button>
                 ))}
               </div>
+              <p className="text-xs text-slate-500 mt-2">كل ضغطة تسمعك عيّنة بالسرعة الجديدة.</p>
             </div>
 
             {/* تكرار العدد */}
@@ -489,7 +769,89 @@ export default function KitchenVoiceView({ orderId }: { orderId: string }) {
               </span>
             </button>
 
-            {/* الأصوات */}
+            {/* أصوات النظام — تُقرأ من الخادم لكل مزوّد مهيّأ. الجنس عند
+                Gemini مستنتَج من أسماء أسطورية، وعند Google معلَن في الواجهة —
+                وفي الحالتين الحكم للأذن: كل ضغطة تسمع عيّنة. */}
+            {source === 'server' && (
+              <div className="mb-6">
+                {!catalog && <p className="text-sm text-slate-400">جارٍ قراءة الأصوات المتاحة…</p>}
+
+                {catalog && catalog.providers.length === 0 && (
+                  <p className="text-sm text-amber-300 leading-relaxed">
+                    ما فيه مزوّد نطق مهيّأ على الخادم. راجع GOOGLE_TTS_CREDENTIALS أو GEMINI_API_KEY.
+                  </p>
+                )}
+
+                {catalog?.providers.map((p: TtsProviderOption) => (
+                  <div key={p.id} className="mb-5">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-semibold text-slate-400">{p.label}</span>
+                      {ttsProvider === p.id && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-violet-500/25 text-violet-300">
+                          المستخدَم
+                        </span>
+                      )}
+                    </div>
+
+                    {p.voices.length === 0 ? (
+                      <p className="text-xs text-slate-500">تعذّرت قراءة أصوات هذا المزوّد.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {p.voices.map((v) => {
+                          const selected = ttsProvider === p.id && ttsVoice === v.id;
+                          return (
+                            <button
+                              key={`${p.id}:${v.id}`}
+                              type="button"
+                              onClick={() => chooseTtsVoice(v.id, p.id)}
+                              className={`w-full flex items-center gap-3 p-3.5 rounded-xl border-2 text-start ${
+                                selected
+                                  ? 'bg-violet-600/25 border-violet-500'
+                                  : 'bg-slate-700/50 border-slate-600'
+                              }`}
+                            >
+                              <span
+                                className={`w-10 h-10 rounded-full grid place-items-center text-lg flex-shrink-0 ${
+                                  v.gender === 'male'
+                                    ? 'bg-sky-500/20'
+                                    : v.gender === 'female'
+                                      ? 'bg-pink-500/20'
+                                      : 'bg-slate-600/40'
+                                }`}
+                                aria-hidden="true"
+                              >
+                                {v.gender === 'male' ? '♂' : v.gender === 'female' ? '♀' : '•'}
+                              </span>
+                              <span className="flex-1 min-w-0">
+                                <span className="block font-semibold">{v.label}</span>
+                                <span className="block text-xs text-slate-400 truncate" dir="ltr">{v.id}</span>
+                              </span>
+                              {selected && (
+                                <svg className="w-6 h-6 text-violet-400 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={3} viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                <p className="text-xs text-slate-500 mt-1">
+                  اضغط أي صوت لتسمع «كبدة، سبعة وخمسين». تبديل الصوت يولّد مقاطعه من جديد مرة واحدة.
+                </p>
+              </div>
+            )}
+
+            {/* أصوات الجهاز — لا معنى لها حين يكون المصدر هو الخادم */}
+            <div className={source === 'server' ? 'hidden' : ''}>
+            {voices.length === 0 && (
+              <div className="mb-4">
+                <VoiceSetupGuide onUseServer={() => { chooseSource('server'); }} />
+              </div>
+            )}
             <div className="text-sm font-semibold text-slate-400 mb-2">
               الصوت {voices.length > 0 && <span className="text-slate-500">({voices.length} متاح)</span>}
             </div>
@@ -528,6 +890,7 @@ export default function KitchenVoiceView({ orderId }: { orderId: string }) {
               </div>
             )}
             <p className="text-xs text-slate-500 mt-3">اضغط أي صوت لتسمع عيّنة: «كبدة، سبعة وخمسين».</p>
+            </div>
           </div>
         </div>
       )}

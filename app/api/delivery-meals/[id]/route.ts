@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase-server';
+import { getCachedUser } from '@/lib/auth';
 import { NextResponse, type NextRequest } from 'next/server';
 import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
 import { uuidSchema, deliveryMealSchema, parseJson } from '@/lib/validation';
@@ -11,7 +12,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
   }
 
   const supabase = createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getCachedUser(supabase);
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const limit = rateLimit({
@@ -53,7 +54,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: { id: 
   }
 
   const supabase = createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getCachedUser(supabase);
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { error } = await supabase.from('delivery_meals').delete().eq('id', params.id);

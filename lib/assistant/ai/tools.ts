@@ -22,6 +22,14 @@ import { todayISO } from '@/lib/date-utils';
 import { MEAL_TYPE_LABELS, DAY_LABELS, CATEGORY_LABELS } from '@/lib/types';
 import { validateToolInput } from './schema';
 
+/**
+ * أعمدة أمر التشغيل بلا `snapshot`.
+ *
+ * اللقطة ٨٢ كيلوبايت للأمر الواحد — فـ`select('*')` على ١٥ أمراً كان ينقل
+ * ١.٢ ميجابايت ويحشرها في سياق النموذج بلا فائدة. من يحتاجها يقرأها وحدها.
+ */
+const ORDER_COLS = 'id, date, meal_type, created_at, week_number, snapshot_at, day_of_week, entity_type';
+
 /** حدّ أعلى للصفوف في أي أداة — سقف تكلفة قبل أن يكون سقف أداء. */
 const MAX_ROWS = 40;
 
@@ -380,7 +388,7 @@ export async function runTool(
     }
 
     case 'list_orders': {
-      let q = supabase.from('daily_orders').select('*');
+      let q = supabase.from('daily_orders').select(ORDER_COLS);
       const mt = str(args.meal_type);
       if (mt) q = q.eq('meal_type', mt);
       const from = str(args.from_date);
@@ -395,7 +403,7 @@ export async function runTool(
       const id = str(args.id);
       if (!id) return { kind: 'data', data: { error: 'المعرّف مفقود' } };
       const [orderRes, itemsRes] = await Promise.all([
-        supabase.from('daily_orders').select('*').eq('id', id).maybeSingle(),
+        supabase.from('daily_orders').select(ORDER_COLS).eq('id', id).maybeSingle(),
         supabase.from('order_items').select('*, meals(id, name, type)').eq('order_id', id),
       ]);
       if (!orderRes.data) return { kind: 'data', data: { error: 'ما لقيت أمراً بهذا المعرّف' } };

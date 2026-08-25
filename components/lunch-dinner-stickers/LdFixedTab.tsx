@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Beneficiary } from '@/lib/types';
 import StickerCard from './ld-sticker-card';
 import { fetchStickerBeneficiaries } from './ld-fetch';
+import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import { DietColorsPanel, HeaderControls, SizeFields, type LdSettings } from './ld-settings';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
@@ -52,11 +53,13 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
   );
 
   const loadBeneficiaries = useCallback(async () => {
-    setLoading(true);
+    // آخر لقطة تُرسم فوراً، والطلب يستبدلها بمجرّد وصوله
+    const snap = readSnapshot<Beneficiary[]>('ld:fixed');
+    if (snap) { setBeneficiaries(snap); setLoading(false); } else { setLoading(true); }
     setError('');
     const { data, error: err } = await fetchStickerBeneficiaries(true);
     if (err) { setError(err); setBeneficiaries([]); }
-    else setBeneficiaries(data);
+    else { setBeneficiaries(data); writeSnapshot('ld:fixed', data); }
     setLoading(false);
   }, []);
 
