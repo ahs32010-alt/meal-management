@@ -13,6 +13,18 @@ import type { ActivityAction, ActivityEntityType } from '@/lib/activity-log';
 /** مفتاح محجوز داخل details تُخزَّن فيه الصفحة — يُخفى من عرض التفاصيل العادي */
 export const PAGE_DETAIL_KEY = '__page';
 
+/**
+ * مفتاح محجوز يحمل قاموس الحقول المتغيّرة: { حقل: { before, after } }.
+ * هذا هو المصدر الرسمي لـ«ايش استبدل» — يُعرض كمقارنة قبل/بعد لكل حقل.
+ */
+export const CHANGES_DETAIL_KEY = '__changes';
+
+/**
+ * مفتاح محجوز يحمل قيم الحقول كما أُدخلت (إضافة) أو كما كانت (حذف):
+ * { حقل: قيمة } — يُعرض صفاً لكل حقل باسمه العربي.
+ */
+export const FIELDS_DETAIL_KEY = '__fields';
+
 // ── الصفحات ─────────────────────────────────────────────────────────────────
 
 export const PAGE_LABELS: Record<string, string> = {
@@ -73,6 +85,13 @@ export const OPERATION_LABELS: Record<string, string> = {
   menu_clear_week: 'مسح أسبوع كامل',
   menu_multiplier: 'تعديل مضاعِف الصنف',
   menu_extra_qty: 'تعديل الكمية الإضافية',
+  menu_position_repair: 'إصلاح ترتيب القائمة',
+  costs_xlsx_import: 'استيراد التكاليف من ملف Excel',
+  delivery_xlsx_import: 'استيراد أوامر تسليم من ملف Excel',
+  recipe_inline: 'إنشاء سريع من داخل الوصفة',
+  approval: 'تطبيق طلب موافقة',
+  assistant: 'المساعد الذكي',
+  full_db_dump: 'لقطة قاعدة بيانات كاملة',
 };
 
 const ACTION_VERBS: Record<ActivityAction, string> = {
@@ -201,10 +220,96 @@ export const DETAIL_LABELS: Record<string, string> = {
   warnings_count: 'عدد التنبيهات',
   week: 'الأسبوع',
   week_number: 'الأسبوع',
+
+  // ── أسماء حقول السجلات نفسها — تُستخدم في مقارنة قبل/بعد وفي لقطة القيم ──
+  name: 'الاسم',
+  english_name: 'الاسم بالإنجليزية',
+  diet_type: 'نوع الحمية',
+  notes: 'الملاحظات',
+  no_fish: 'بدون سمك',
+  no_pasta_sandwich: 'بدون معكرونة/ساندويتش',
+  low_carb: 'قليل الكربوهيدرات',
+  is_active: 'نشط',
+  is_alternative: 'صنف بديل',
+  quantity: 'الكمية',
+  qty: 'الكمية',
+  unit: 'وحدة الشراء',
+  unit_cost: 'سعر الوحدة',
+  unit_id: 'الوحدة',
+  selling_price: 'سعر البيع',
+  portion_cost: 'تكلفة الحصة',
+  multiplier: 'المضاعِف',
+  extra_quantity: 'الكمية الإضافية',
+  position: 'الترتيب',
+  meal: 'الصنف',
+  meal_id: 'الصنف',
+  meal_name: 'الصنف',
+  alternative_meal: 'الصنف البديل',
+  raw_material: 'المادة الأولية',
+  ingredients: 'عدد المكوّنات',
+  email: 'البريد الإلكتروني',
+  full_name: 'الاسم الكامل',
+  password: 'كلمة المرور',
+  permissions: 'الصلاحيات',
+  approval_required: 'إلزام الموافقة',
+  date: 'التاريخ',
+  order_number: 'رقم الأمر',
+  note: 'ملاحظة',
+  requested_by: 'صاحب الطلب',
+  factor: 'معامل التحويل',
+  equals: 'يساوي',
+  independent: 'وحدة مستقلة',
+  verified: 'تم التحقق',
+  verify_issues: 'مشاكل التحقق',
+  atomic: 'استعادة ذرّية',
+  repaired: 'صفوف مُصلَحة',
+  unchanged: 'بلا تغيير',
+  removed: 'المحذوف',
+  deleted: 'المحذوف',
+  weeks: 'الأسابيع',
+  mode: 'طريقة الاستيراد',
+
+  // ── فروقات القوائم المرتبطة (محظورات / ثابتة / قرارات منيو / مكوّنات) ──
+  added_exclusions: 'محظورات مُضافة',
+  removed_exclusions: 'محظورات مُزالة',
+  added_fixed_meals: 'أصناف ثابتة مُضافة',
+  removed_fixed_meals: 'أصناف ثابتة مُزالة',
+  added_menu_overrides: 'قرارات منيو مُضافة',
+  removed_menu_overrides: 'قرارات منيو مُزالة',
+  added_ingredients: 'مكوّنات مُضافة',
+  added_items: 'بنود مُضافة',
+  removed_items: 'بنود مُزالة',
+  added_menu_meals: 'أصناف مُضافة للمنيو',
+  removed_menu_meals: 'أصناف مسحوبة من المنيو',
+  items: 'البنود',
+  granted_permissions: 'صلاحيات مُنِحت',
+  revoked_permissions: 'صلاحيات سُحِبت',
+  approval_enabled: 'إجراءات صارت تلزمها موافقة',
+  approval_disabled: 'إجراءات لم تعد تلزمها موافقة',
+  row: 'رقم الصف',
+  section: 'القسم',
+  removed_ingredients: 'مكوّنات مُزالة',
+  exclusions: 'المحظورات',
+  fixed_meals: 'الأصناف الثابتة',
+  menu_overrides: 'قرارات المنيو',
+  menu_overrides_count: 'عدد قرارات المنيو',
 };
 
 /** قيم معروفة تُترجم بدل ما تظهر كما هي بالإنجليزي */
 const VALUE_LABELS: Record<string, string> = {
+  bulk_exclusion: 'استبعاد جماعي',
+  bulk_unexclude: 'إلغاء استبعاد جماعي',
+  bulk_fixed_meal: 'أصناف ثابتة جماعية',
+  bulk_unfixed: 'إلغاء أصناف ثابتة جماعي',
+  schedule: 'جدولة',
+  global: 'عام',
+  section: 'قسم',
+  slot: 'خانة',
+  replace: 'استبدال',
+  remove: 'إزالة',
+  add: 'إضافة',
+  beneficiaries: 'المستفيدون',
+  companions: 'المرافقون',
   beneficiary: 'مستفيد',
   companion: 'مرافق',
   hot: 'ساخن',
@@ -246,27 +351,58 @@ export function formatDetailValue(v: unknown): string {
 
 export interface DetailRow {
   label: string;
+  /** 'change' = مقارنة قبل/بعد، 'value' = قيمة مفردة */
+  kind: 'change' | 'value';
   /** القيمة المفردة — تكون null لو الصف مقارنة قبل/بعد */
   value: string | null;
   before: string | null;
   after: string | null;
+  /** لو القيمة قائمة، عناصرها مفصولة عشان تُعرض سطراً سطراً بدل سطر طويل */
+  items?: string[];
 }
 
 /**
  * المفاتيح اللي ما تنفع تظهر كتفصيل عادي:
  * - source: مستهلك أصلاً في "نوع العملية"
  * - __page: مستهلك في عمود الصفحة
+ * - __changes / __fields: تُفكَّك لصفوف مستقلة قبل هذي المرحلة
  */
-const HIDDEN_KEYS = new Set<string>(['source', PAGE_DETAIL_KEY]);
+const HIDDEN_KEYS = new Set<string>([
+  'source',
+  PAGE_DETAIL_KEY,
+  CHANGES_DETAIL_KEY,
+  FIELDS_DETAIL_KEY,
+]);
+
+const labelOf = (k: string) => DETAIL_LABELS[k] ?? k;
+
+/** صف قيمة مفردة — يفصل القوائم لعناصر عشان تُعرض كقائمة */
+function valueRow(key: string, v: unknown): DetailRow {
+  const items =
+    Array.isArray(v) && v.length > 0 && v.every(x => typeof x === 'string' || typeof x === 'number')
+      ? v.map(x => formatDetailValue(x))
+      : undefined;
+  return {
+    label: labelOf(key),
+    kind: 'value',
+    value: formatDetailValue(v),
+    before: null,
+    after: null,
+    ...(items ? { items } : {}),
+  };
+}
 
 /**
  * يحوّل details الخام إلى صفوف مقروءة، ويلمّ أزواج قبل/بعد مع بعض.
  *
- * نقاط الاستدعاء تستخدم ثلاث صيغ للمقارنة تراكمت مع الوقت:
+ * الصيغة المعتمدة اليوم:
+ *   __changes: { حقل: { before, after } }   → مقارنة كاملة لكل حقل تغيّر
+ *   __fields:  { حقل: قيمة }                → لقطة القيم عند الإضافة/الحذف
+ *
+ * وتبقى ثلاث صيغ قديمة مدعومة لأنها تراكمت في نقاط استدعاء كثيرة:
  *   previous / new                 → زوج واحد بدون اسم حقل
  *   previous_<field> / new_<field> → زوج لحقل محدد
  *   <field>_to                     → القيمة الجديدة فقط
- * نتعامل مع الثلاث بدل ما نطلب توحيدها في 41 موضع.
  */
 export function buildDetailRows(details: Record<string, unknown> | null): DetailRow[] {
   if (!details) return [];
@@ -274,7 +410,21 @@ export function buildDetailRows(details: Record<string, unknown> | null): Detail
   const rows: DetailRow[] = [];
   const consumed = new Set<string>();
 
-  const label = (k: string) => DETAIL_LABELS[k] ?? k;
+  // 0) الحقول المتغيّرة — أهم قسم، فيجي أول
+  const changes = details[CHANGES_DETAIL_KEY];
+  if (changes && typeof changes === 'object' && !Array.isArray(changes)) {
+    for (const [field, pair] of Object.entries(changes as Record<string, unknown>)) {
+      if (!pair || typeof pair !== 'object') continue;
+      const { before, after } = pair as { before?: unknown; after?: unknown };
+      rows.push({
+        label: labelOf(field),
+        kind: 'change',
+        value: null,
+        before: formatDetailValue(before),
+        after: formatDetailValue(after),
+      });
+    }
+  }
 
   // 1) الأزواج المسمّاة: previous_x / new_x
   for (const key of Object.keys(details)) {
@@ -285,7 +435,8 @@ export function buildDetailRows(details: Record<string, unknown> | null): Detail
     consumed.add(key);
     consumed.add(newKey);
     rows.push({
-      label: DETAIL_LABELS[newKey] ?? DETAIL_LABELS[field] ?? label(field),
+      label: DETAIL_LABELS[newKey] ?? DETAIL_LABELS[field] ?? labelOf(field),
+      kind: 'change',
       value: null,
       before: formatDetailValue(details[key]),
       after: formatDetailValue(details[newKey]),
@@ -298,17 +449,28 @@ export function buildDetailRows(details: Record<string, unknown> | null): Detail
     consumed.add('new');
     rows.push({
       label: 'القيمة',
+      kind: 'change',
       value: null,
       before: formatDetailValue(details.previous),
       after: formatDetailValue(details.new),
     });
   }
 
-  // 3) الباقي كصفوف مفردة
+  // 3) لقطة القيم — القيم كما أُدخلت (إضافة) أو كما كانت (حذف)
+  const fields = details[FIELDS_DETAIL_KEY];
+  if (fields && typeof fields === 'object' && !Array.isArray(fields)) {
+    for (const [key, v] of Object.entries(fields as Record<string, unknown>)) {
+      if (v === null || v === undefined || v === '') continue;
+      rows.push(valueRow(key, v));
+    }
+  }
+
+  // 4) الباقي كصفوف مفردة
   for (const [key, v] of Object.entries(details)) {
     if (consumed.has(key) || HIDDEN_KEYS.has(key)) continue;
     if (v === null || v === undefined || v === '') continue;
-    rows.push({ label: label(key), value: formatDetailValue(v), before: null, after: null });
+    if (Array.isArray(v) && v.length === 0) continue;
+    rows.push(valueRow(key, v));
   }
 
   return rows;

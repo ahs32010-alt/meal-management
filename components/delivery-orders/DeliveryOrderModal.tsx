@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { updateDetails, valueDetails, listDiffDetails } from '@/lib/activity-diff';
 import type { City, DailyOrder, DeliveryLocation, DeliveryMeal, DeliveryMealType, DeliveryOrder, MealType } from '@/lib/types';
 import { DELIVERY_MEAL_TYPE_LABELS, MEAL_TYPE_LABELS } from '@/lib/types';
 
@@ -415,7 +416,36 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
         entity_type: 'order',
         entity_id: j.id ?? editingOrder?.id ?? null,
         entity_name: `أمر تسليم ${j.order_number ?? editingOrder?.order_number ?? ''}`,
-        details: { items_count: items.length, meal_type: mealType, date },
+        details: (() => {
+          // البنود تُوصف «الاسم ×الكمية» فيظهر تغيير الكمية سطراً مُزالاً وآخر مُضافاً
+          const describeItem = (it: { display_name: string; quantity: number }) =>
+            `${it.display_name.trim()} ×${it.quantity}`;
+          const after = { date, meal_type: mealType, notes: notes.trim() || null };
+          if (!isEdit) {
+            return {
+              ...valueDetails(after),
+              items: items.map(describeItem),
+              items_count: items.length,
+            };
+          }
+          return updateDetails(
+            {
+              date: editingOrder?.date,
+              meal_type: editingOrder?.meal_type,
+              notes: editingOrder?.notes ?? null,
+            },
+            after,
+            ['date', 'meal_type', 'notes'],
+            {
+              ...listDiffDetails(
+                'items',
+                (editingOrder?.delivery_order_items ?? []).map(describeItem),
+                items.map(describeItem),
+              ),
+              items_count: items.length,
+            },
+          );
+        })(),
       });
 
       onSaved();

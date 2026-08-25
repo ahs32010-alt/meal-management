@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase-client';
 import { fetchInactiveBeneficiaryIds } from '@/lib/inactive-beneficiaries';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { logActivity } from '@/lib/activity-log';
+import { changeDetails } from '@/lib/activity-diff';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
 import { enqueueGenericCreate, enqueueGenericUpdate, enqueueGenericDelete } from '@/lib/pending-actions';
@@ -495,7 +496,15 @@ export default function MenuView() {
           entity_type: 'meal',
           entity_id: existing.id,
           entity_name: `قائمة الطعام — ${WEEK_TITLES[week]} ${MENU_DAYS.find(d => d.value === day)?.label}`,
-          details: { source: 'menu_clear' },
+          details: {
+            // الصنف المشال هو كل مضمون العملية — بدونه السجل يقول «مُسح شيء ما»
+            ...changeDetails(
+              { meal: mealsById.get(existing.meal_id)?.name ?? null },
+              { meal: null },
+              ['meal'],
+            ),
+            week, day, meal_type: mealType, source: 'menu_clear',
+          },
         });
       }
       await fetchData();
@@ -554,8 +563,20 @@ export default function MenuView() {
     void logActivity({
       action: existing ? 'update' : 'create',
       entity_type: 'meal',
+      entity_id: existing?.id ?? null,
       entity_name: `قائمة الطعام — ${WEEK_TITLES[week]} ${MENU_DAYS.find(d => d.value === day)?.label}`,
-      details: { week, day, meal_type: mealType, source: 'menu_edit' },
+      details: {
+        // التبديل يُسجَّل «الصنف القديم ← الجديد»، والتعبئة الأولى تُسجَّل صنفاً مُدخلاً
+        ...changeDetails(
+          { meal: existing ? (mealsById.get(existing.meal_id)?.name ?? null) : null },
+          { meal: mealsById.get(mealId)?.name ?? null },
+          ['meal'],
+        ),
+        week, day, meal_type: mealType,
+        row: rowIndex + 1,
+        section: isSnack ? 'سناك' : 'أساسي',
+        source: 'menu_edit',
+      },
     });
 
     await fetchData();
@@ -587,7 +608,11 @@ export default function MenuView() {
       entity_type: 'meal',
       entity_id: item.id,
       entity_name: `قائمة الطعام — ${WEEK_TITLES[item.week_number as WeekNumber]}`,
-      details: { multiplier_to: v, source: 'menu_multiplier' },
+      details: {
+        ...changeDetails({ multiplier: item.multiplier }, { multiplier: v }, ['multiplier']),
+        meal: item.meals?.name ?? null,
+        source: 'menu_multiplier',
+      },
     });
   };
 
@@ -608,19 +633,39 @@ export default function MenuView() {
       entity_type: 'meal',
       entity_id: item.id,
       entity_name: `قائمة الطعام — ${WEEK_TITLES[item.week_number as WeekNumber]}`,
-      details: { extra_quantity_to: v, source: 'menu_extra_qty' },
+      details: {
+        ...changeDetails(
+          { extra_quantity: item.extra_quantity ?? 0 },
+          { extra_quantity: v },
+          ['extra_quantity'],
+        ),
+        meal: item.meals?.name ?? null,
+        source: 'menu_extra_qty',
+      },
     });
   };
 
   const handleClearWeek = async () => {
     if (!confirm(`حذف كل أصناف ${WEEK_TITLES[activeWeek]} (${ENTITY_TYPE_LABELS_PLURAL[entityType]})؟`)) return;
     // ⚠️ مهم: المسح مقيّد بـentity_type عشان ما نمسح منيو الفئة الأخرى بالخطأ.
+    const clearedItems = allItems.filter(
+      i => i.week_number === activeWeek && (i.entity_type ?? 'beneficiary') === entityType
+    );
     await supabase.from('menu_items').delete().eq('week_number', activeWeek).eq('entity_type', entityType);
     void logActivity({
       action: 'delete',
       entity_type: 'meal',
       entity_name: `قائمة الطعام — ${WEEK_TITLES[activeWeek]} — ${ENTITY_TYPE_LABELS_PLURAL[entityType]} (مسح كامل)`,
-      details: { week: activeWeek, for_entity: entityType, source: 'menu_clear_week' },
+      details: {
+        week: activeWeek,
+        for_entity: entityType,
+        // عدد الأصناف المسحوبة يُحسب قبل إعادة القراءة — بعدها الشبكة فاضية
+        deleted: clearedItems.length,
+        removed_menu_meals: clearedItems
+          .map(i => mealsById.get(i.meal_id)?.name ?? 'صنف محذوف')
+          .sort((a, b) => a.localeCompare(b, 'ar')),
+        source: 'menu_clear_week',
+      },
     });
     await fetchData();
   };

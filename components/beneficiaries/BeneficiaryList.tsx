@@ -23,6 +23,7 @@ import {
   type SheetMeal,
 } from '@/lib/beneficiary-sheet';
 import { logActivity } from '@/lib/activity-log';
+import { valueDetails } from '@/lib/activity-diff';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
 import { enqueueDelete } from '@/lib/pending-actions';
@@ -301,7 +302,18 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
           entity_type: entityType,
           entity_id: id,
           entity_name: ben?.name ?? null,
-          details: ben ? { code: ben.code, villa: ben.villa } : null,
+          // لقطة كاملة للسجل قبل اختفائه — الحذف ما يقبل مراجعة لاحقة،
+          // فالسجل هو النسخة الوحيدة الباقية من بيانات المحذوف.
+          details: ben
+            ? {
+                ...valueDetails(ben as unknown as Record<string, unknown>, [
+                  'name', 'english_name', 'code', 'category', 'villa', 'diet_type',
+                  'notes', 'no_fish', 'no_pasta_sandwich', 'low_carb', 'is_active',
+                ]),
+                exclusions_count: ben.exclusions?.length ?? 0,
+                fixed_meals_count: ben.fixed_meals?.length ?? 0,
+              }
+            : null,
         });
         await fetchData();
         setDeleting(null);

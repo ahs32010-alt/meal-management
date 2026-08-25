@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { changeDetails, valueDetails } from '@/lib/activity-diff';
 import UnitPicker from './UnitPicker';
 import {
   familyLabel,
@@ -70,13 +71,12 @@ export default function RawMaterialModal({
         entity_type: 'raw_material',
         entity_id: material.id,
         entity_name: trimmed,
-        details: {
-          previous_name: material.name !== trimmed ? material.name : undefined,
-          previous_unit: unitChanged ? originalUnit?.name : undefined,
-          previous_cost: material.unit_cost !== parsedCost ? material.unit_cost : undefined,
-          unit: unit?.name,
-          unit_cost: parsedCost,
-        },
+        // الوحدة تُقارَن بالاسم لا بالمعرّف — «كيلو ← جرام» تُقرأ، والـUUID لا.
+        details: changeDetails(
+          { name: material.name, unit: originalUnit?.name ?? null, unit_cost: material.unit_cost },
+          { name: trimmed, unit: unit?.name ?? null, unit_cost: parsedCost },
+          ['name', 'unit', 'unit_cost'],
+        ),
       });
     } else {
       const { data, error: err } = await supabase.from('raw_materials').insert(payload).select('id').single();
@@ -90,7 +90,7 @@ export default function RawMaterialModal({
         entity_type: 'raw_material',
         entity_id: data?.id ?? null,
         entity_name: trimmed,
-        details: { unit: unit?.name, unit_cost: parsedCost },
+        details: valueDetails({ name: trimmed, unit: unit?.name, unit_cost: parsedCost }),
       });
     }
 

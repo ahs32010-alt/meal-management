@@ -175,6 +175,11 @@ export default function ActivityLogView() {
 
   const renderDetails = (r: ActivityRow) => {
     const detailRows = buildDetailRows(r.details);
+    // الحقول المتغيّرة تنفصل عن بقية التفاصيل: هي جواب سؤال «ايش استبدل»،
+    // وضياعها وسط صفوف المعلومات العامة هو أصل الشكوى من السجل القديم.
+    const changes = detailRows.filter(d => d.kind === 'change');
+    const values = detailRows.filter(d => d.kind === 'value');
+
     return (
       <div className="space-y-3">
         {/* الجملة الكاملة: مين سوّى إيش على إيش وفي أي صفحة */}
@@ -182,25 +187,56 @@ export default function ActivityLogView() {
           {describeOperation(r)}
         </p>
 
-        {detailRows.length > 0 && (
-          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
-            {detailRows.map(d => (
-              <div key={d.label} className="text-xs flex items-start gap-2">
-                <dt className="font-semibold text-slate-500 shrink-0">{d.label}:</dt>
-                <dd className="text-slate-700 break-all">
-                  {d.value !== null ? (
-                    d.value
-                  ) : (
-                    <span className="inline-flex items-center gap-1.5 flex-wrap">
-                      <span className="line-through text-slate-400">{d.before}</span>
-                      <span className="text-slate-400">←</span>
-                      <span className="font-semibold text-emerald-700">{d.after}</span>
-                    </span>
-                  )}
-                </dd>
-              </div>
-            ))}
-          </dl>
+        {changes.length > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50/50 overflow-hidden">
+            <div className="px-3 py-1.5 bg-amber-100/70 text-[11px] font-bold text-amber-800">
+              الحقول المعدّلة ({changes.length}) — القيمة السابقة ← القيمة الجديدة
+            </div>
+            <div className="divide-y divide-amber-100">
+              {changes.map((d, i) => (
+                <div key={`${d.label}-${i}`} className="px-3 py-2 flex items-start gap-3 flex-wrap">
+                  <span className="text-xs font-bold text-slate-600 min-w-[110px] shrink-0">{d.label}</span>
+                  <span className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5 line-through break-all">
+                    {d.before}
+                  </span>
+                  <span className="text-slate-400 text-xs">←</span>
+                  <span className="text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 break-all">
+                    {d.after}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {values.length > 0 && (
+          <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+            <div className="px-3 py-1.5 bg-slate-100 text-[11px] font-bold text-slate-600">
+              بيانات العملية ({values.length})
+            </div>
+            <dl className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+              {values.map((d, i) => (
+                <div key={`${d.label}-${i}`} className="text-xs flex items-start gap-2">
+                  <dt className="font-semibold text-slate-500 shrink-0">{d.label}:</dt>
+                  <dd className="text-slate-700 break-all">
+                    {/* القوائم تُعرض عنصراً عنصراً — سطر واحد طويل يخفي المحتوى */}
+                    {d.items ? (
+                      <ul className="space-y-0.5">
+                        {d.items.map((it, j) => (
+                          <li key={j} className="flex items-start gap-1">
+                            <span className="text-slate-300 shrink-0">•</span>
+                            <span>{it}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      d.value
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
         )}
 
         {r.entity_id && (
@@ -339,7 +375,9 @@ export default function ActivityLogView() {
                 const isOpen = expanded.has(r.id);
                 // ملاحظة: details تحتوي دائماً على مفتاح الصفحة المحجوز، فالفحص
                 // لازم يكون على الصفوف المعروضة فعلاً مش على عدد المفاتيح الخام.
-                const detailCount = buildDetailRows(r.details).length;
+                const rowDetails = buildDetailRows(r.details);
+                const detailCount = rowDetails.length;
+                const changeCount = rowDetails.filter(d => d.kind === 'change').length;
                 const opLabel = operationLabel(r, ACTION_LABELS_AR[r.action] ?? r.action);
                 const where = pageLabel(pageOf(r.details));
                 return (
@@ -385,9 +423,13 @@ export default function ActivityLogView() {
                           className="inline-flex items-center gap-1 p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
                           title={isOpen ? 'إخفاء التفاصيل' : 'عرض تفاصيل العملية'}
                         >
-                          {detailCount > 0 && (
+                          {/* عدد الحقول المعدّلة يسبق العدد الكلي — هو المؤشّر
+                              اللي يقول إن فيه استبدال فعلي داخل السجل */}
+                          {changeCount > 0 ? (
+                            <span className="text-[10px] font-bold text-amber-600">{changeCount} تغيير</span>
+                          ) : detailCount > 0 ? (
                             <span className="text-[10px] font-bold">{detailCount}</span>
-                          )}
+                          ) : null}
                           <svg className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                           </svg>

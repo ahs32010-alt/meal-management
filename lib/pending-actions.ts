@@ -6,7 +6,10 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AppUser } from './permissions';
-import type { EntityType } from './types';
+import type { EntityType, MealType } from './types';
+import { DAY_LABELS, MEAL_TYPE_LABELS } from './types';
+import { logActivity, type ActivityEntityType } from './activity-log';
+import { updateDetails, valueDetails, listDiffDetails } from './activity-diff';
 
 // نوع الكيان في طلبات الموافقة — أوسع من EntityType الأصلي عشان نغطي
 // المستفيدين والمرافقين والأصناف وبنود قائمة الطعام
@@ -262,6 +265,48 @@ function tableFor(entityType: PendingEntityType): string {
 }
 
 // قبول الطلب: ننفّذ العملية الفعلية ثم نضع الحالة approved
+// ── تسجيل الموافقات في سجل النشاط ───────────────────────────────────────────
+// الطلب الذي يمرّ بالموافقة كان يُطبَّق بصمت: التعديل يصير في القاعدة ولا يظهر
+// في «آخر التحديثات» إطلاقاً. النتيجة أن كل تعديلات المستخدمين المقيَّدين
+// بالموافقة كانت غائبة عن السجل — وهي بالضبط التعديلات التي تستحق المتابعة.
+
+/** حقول المستفيد التي تدخل مقارنة قبل/بعد — بلا الأعمدة التقنية */
+const APPROVAL_BENEFICIARY_FIELDS = [
+  'name', 'english_name', 'code', 'category', 'villa', 'diet_type', 'notes',
+  'no_fish', 'no_pasta_sandwich', 'low_carb', 'is_active',
+];
+
+/** أسماء الأصناف لمجموعة معرّفات — استعلام واحد بدل معرّفات صمّاء في السجل */
+async function mealNameMap(supabase: SupabaseClient, ids: (string | null | undefined)[]) {
+  const unique = Array.from(new Set(ids.filter((x): x is string => !!x)));
+  if (unique.length === 0) return new Map<string, string>();
+  const { data } = await supabase.from('meals').select('id, name').in('id', unique);
+  return new Map(((data ?? []) as { id: string; name: string }[]).map(m => [m.id, m.name]));
+}
+
+type ExclusionRow = { meal_id: string; alternative_meal_id?: string | null };
+type FixedRow = {
+  meal_id: string; meal_type: string; day_of_week: number;
+  quantity?: number; is_alternative?: boolean;
+};
+
+function exclusionLabels(rows: ExclusionRow[], name: (id?: string | null) => string) {
+  return rows.map(e => `${name(e.meal_id)}${e.alternative_meal_id ? ` (البديل: ${name(e.alternative_meal_id)})` : ''}`);
+}
+
+function fixedLabels(rows: FixedRow[], name: (id?: string | null) => string) {
+  return rows.map(f =>
+    `${name(f.meal_id)} · ${MEAL_TYPE_LABELS[f.meal_type as MealType] ?? f.meal_type}` +
+    ` · ${DAY_LABELS[f.day_of_week] ?? f.day_of_week} · كمية ${f.quantity ?? 1}` +
+    `${f.is_alternative ? ' · بديل' : ''}`
+  );
+}
+
+/** نوع الكيان في سجل النشاط — بنود المنيو تُسجَّل تحت «صنف» كما في شاشة المنيو */
+function activityEntityOf(t: PendingEntityType): ActivityEntityType {
+  return (t === 'menu_item' ? 'meal' : t) as ActivityEntityType;
+}
+
 export async function approveAction(
   supabase: SupabaseClient,
   admin: AppUser,
@@ -271,19 +316,39 @@ export async function approveAction(
     // مسار الأصناف وبنود المنيو — payload عادي على الجدول مباشرة
     if (pa.entity_type === 'meal' || pa.entity_type === 'menu_item') {
       const table = tableFor(pa.entity_type);
+      // اللقطة تُقرأ قبل الكتابة — بعدها ضاعت القيمة السابقة للأبد
+      const beforeRow = pa.entity_id
+        ? (await supabase.from(table).select('*').eq('id', pa.entity_id).maybeSingle()).data as Record<string, unknown> | null
+        : null;
+      let logDetails: Record<string, unknown> = {};
+
       if (pa.action === 'create') {
         if (!pa.payload) return { ok: false, error: 'payload مفقود' };
         const { error } = await supabase.from(table).insert(pa.payload);
         if (error) return { ok: false, error: error.message };
+        logDetails = valueDetails(pa.payload);
       } else if (pa.action === 'update') {
         if (!pa.entity_id || !pa.payload) return { ok: false, error: 'payload أو entity_id مفقود' };
         const { error } = await supabase.from(table).update(pa.payload).eq('id', pa.entity_id);
         if (error) return { ok: false, error: error.message };
+        // المقارنة محصورة بمفاتيح الـpayload: الطلب ما يمسّ غيرها
+        logDetails = updateDetails(beforeRow, pa.payload, Object.keys(pa.payload));
       } else if (pa.action === 'delete') {
         if (!pa.entity_id) return { ok: false, error: 'entity_id مفقود' };
         const { error } = await supabase.from(table).delete().eq('id', pa.entity_id);
         if (error) return { ok: false, error: error.message };
+        logDetails = beforeRow
+          ? valueDetails(beforeRow, Object.keys(beforeRow).filter(k => !['id', 'created_at', 'updated_at'].includes(k)))
+          : {};
       }
+
+      void logActivity({
+        action: pa.action,
+        entity_type: activityEntityOf(pa.entity_type),
+        entity_id: pa.entity_id,
+        entity_name: pa.entity_name,
+        details: { ...logDetails, requested_by: pa.user_name, source: 'approval' },
+      });
       // علم الطلب كـapproved
       const { error: upErr } = await supabase
         .from('pending_actions')
@@ -294,10 +359,17 @@ export async function approveAction(
     }
 
     // مسار المستفيدين/المرافقين (الموجود سابقاً)
+    let benLogDetails: Record<string, unknown> = {};
+
     if (pa.action === 'delete') {
       if (!pa.entity_id) return { ok: false, error: 'entity_id مفقود' };
+      const { data: beforeRow } = await supabase
+        .from('beneficiaries').select('*').eq('id', pa.entity_id).maybeSingle();
       const { error } = await supabase.from('beneficiaries').delete().eq('id', pa.entity_id);
       if (error) return { ok: false, error: error.message };
+      benLogDetails = beforeRow
+        ? valueDetails(beforeRow as Record<string, unknown>, APPROVAL_BENEFICIARY_FIELDS)
+        : {};
     } else if (pa.action === 'create') {
       const cp = pa.payload as unknown as CreatePayload | null;
       if (!cp?.beneficiary) return { ok: false, error: 'payload مفقود' };
@@ -323,10 +395,33 @@ export async function approveAction(
 
       const ovRes = await replaceMenuOverrides(supabase, newId, cp.menu_overrides);
       if (!ovRes.ok) return { ok: false, error: `تم إنشاء المستفيد لكن قرارات المنيو فشلت: ${ovRes.error}` };
+
+      const names = await mealNameMap(supabase, [
+        ...(cp.exclusions ?? []).flatMap(e => [e.meal_id, e.alternative_meal_id]),
+        ...(cp.fixed_meals ?? []).map(f => f.meal_id),
+      ]);
+      const nm = (id?: string | null) => (id ? (names.get(id) ?? 'صنف محذوف') : '—');
+      benLogDetails = {
+        ...valueDetails(cp.beneficiary, APPROVAL_BENEFICIARY_FIELDS),
+        ...(cp.exclusions?.length ? { exclusions: exclusionLabels(cp.exclusions, nm) } : {}),
+        ...(cp.fixed_meals?.length ? { fixed_meals: fixedLabels(cp.fixed_meals, nm) } : {}),
+        ...(cp.menu_overrides?.length ? { menu_overrides_count: cp.menu_overrides.length } : {}),
+      };
     } else if (pa.action === 'update') {
       const cp = pa.payload as unknown as CreatePayload | null;
       if (!pa.entity_id || !cp?.beneficiary) return { ok: false, error: 'payload أو entity_id مفقود' };
       const id = pa.entity_id;
+
+      // كل اللقطات تُقرأ قبل أي كتابة — الاستبدال يمسح الصفوف القديمة، فلو
+      // قرأناها بعده سجّلنا «ما تغيّر شيء» بينما التغيير حصل فعلاً.
+      const { data: beforeRow } = await supabase
+        .from('beneficiaries').select('*').eq('id', id).maybeSingle();
+      const { data: beforeExRows } = await supabase
+        .from('exclusions').select('meal_id, alternative_meal_id').eq('beneficiary_id', id);
+      const { data: beforeFmRows } = await supabase
+        .from('beneficiary_fixed_meals')
+        .select('meal_id, meal_type, day_of_week, quantity, is_alternative')
+        .eq('beneficiary_id', id);
 
       // تحديث البيانات الأساسية للمستفيد
       const { error: updErr } = await supabase.from('beneficiaries').update(cp.beneficiary).eq('id', id);
@@ -357,7 +452,43 @@ export async function approveAction(
       // استبدال قرارات المنيو
       const ovRes = await replaceMenuOverrides(supabase, id, cp.menu_overrides);
       if (!ovRes.ok) return { ok: false, error: `تحديث قرارات المنيو فشل: ${ovRes.error}` };
+
+      const beforeEx = (beforeExRows ?? []) as ExclusionRow[];
+      const beforeFm = (beforeFmRows ?? []) as FixedRow[];
+      const names = await mealNameMap(supabase, [
+        ...beforeEx.flatMap(e => [e.meal_id, e.alternative_meal_id]),
+        ...beforeFm.map(f => f.meal_id),
+        ...(cp.exclusions ?? []).flatMap(e => [e.meal_id, e.alternative_meal_id]),
+        ...(cp.fixed_meals ?? []).map(f => f.meal_id),
+      ]);
+      const nm = (id2?: string | null) => (id2 ? (names.get(id2) ?? 'صنف محذوف') : '—');
+
+      benLogDetails = updateDetails(
+        beforeRow as Record<string, unknown> | null,
+        cp.beneficiary,
+        APPROVAL_BENEFICIARY_FIELDS,
+        {
+          ...listDiffDetails(
+            'exclusions',
+            exclusionLabels(beforeEx, nm),
+            exclusionLabels(cp.exclusions ?? [], nm),
+          ),
+          ...listDiffDetails(
+            'fixed_meals',
+            fixedLabels(beforeFm, nm),
+            fixedLabels(cp.fixed_meals ?? [], nm),
+          ),
+        },
+      );
     }
+
+    void logActivity({
+      action: pa.action,
+      entity_type: activityEntityOf(pa.entity_type),
+      entity_id: pa.entity_id,
+      entity_name: pa.entity_name,
+      details: { ...benLogDetails, requested_by: pa.user_name, source: 'approval' },
+    });
 
     const { error: upErr } = await supabase
       .from('pending_actions')

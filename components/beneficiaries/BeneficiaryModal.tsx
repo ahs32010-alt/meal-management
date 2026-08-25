@@ -4,11 +4,12 @@ import { useState, useRef, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { updateDetails, valueDetails, listDiffDetails } from '@/lib/activity-diff';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { needsApproval } from '@/lib/permissions';
 import { enqueueCreate, enqueueUpdate, type CreatePayload } from '@/lib/pending-actions';
 import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
-import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS } from '@/lib/types';
+import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS, CATEGORY_LABELS } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import DietTypeSelect from '@/components/shared/DietTypeSelect';
 import { WEEK_TITLES, type WeekNumber } from '@/lib/menu-utils';
@@ -126,6 +127,27 @@ function groupSlotOverrides(list: MenuOverrideEntry[], kinds: SlotGroup['action'
 
 const slotLabel = (ov: MenuOverrideEntry) =>
   `${WEEK_TITLES[ov.week_number as WeekNumber] ?? `أسبوع ${ov.week_number}`} · ${DAY_LABELS[ov.day_of_week]} · ${MEAL_TYPE_LABELS[ov.meal_type]}`;
+
+/**
+ * حقول المستفيد التي تدخل في مقارنة «قبل/بعد» بسجل النشاط. محصورة عمداً:
+ * صف القاعدة يحمل أعمدة تقنية (id, created_at, entity_type) ما تعني القارئ.
+ */
+const LOGGED_BENEFICIARY_FIELDS = [
+  'name', 'english_name', 'code', 'category', 'villa', 'diet_type', 'notes',
+  'no_fish', 'no_pasta_sandwich', 'low_carb', 'is_active',
+];
+
+const OVERRIDE_ACTION_LABELS: Record<MenuOverrideEntry['action'], string> = {
+  replace: 'استبدال',
+  remove: 'حذف',
+  add: 'إضافة',
+};
+
+const sortedDayLabels = (days: Iterable<number>) =>
+  Array.from(days)
+    .sort((a, b) => DAYS_ORDER.indexOf(a) - DAYS_ORDER.indexOf(b))
+    .map(d => DAY_LABELS[d])
+    .join('، ');
 
 /**
  * لوحة القرارات اليومية داخل تبويبي «المحظورات» و«الثابتة الأسبوعية».
@@ -473,6 +495,9 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
    * فتح النافذة وتُحفظ مع بقية البيانات بزر الحفظ — تماماً كالمحظورات والثابتة.
    */
   const [overrides, setOverrides] = useState<MenuOverrideEntry[]>([]);
+  // لقطة القرارات كما قُرئت من القاعدة — حالة `overrides` تتغيّر مع التحرير،
+  // فبدون هذي اللقطة ما نقدر نقول في السجل أي قرار أُضيف وأيّه أُزيل.
+  const originalOverridesRef = useRef<MenuOverrideEntry[]>([]);
   const [overridesReady, setOverridesReady] = useState(false);
   // الجدول غير موجود (ترقية القرارات ما اتشغّلت) → نمنع التحرير بدل ما نضيّع تعديلاً
   const [overridesTableMissing, setOverridesTableMissing] = useState(false);
@@ -494,7 +519,9 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
         setOverridesReady(true);
         return;
       }
-      setOverrides((data ?? []) as unknown as MenuOverrideEntry[]);
+      const loaded = (data ?? []) as unknown as MenuOverrideEntry[];
+      originalOverridesRef.current = loaded;
+      setOverrides(loaded);
       setOverridesReady(true);
     })();
     return () => { cancelled = true; };
@@ -832,20 +859,88 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
         }
       }
 
+      // ── تفاصيل السجل: الفرق الفعلي، مش مجرد القيم الجديدة ────────────────
+      // القوائم المرتبطة تُوصف نصياً بأسماء الأصناف — معرّفات UUID في السجل
+      // ما تفيد أحداً، والسطر المعدَّل يظهر مُزالاً ومُضافاً وهذا كافٍ للفهم.
+      const mealName = (id: string | null | undefined) =>
+        id ? (mealById(id)?.name ?? 'صنف محذوف') : '—';
+
+      const describeExclusion = (e: { meal_id: string; alternative_meal_id?: string | null }) =>
+        `${mealName(e.meal_id)}${e.alternative_meal_id ? ` (البديل: ${mealName(e.alternative_meal_id)})` : ''}`;
+
+      const describeFixed = (fe: FixedEntry) =>
+        `${mealName(fe.meal_id)} · ${MEAL_TYPE_LABELS[fe.meal_type]} · ${sortedDayLabels(fe.days) || 'بلا أيام'}` +
+        ` · كمية ${fe.quantity} · ${CATEGORY_LABELS[fe.category] ?? fe.category}` +
+        `${fe.is_alternative ? ' · بديل' : ''}` +
+        `${fe.suppress_if_meal_ids.length > 0 ? ` · يُلغى مع: ${fe.suppress_if_meal_ids.map(mealName).join('، ')}` : ''}`;
+
+      const describeOverride = (ov: MenuOverrideEntry) => {
+        const what =
+          ov.action === 'replace' ? `${mealName(ov.base_meal_id)} ← ${mealName(ov.target_meal_id)}`
+          : ov.action === 'remove' ? mealName(ov.base_meal_id)
+          : mealName(ov.target_meal_id);
+        const qty = ov.action === 'add' && (ov.quantity ?? 1) !== 1 ? ` ×${ov.quantity}` : '';
+        return `${slotLabel(ov)} · ${OVERRIDE_ACTION_LABELS[ov.action]}: ${what}${qty}` +
+          `${ov.is_alternative ? ' · بديل' : ''}`;
+      };
+
+      const newExclusions = exclusions.map(describeExclusion);
+      const newFixed = fixedEntries.map(describeFixed);
+      const newOverrides = ovRows.map(r => describeOverride(r as MenuOverrideEntry));
+
+      const previousSnapshot = beneficiary
+        ? {
+            name: beneficiary.name,
+            english_name: beneficiary.english_name,
+            code: beneficiary.code,
+            category: beneficiary.category,
+            villa: beneficiary.villa,
+            diet_type: beneficiary.diet_type,
+            notes: beneficiary.notes,
+            no_fish: beneficiary.no_fish,
+            no_pasta_sandwich: beneficiary.no_pasta_sandwich,
+            low_carb: beneficiary.low_carb,
+            is_active: beneficiary.is_active,
+          }
+        : null;
+
       void logActivity({
         action: isEdit ? 'update' : 'create',
         entity_type: entityType,
         entity_id: beneficiaryId,
         entity_name: payload.name as string,
-        details: {
-          code: payload.code,
-          category: payload.category,
-          villa: payload.villa,
-          entity_type: entityType,
-          exclusions_count: exclusions.length,
-          fixed_meals_count: fixedRows.length,
-          menu_overrides_count: ovRows.length,
-        },
+        details: isEdit
+          ? {
+              ...updateDetails(previousSnapshot, payload, LOGGED_BENEFICIARY_FIELDS, {
+                ...listDiffDetails(
+                  'exclusions',
+                  (beneficiary?.exclusions ?? []).map(describeExclusion),
+                  newExclusions,
+                ),
+                ...listDiffDetails(
+                  'fixed_meals',
+                  buildFixedEntries(beneficiary?.fixed_meals, meals).map(describeFixed),
+                  newFixed,
+                ),
+                // قرارات المنيو ما تُقارن إلا لو كتبناها فعلاً — وإلا سجّلنا
+                // «أُزيلت كل القرارات» بينما الجدول أصلاً ما اتمسّ.
+                ...(canWriteOverrides
+                  ? listDiffDetails(
+                      'menu_overrides',
+                      originalOverridesRef.current.map(describeOverride),
+                      newOverrides,
+                    )
+                  : {}),
+              }),
+              entity_type: entityType,
+            }
+          : {
+              ...valueDetails(payload, LOGGED_BENEFICIARY_FIELDS),
+              ...(newExclusions.length > 0 ? { exclusions: newExclusions } : {}),
+              ...(newFixed.length > 0 ? { fixed_meals: newFixed } : {}),
+              ...(newOverrides.length > 0 ? { menu_overrides: newOverrides } : {}),
+              entity_type: entityType,
+            },
       });
 
       onSaved();

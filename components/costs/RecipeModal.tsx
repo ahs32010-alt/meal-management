@@ -4,6 +4,8 @@ import { useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { listDiffDetails, diffFields } from '@/lib/activity-diff';
+import { CHANGES_DETAIL_KEY } from '@/lib/activity-describe';
 import UnitPicker from './UnitPicker';
 import {
   LINE_ISSUE_LABELS,
@@ -215,15 +217,32 @@ export default function RecipeModal({
       }
     }
 
+    // وصف السطر يحمل المادة والكمية والوحدة معاً، فتغيير الكمية وحده يظهر
+    // سطراً مُزالاً وآخر مُضافاً — أوضح من رقم مجرّد «٥ مكوّنات».
+    const describeLine = (materialId: string, qty: number, unitId: string) =>
+      `${materialsById[materialId]?.name ?? 'مادة محذوفة'} — ${formatQty(qty)} ${unitsById[unitId]?.name ?? '؟'}`;
+
+    const priceAfter = priceText.trim() === '' ? null : parsePositiveNumber(priceText.trim());
+    const priceChange = diffFields(
+      { selling_price: sellingPrice },
+      { selling_price: priceAfter },
+      ['selling_price'],
+    );
+
     void logActivity({
       action: existing.length === 0 ? 'create' : 'update',
       entity_type: 'recipe_item',
       entity_id: meal.id,
       entity_name: meal.name,
       details: {
+        ...(Object.keys(priceChange).length > 0 ? { [CHANGES_DETAIL_KEY]: priceChange } : {}),
+        ...listDiffDetails(
+          'ingredients',
+          existing.map(r => describeLine(r.raw_material_id, r.quantity, r.unit_id)),
+          rows.map(r => describeLine(r.raw_material_id, r.quantity, r.unit_id)),
+        ),
         ingredients: rows.length,
         portion_cost: round(costed.total, 4),
-        removed: toDelete.length || undefined,
       },
     });
 

@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import { logActivity } from '@/lib/activity-log';
+import { valueDetails } from '@/lib/activity-diff';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
 import { enqueueGenericDelete, enqueueGenericUpdate } from '@/lib/pending-actions';
@@ -392,7 +393,11 @@ export default function MealList() {
           entity_type: 'meal',
           entity_id: id,
           entity_name: meal?.name ?? null,
-          details: meal ? { type: meal.type, is_snack: meal.is_snack } : null,
+          details: meal
+            ? valueDetails(meal as unknown as Record<string, unknown>, [
+                'name', 'english_name', 'type', 'is_snack', 'category',
+              ])
+            : null,
         });
         await fetchMeals();
         setDeleting(null);

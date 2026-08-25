@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { changeDetails, valueDetails } from '@/lib/activity-diff';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { needsApproval } from '@/lib/permissions';
 import { enqueueGenericCreate, enqueueGenericUpdate } from '@/lib/pending-actions';
@@ -93,9 +94,17 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
         entity_id: meal.id,
         entity_name: payload.name as string,
         details: {
-          previous_name: meal.name !== payload.name ? meal.name : undefined,
-          type: payload.type,
-          is_snack: payload.is_snack,
+          ...changeDetails(
+            {
+              name: meal.name,
+              english_name: meal.english_name,
+              type: meal.type,
+              is_snack: meal.is_snack,
+              category: meal.category,
+            },
+            payload,
+            ['name', 'english_name', 'type', 'is_snack', 'category'],
+          ),
           for_entity: entityType,
         },
       });
@@ -112,7 +121,10 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
         entity_type: 'meal',
         entity_id: data?.id ?? null,
         entity_name: payload.name as string,
-        details: { type: payload.type, is_snack: payload.is_snack, for_entity: entityType },
+        details: {
+          ...valueDetails(payload, ['name', 'english_name', 'type', 'is_snack', 'category']),
+          for_entity: entityType,
+        },
       });
     }
 

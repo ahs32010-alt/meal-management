@@ -5,6 +5,38 @@ import { parseJson, updateUserSchema, uuidSchema } from '@/lib/validation';
 import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
 import { sanitizeOptional } from '@/lib/sanitize';
 import { logActivityServer } from '@/lib/activity-log-server';
+import { updateDetails, valueDetails } from '@/lib/activity-diff';
+import { ACTION_LABELS, PAGES, type PageKey, type PermissionAction } from '@/lib/permissions';
+
+const PAGE_LABEL_BY_KEY: Record<string, string> = Object.fromEntries(PAGES.map(p => [p.key, p.label]));
+
+/**
+ * فرق مصفوفة صلاحيات مُتداخلة (صفحة → إجراء → boolean) كسطور مقروءة:
+ * «المستفيدون: حذف». المقارنة على مستوى (صفحة، إجراء) لأن تخزين الكائن كاملاً
+ * في السجل يعطي كتلة JSON ما أحد يقراها.
+ */
+function diffPermissionMaps(
+  before: unknown,
+  after: unknown
+): { granted: string[]; revoked: string[] } {
+  const asMap = (v: unknown) => (v && typeof v === 'object' ? (v as Record<string, Record<string, unknown>>) : {});
+  const b = asMap(before);
+  const a = asMap(after);
+  const granted: string[] = [];
+  const revoked: string[] = [];
+  const pageKeys = new Set([...Object.keys(b), ...Object.keys(a)]);
+  for (const page of pageKeys) {
+    const actions = new Set([...Object.keys(b[page] ?? {}), ...Object.keys(a[page] ?? {})]);
+    for (const action of actions) {
+      const was = Boolean(b[page]?.[action]);
+      const now = Boolean(a[page]?.[action]);
+      if (was === now) continue;
+      const label = `${PAGE_LABEL_BY_KEY[page as PageKey] ?? page}: ${ACTION_LABELS[action as PermissionAction] ?? action}`;
+      (now ? granted : revoked).push(label);
+    }
+  }
+  return { granted, revoked };
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -57,6 +89,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (authErr) return NextResponse.json({ error: authErr.message }, { status: 400 });
   }
 
+  // اللقطة قبل الكتابة — بدونها ما نقدر نقول في السجل «من إيش إلى إيش»
+  const { data: beforeRow } = await admin.from('app_users').select('*').eq('id', params.id).maybeSingle();
+
   const profileUpdate: Record<string, unknown> = {};
   if (email !== undefined) profileUpdate.email = email;
   if (full_name !== undefined) profileUpdate.full_name = sanitizeOptional(full_name, 120);
@@ -71,20 +106,32 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const { data: row } = await admin.from('app_users').select('*').eq('id', params.id).maybeSingle();
 
+  const permsDiff = permissions !== undefined
+    ? diffPermissionMaps(beforeRow?.permissions, row?.permissions)
+    : { granted: [], revoked: [] };
+  const approvalDiff = approval_required !== undefined
+    ? diffPermissionMaps(beforeRow?.approval_required, row?.approval_required)
+    : { granted: [], revoked: [] };
+
   await logActivityServer({
     user_id: check.currentUserId,
     action: 'update',
     entity_type: 'user',
     entity_id: params.id,
     entity_name: row?.full_name ?? row?.email ?? null,
-    details: {
-      email_changed: email !== undefined,
-      password_changed: !!password,
-      full_name_changed: full_name !== undefined,
-      is_admin_changed: is_admin !== undefined,
-      permissions_changed: permissions !== undefined,
-      approval_required_changed: approval_required !== undefined,
-    },
+    details: updateDetails(
+      beforeRow,
+      row,
+      ['email', 'full_name', 'is_admin'],
+      {
+        // كلمة المرور لا تُسجَّل قيمتها أبداً — فقط أنها بُدِّلت
+        ...(password ? { password: 'بُدِّلت (القيمة غير مسجّلة)' } : {}),
+        ...(permsDiff.granted.length > 0 ? { granted_permissions: permsDiff.granted } : {}),
+        ...(permsDiff.revoked.length > 0 ? { revoked_permissions: permsDiff.revoked } : {}),
+        ...(approvalDiff.granted.length > 0 ? { approval_enabled: approvalDiff.granted } : {}),
+        ...(approvalDiff.revoked.length > 0 ? { approval_disabled: approvalDiff.revoked } : {}),
+      },
+    ),
     page: '/settings',
   });
 
@@ -119,7 +166,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   // Capture user info before deletion so we can log a meaningful entry.
   const { data: target } = await admin
     .from('app_users')
-    .select('email, full_name')
+    .select('email, full_name, is_admin')
     .eq('id', params.id)
     .maybeSingle();
 
@@ -132,7 +179,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     entity_type: 'user',
     entity_id: params.id,
     entity_name: target?.full_name ?? target?.email ?? null,
-    details: target ? { email: target.email } : null,
+    details: target ? valueDetails(target, ['email', 'full_name', 'is_admin']) : null,
     page: '/settings',
   });
 

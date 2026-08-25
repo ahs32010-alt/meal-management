@@ -36,6 +36,47 @@ export function isSupported(): boolean {
   return typeof window !== 'undefined' && 'serviceWorker' in navigator;
 }
 
+/**
+ * مضيف التطوير. الـSW لا يُسجَّل عليه إطلاقاً، وأي إصدار قديم مسجَّل يُزال.
+ *
+ * السبب من تجربة مؤلمة: أسماء حِزم `next dev` ثابتة والمحتوى يُبنى تحتها،
+ * فالـSW كان يثبّت JavaScript قديماً إلى الأبد — تصل صفحة HTML جديدة مع حِزمة
+ * قديمة، فتظهر أخطاء hydration وتختفي تعديلات كاملة مهما أُعيد التحميل، ويُظنّ
+ * أن الكود لم يتحسّن وهو لم يصل أصلاً. إزالته هنا تقتل هذا الصنف من المشاكل
+ * نهائياً بلا خطوة يدوية من أحد.
+ *
+ * ولمن أراد اختبار العمل بلا إنترنت محلياً: ضع `kha:sw-in-dev` في
+ * localStorage فيعود التسجيل كالمعتاد.
+ */
+export function isDevHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  const h = window.location.hostname;
+  if (h !== 'localhost' && h !== '127.0.0.1') return false;
+  try {
+    return window.localStorage.getItem('kha:sw-in-dev') === null;
+  } catch {
+    return true;
+  }
+}
+
+/** يزيل أي service worker مسجَّل ويسقط مخزون القشرة — للتطوير. */
+async function unregisterAll(): Promise<void> {
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map(r => r.unregister()));
+    if (typeof caches !== 'undefined') {
+      const names = await caches.keys();
+      // مخزون البيانات (kha-data-) يخصّ العمل بلا نت ولا علاقة له بالحِزم
+      await Promise.all(
+        names.filter(n => n.startsWith('kha-') && !n.startsWith('kha-data-'))
+          .map(n => caches.delete(n)),
+      );
+    }
+  } catch {
+    // لا شيء نفعله — التطبيق يشتغل أونلاين على أي حال
+  }
+}
+
 let registering: Promise<ServiceWorkerRegistration | null> | null = null;
 
 export function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
@@ -44,6 +85,11 @@ export function registerServiceWorker(): Promise<ServiceWorkerRegistration | nul
 
   registering = (async () => {
     try {
+      // في التطوير: لا تسجيل، وأزل القديم — وإلا بقيت حِزم قديمة مثبّتة
+      if (isDevHost()) {
+        await unregisterAll();
+        return null;
+      }
       const reg = await navigator.serviceWorker.register(SW_URL, { scope: '/' });
       registration = reg;
 

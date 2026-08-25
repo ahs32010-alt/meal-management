@@ -5,6 +5,7 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { valueDetails } from '@/lib/activity-diff';
 import { fetchInactiveBeneficiaryIds } from '@/lib/inactive-beneficiaries';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
@@ -236,7 +237,11 @@ export default function OrderList() {
           entity_type: 'order',
           entity_id: id,
           entity_name: order ? `أمر تشغيل ${MEAL_TYPE_LABELS[order.meal_type]} — ${order.date}` : null,
-          details: order ? { date: order.date, meal_type: order.meal_type } : null,
+          details: order
+            ? valueDetails(order as unknown as Record<string, unknown>, [
+                'date', 'meal_type', 'week_number', 'day_of_week', 'entity_type', 'notes',
+              ])
+            : null,
         });
         await fetchData();
         setDeleting(null);

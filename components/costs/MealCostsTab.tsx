@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { changeDetails } from '@/lib/activity-diff';
 import { exportXLSX } from '@/lib/xlsx-utils';
 import {
   formatMoney,
@@ -118,6 +119,8 @@ export default function MealCostsTab({
   const savePrice = async (mealId: string, mealName: string, text: string) => {
     const trimmed = text.trim();
     setError('');
+    // السعر السابق يُلتقط قبل الكتابة — بعد onChanged تكون الصفوف تحدّثت أصلاً
+    const previousPrice = rows.find(r => r.meal.id === mealId)?.margin.price ?? null;
 
     // فارغ = إزالة سعر البيع
     if (trimmed === '') {
@@ -127,6 +130,7 @@ export default function MealCostsTab({
       if (err) { setError(err.message); return; }
       void logActivity({
         action: 'delete', entity_type: 'meal_price', entity_id: mealId, entity_name: mealName,
+        details: changeDetails({ selling_price: previousPrice }, { selling_price: null }, ['selling_price']),
       });
       setPriceEdit(null);
       await onChanged();
@@ -145,7 +149,7 @@ export default function MealCostsTab({
 
     void logActivity({
       action: 'update', entity_type: 'meal_price', entity_id: mealId, entity_name: mealName,
-      details: { selling_price: price },
+      details: changeDetails({ selling_price: previousPrice }, { selling_price: price }, ['selling_price']),
     });
     setPriceEdit(null);
     await onChanged();
