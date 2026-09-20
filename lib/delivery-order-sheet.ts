@@ -1,5 +1,5 @@
-import type { DeliveryMealType, DeliveryOrder, DeliveryOrderItem } from '@/lib/types';
-import { DELIVERY_MEAL_TYPE_LABELS } from '@/lib/types';
+import type { DeliveryMealType, DeliveryOrder, DeliveryOrderItem, EntityType } from '@/lib/types';
+import { DELIVERY_MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
 
 /**
  * صيغة ملف أوامر التسليم — مصدر واحد للتصدير والاستيراد وورقة النسخة
@@ -13,6 +13,7 @@ import { DELIVERY_MEAL_TYPE_LABELS } from '@/lib/types';
 export const COL_ORDER_NO   = 'رقم الأمر';
 export const COL_DATE       = 'التاريخ';
 export const COL_MEAL_TYPE  = 'نوع الوجبة';
+export const COL_ENTITY     = 'الفئة';
 export const COL_LOCATION   = 'موقع التسليم';
 export const COL_CITY       = 'المدينة';
 export const COL_CREATOR    = 'المُنشئ';
@@ -25,7 +26,7 @@ export const COL_CREATED_AT = 'تاريخ الإنشاء';
 
 /** رقم الأمر وتاريخ الإنشاء للقراءة فقط — يولّدهما النظام عند الإنشاء. */
 export const DELIVERY_ORDER_HEADERS: string[] = [
-  COL_ORDER_NO, COL_DATE, COL_MEAL_TYPE, COL_LOCATION, COL_CITY,
+  COL_ORDER_NO, COL_DATE, COL_ENTITY, COL_MEAL_TYPE, COL_LOCATION, COL_CITY,
   COL_CREATOR, COL_PHONE, COL_DEL_DATE, COL_DEL_TIME,
   COL_ITEMS, COL_NOTES, COL_CREATED_AT,
 ];
@@ -36,6 +37,25 @@ const MEAL_TYPE_FROM_AR: Record<string, DeliveryMealType> = Object.fromEntries(
   (Object.entries(DELIVERY_MEAL_TYPE_LABELS) as [DeliveryMealType, string][])
     .map(([key, label]) => [label, key]),
 );
+
+/**
+ * الفئة تُقرأ بالجمع («المستفيدون») كما تُكتب، ونقبل كذلك المفرد والإنجليزي
+ * عشان ملفاً حُرِّر يدوياً ما يفشل على صيغة معقولة.
+ */
+const ENTITY_FROM_AR: Record<string, EntityType> = {
+  [ENTITY_TYPE_LABELS_PLURAL.beneficiary]: 'beneficiary',
+  [ENTITY_TYPE_LABELS_PLURAL.companion]: 'companion',
+  'مستفيد': 'beneficiary',
+  'مستفيدين': 'beneficiary',
+  'مرافق': 'companion',
+  'مرافقين': 'companion',
+  beneficiary: 'beneficiary',
+  companion: 'companion',
+};
+
+export function deliveryEntityLabel(order: Pick<DeliveryOrder, 'entity_type'>): string {
+  return ENTITY_TYPE_LABELS_PLURAL[order.entity_type === 'companion' ? 'companion' : 'beneficiary'];
+}
 
 export function deliveryMealTypeLabel(mt: string): string {
   return DELIVERY_MEAL_TYPE_LABELS[mt as DeliveryMealType] ?? mt;
@@ -118,6 +138,7 @@ export function buildDeliveryOrderRow(order: DeliveryOrder): Record<string, stri
   return {
     [COL_ORDER_NO]:   order.order_number ?? '',
     [COL_DATE]:       order.date ?? '',
+    [COL_ENTITY]:     deliveryEntityLabel(order),
     [COL_MEAL_TYPE]:  deliveryMealTypeLabel(order.meal_type),
     [COL_LOCATION]:   loc?.name ?? '',
     [COL_CITY]:       city?.name ?? '',
@@ -142,6 +163,7 @@ export interface DeliveryImportRefs {
 
 export interface DeliveryOrderPayload {
   date: string;
+  entity_type: EntityType;
   meal_type: DeliveryMealType;
   delivery_location_id: string | null;
   creator_id: string | null;
@@ -181,6 +203,14 @@ export function parseDeliveryOrderRow(
   const date = normalizeDate(row[COL_DATE]);
   if (!date) { errors.push(`${rowLabel}: التاريخ مفقود أو غير مفهوم`); }
 
+  // الفئة اختيارية: ملف قديم (صُدِّر قبل وجود العمود) يُستورد كمستفيدين،
+  // وهي الفئة الوحيدة التي كانت موجودة وقتها.
+  const entityRaw = clean(row[COL_ENTITY]);
+  const entityType = entityRaw ? ENTITY_FROM_AR[entityRaw] : 'beneficiary';
+  if (entityRaw && !entityType) {
+    errors.push(`${rowLabel}: الفئة "${entityRaw}" غير معروفة — المقبول: ${ENTITY_TYPE_LABELS_PLURAL.beneficiary}، ${ENTITY_TYPE_LABELS_PLURAL.companion}`);
+  }
+
   const mealTypeRaw = clean(row[COL_MEAL_TYPE]);
   const mealType = MEAL_TYPE_FROM_AR[mealTypeRaw];
   if (!mealType) {
@@ -208,6 +238,7 @@ export function parseDeliveryOrderRow(
   return {
     payload: {
       date: date!,
+      entity_type: entityType!,
       meal_type: mealType!,
       delivery_location_id: locationId,
       creator_id: creatorId,

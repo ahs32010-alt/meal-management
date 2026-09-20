@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import type { DeliveryOrder, DeliveryPrintHeader } from '@/lib/types';
-import { DELIVERY_MEAL_TYPE_LABELS } from '@/lib/types';
+import { DELIVERY_MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
 
 function arabicDate(dateStr: string) {
   const d = new Date(dateStr);
@@ -259,21 +259,28 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
         {/* بيانات الأمر */}
         <div style={s.infoGrid}>
           <div style={s.infoCell}>
+            <span style={s.infoLabel}>الفئة:</span>
+            <span style={s.infoValue}>
+              {ENTITY_TYPE_LABELS_PLURAL[order.entity_type === 'companion' ? 'companion' : 'beneficiary']}
+            </span>
+          </div>
+          <div style={{ ...s.infoCell, borderLeft: 'none' }}>
             <span style={s.infoLabel}>نوع الوجبة:</span>
             <span style={s.infoValue}>{DELIVERY_MEAL_TYPE_LABELS[order.meal_type]}</span>
           </div>
-          <div style={{ ...s.infoCell, borderLeft: 'none' }}>
+          <div style={s.infoCell}>
             <span style={s.infoLabel}>اليوم:</span>
             <span style={s.infoValue}>{arabicDate(order.date).split(' ')[0]}</span>
           </div>
-          <div style={{ ...s.infoCell, borderBottom: 'none' }}>
+          <div style={{ ...s.infoCell, borderLeft: 'none' }}>
             <span style={s.infoLabel}>موقع التسليم:</span>
             <span style={s.infoValue}>{order.delivery_locations?.name ?? '—'}</span>
           </div>
-          <div style={{ ...s.infoCell, borderLeft: 'none', borderBottom: 'none' }}>
+          <div style={{ ...s.infoCell, borderBottom: 'none' }}>
             <span style={s.infoLabel}>المدينة:</span>
             <span style={s.infoValue}>{order.delivery_locations?.cities?.name ?? '—'}</span>
           </div>
+          <div style={{ ...s.infoCell, borderLeft: 'none', borderBottom: 'none' }} />
         </div>
 
         {/* جدول الأصناف */}

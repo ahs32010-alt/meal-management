@@ -409,6 +409,83 @@ describe('Gemini — ميزانية التفكير', () => {
   });
 });
 
+describe('Gemini — النموذج الصامت', () => {
+  // نموذجٌ مُعلَن في قائمة النماذج لكنه لا يردّ أبداً لمفتاح بعينه: لا خطأ ولا
+  // رفض. بلا مهلة يبتلع الطلب كله حتى تسقط الدالة على Vercel بلا رسالة.
+  const timedOut = () => Object.assign(new Error('The operation was aborted'), { name: 'TimeoutError' });
+
+  it('يمرّر مهلة إلى النداء — لا ينتظر بلا حدّ', async () => {
+    generateContent.mockResolvedValue(textReply('تمام.'));
+    const provider = await loadProvider();
+    await provider.run(input());
+
+    expect(generateContent.mock.calls[0][0].config.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('الصمت ينقلنا للنموذج التالي كما تفعل الحصة المنتهية', async () => {
+    generateContent
+      .mockRejectedValueOnce(timedOut())
+      .mockResolvedValueOnce(textReply('تمام.'));
+
+    const provider = await loadProvider();
+    const result = await provider.run(input());
+
+    expect(result.text).toBe('تمام.');
+    expect(result.model).toBe('gemini-3.6-flash');
+  });
+
+  it('لا يدفع الطلب التالي ثمن المهلة نفسها — النموذج الصامت يُسجَّل', async () => {
+    const provider = await loadProvider(); // نفس النسخة للطلبين
+
+    generateContent
+      .mockRejectedValueOnce(timedOut())
+      .mockResolvedValueOnce(textReply('الأول.'));
+    await provider.run(input());
+
+    generateContent.mockReset();
+    generateContent.mockResolvedValue(textReply('الثاني.'));
+    await provider.run(input());
+
+    // الطلب الثاني يبدأ من البديل مباشرةً بلا محاولة على الصامت
+    expect(generateContent.mock.calls[0][0].model).toBe('gemini-3.6-flash');
+  });
+
+  it('يفشل برسالة صادقة حين تصمت السلسلة كلها', async () => {
+    generateContent.mockRejectedValue(timedOut());
+    const provider = await loadProvider();
+
+    await expect(provider.run(input())).rejects.toMatchObject({ status: 503 });
+    expect(new Set(generateContent.mock.calls.map((c) => c[0].model)).size).toBe(3);
+  });
+});
+
+describe('Gemini — سلسلة نماذج مخصّصة', () => {
+  it('GEMINI_MODEL بفواصل يعيد ترتيب السلسلة ويبقي السقوط', async () => {
+    process.env.GEMINI_MODEL = 'gemini-3.6-flash, gemini-3.5-flash-lite';
+    generateContent
+      .mockRejectedValueOnce(Object.assign(new Error('RESOURCE_EXHAUSTED'), { status: 429 }))
+      .mockResolvedValueOnce(textReply('تمام.'));
+
+    const provider = await loadProvider();
+    const result = await provider.run(input());
+
+    expect(generateContent.mock.calls[0][0].model).toBe('gemini-3.6-flash');
+    expect(generateContent.mock.calls[1][0].model).toBe('gemini-3.5-flash-lite');
+    expect(result.model).toBe('gemini-3.5-flash-lite');
+  });
+
+  it('نموذج واحد صريح يبقى بلا سقوط كما كان', async () => {
+    process.env.GEMINI_MODEL = 'gemini-3.6-flash';
+    generateContent.mockRejectedValue(Object.assign(new Error('RESOURCE_EXHAUSTED'), { status: 429 }));
+
+    const provider = await loadProvider();
+    await expect(provider.run(input())).rejects.toMatchObject({ status: 429 });
+    expect(new Set(generateContent.mock.calls.map((c) => c[0].model))).toEqual(
+      new Set(['gemini-3.6-flash']),
+    );
+  });
+});
+
 describe('Gemini — ترجمة الأخطاء', () => {
   const cases: Array<[string, unknown, number, string]> = [
     ['حد الطلبات المجاني', Object.assign(new Error('RESOURCE_EXHAUSTED'), { status: 429 }), 429, 'حد الطلبات المجاني'],

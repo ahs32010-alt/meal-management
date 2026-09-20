@@ -144,6 +144,11 @@ async function handleLinkAttempt(ctx: Ctx, code: string): Promise<void> {
 
 /** الرسائل المسموحة قبل الربط: الترحيب، ومحاولة إدخال كود. */
 async function handleUnlinked(ctx: Ctx, text: string): Promise<void> {
+  // الكود ثمانية أحرف من اثنين وثلاثين — تخمينه بلا حدّ ممكن نظرياً، وبحدٍّ
+  // كهذا يحتاج قروناً. والحدّ نفسه يكفّ عن البوت رسائل العابرين.
+  const limit = rateLimit({ key: `telegram-link:${ctx.chatId}`, limit: 10, windowMs: 60_000 });
+  if (!limit.allowed) return;
+
   const startCode = /^\/start(?:@\S+)?\s+(\S+)$/.exec(text);
   if (startCode) {
     await handleLinkAttempt(ctx, startCode[1]);

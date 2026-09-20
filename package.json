@@ -3,14 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "lsof -ti:3000 | xargs kill -9 2>/dev/null; true",
+    "predev": "lsof -ti:3000 -sTCP:LISTEN | xargs kill -9 2>/dev/null; true",
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "telegram": "node scripts/telegram.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

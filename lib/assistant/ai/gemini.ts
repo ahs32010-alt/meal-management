@@ -40,9 +40,18 @@ export const GEMINI_MODEL_CHAIN = [
 
 export const DEFAULT_GEMINI_MODEL = GEMINI_MODEL_CHAIN[0];
 
+/**
+ * السلسلة الفعلية لهذا الطلب.
+ *
+ * `GEMINI_MODEL` يقبل نموذجاً واحداً أو سلسلةً مفصولة بفواصل. الفرق مقصود:
+ * نموذج واحد يعني «هذا وحده ولا تسقط لغيره»، وسلسلة تعني «رتّبها هكذا» —
+ * فمن اكتشف أن نموذجاً لا يعمل مع مفتاحه يقدر يزيحه بلا أن يفقد السقوط.
+ */
 function modelChain(): string[] {
   const explicit = process.env.GEMINI_MODEL?.trim();
-  return explicit ? [explicit] : [...GEMINI_MODEL_CHAIN];
+  if (!explicit) return [...GEMINI_MODEL_CHAIN];
+  const chain = explicit.split(',').map((m) => m.trim()).filter(Boolean);
+  return chain.length > 0 ? chain : [...GEMINI_MODEL_CHAIN];
 }
 
 /**
@@ -66,6 +75,26 @@ const CLOSING_MAX_TOKENS = 2000;
  *  ثانيتين أرخص بكثير من إفشال طلب المستخدم. */
 const RETRY_ON_UNAVAILABLE = 2;
 const RETRY_BASE_MS = 1200;
+
+/**
+ * سقف انتظار النداء الواحد.
+ *
+ * ليس ترفاً: نموذج مُعلَن في قائمة النماذج قد **لا يردّ أبداً** لمفتاح بعينه —
+ * لا خطأ ولا رفض، صمت. ورأيناه يبتلع خمس دقائق كاملة في طلب واحد، وهذا وحده
+ * يكفي لتجاوز مهلة الدالة على Vercel فيضيع الطلب بلا رسالة.
+ *
+ * والسقف أوسع بكثير من نداء سليم (ثانية إلى ثلاث)، فلا يقطع عملاً حقيقياً.
+ */
+const MODEL_TIMEOUT_MS = 20_000;
+
+/**
+ * النماذج التي ثبت صمتها في هذه العملية.
+ *
+ * بلا هذه الذاكرة يدفع **كل** طلب ثمن المهلة من جديد قبل أن يسقط للتالي.
+ * وهي على مستوى العملية لا القرص: نسخة جديدة تعيد التجربة، فلو تعافى النموذج
+ * رجع للخدمة بلا تدخّل.
+ */
+const unresponsiveModels = new Set<string>();
 
 export function hasGeminiKey(): boolean {
   return Boolean(process.env.GEMINI_API_KEY?.trim());
@@ -171,6 +200,9 @@ function translateError(err: unknown): GeminiError {
   if (status === 404 || /not found.*model|model.*not found/i.test(raw)) {
     return new GeminiError(`نموذج Gemini «${geminiModel()}» غير متاح لهذا المفتاح.`, 502);
   }
+  if (isUnresponsive(err)) {
+    return new GeminiError('نماذج Gemini ما ردّت خلال المهلة — جرّب بعد قليل أو بدّل إلى Claude.', 503);
+  }
   return new GeminiError('تعذّر الوصول إلى Gemini.', 500);
 }
 
@@ -195,6 +227,14 @@ function isTransient(err: unknown): boolean {
   return status === 503 || /UNAVAILABLE|high demand|overloaded/i.test(raw);
 }
 
+/** صمتٌ حتى انتهت المهلة — يستحق تجربة نموذج آخر مثل نفاد الحصة تماماً. */
+function isUnresponsive(err: unknown): boolean {
+  const name = (err as { name?: string })?.name;
+  if (name === 'TimeoutError' || name === 'AbortError') return true;
+  const raw = err instanceof Error ? err.message : String(err ?? '');
+  return /aborted|abortsignal|timed? ?out/i.test(raw);
+}
+
 /** نفاد حصة — يستحق تجربة نموذج آخر لأن الحصة لكل نموذج. */
 function isQuotaExhausted(err: unknown): boolean {
   const status = (err as { status?: number })?.status;
@@ -211,10 +251,22 @@ interface ModelCursor {
   index: number;
 }
 
+/** يقفز بالمؤشّر فوق ما ثبت صمته، ما دام في السلسلة بديل. */
+function skipKnownSilent(cursor: ModelCursor): void {
+  while (
+    cursor.index < cursor.chain.length - 1 &&
+    unresponsiveModels.has(cursor.chain[cursor.index])
+  ) {
+    cursor.index++;
+  }
+}
+
 /**
- * نداء واحد مع علاجين مختلفين لعطلين مختلفين:
+ * نداء واحد مع ثلاثة علاجات لثلاثة أعطال:
  *   • ضغط لحظي (503) ⇒ ننتظر ونعيد على **نفس** النموذج؛ يختفي خلال ثوانٍ.
  *   • نفاد حصة (429) ⇒ الانتظار لا يفيد (الحصة يومية)، فننتقل للنموذج التالي.
+ *   • صمتٌ حتى المهلة ⇒ النموذج غير صالح لهذا المفتاح؛ ننتقل ونسجّله حتى لا
+ *     يدفع كل طلبٍ لاحق ثمن المهلة نفسها.
  * وحين تنفد السلسلة كلها نرمي الخطأ المترجَم.
  */
 async function callModel(
@@ -223,23 +275,37 @@ async function callModel(
   params: Omit<Parameters<GoogleGenAI['models']['generateContent']>[0], 'model'>,
 ) {
   let attempt = 0;
+  skipKnownSilent(cursor);
+
   for (;;) {
+    const model = cursor.chain[cursor.index];
     try {
-      return await client.models.generateContent({ ...params, model: cursor.chain[cursor.index] });
+      return await client.models.generateContent({
+        ...params,
+        model,
+        // المهلة على مستوى النداء لا العميل — كل جولة تبدأ عدّها من جديد.
+        config: { ...(params.config ?? {}), abortSignal: AbortSignal.timeout(MODEL_TIMEOUT_MS) },
+      });
     } catch (err) {
       if (isTransient(err) && attempt < RETRY_ON_UNAVAILABLE) {
         attempt++;
         await sleep(RETRY_BASE_MS * attempt);
         continue;
       }
-      if (isQuotaExhausted(err) && cursor.index < cursor.chain.length - 1) {
+
+      const silent = isUnresponsive(err);
+      if (silent) unresponsiveModels.add(model);
+
+      if ((isQuotaExhausted(err) || silent) && cursor.index < cursor.chain.length - 1) {
         console.warn(
-          `[assistant/gemini] حصة ${cursor.chain[cursor.index]} نفدت — أنتقل إلى ${cursor.chain[cursor.index + 1]}`,
+          `[assistant/gemini] ${model} ${silent ? 'ما ردّ خلال المهلة' : 'نفدت حصته'} — أنتقل إلى ${cursor.chain[cursor.index + 1]}`,
         );
         cursor.index++;
+        skipKnownSilent(cursor);
         attempt = 0;
         continue;
       }
+
       throw translateError(err);
     }
   }

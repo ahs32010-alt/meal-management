@@ -263,6 +263,11 @@ export interface DeliveryOrder {
   id: string;
   order_number: string;
   source_order_id?: string | null;
+  /**
+   * فئة الأمر: مستفيدون أو مرافقون. اختياري في النوع لأن الأوامر المقروءة قبل
+   * تشغيل الترقية ما تحمل العمود — تُعامَل كـ'beneficiary' عند العرض.
+   */
+  entity_type?: EntityType;
   date: string;
   meal_type: DeliveryMealType;
   delivery_location_id?: string | null;

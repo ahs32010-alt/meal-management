@@ -4,6 +4,7 @@ import {
   COL_CITY,
   COL_CREATOR,
   COL_DATE,
+  COL_ENTITY,
   COL_ITEMS,
   COL_LOCATION,
   COL_MEAL_TYPE,
@@ -105,6 +106,43 @@ describe('دورة تصدير ← استيراد', () => {
     const row = buildDeliveryOrderRow(order);
     expect(row[COL_MEAL_TYPE]).toBe('فطور + غداء + عشاء');
     expect(parseDeliveryOrderRow(row, REFS, 'صف 2').payload).toMatchObject({ meal_type: 'all' });
+  });
+});
+
+describe('فئة أمر التسليم', () => {
+  it('أمر المرافقين يُصدَّر ويُستورد بفئته', () => {
+    const order = { ...ORDER, entity_type: 'companion' } as unknown as DeliveryOrder;
+    const row = buildDeliveryOrderRow(order);
+    expect(row[COL_ENTITY]).toBe('المرافقون');
+    expect(parseDeliveryOrderRow(row, REFS, 'صف 2').payload).toMatchObject({ entity_type: 'companion' });
+  });
+
+  it('أمر بلا فئة (نسخة قديمة) يُقرأ كمستفيدين', () => {
+    const order = { ...ORDER } as unknown as DeliveryOrder;
+    delete (order as { entity_type?: unknown }).entity_type;
+    expect(buildDeliveryOrderRow(order)[COL_ENTITY]).toBe('المستفيدون');
+  });
+
+  it('ملف قديم بلا عمود الفئة يُستورد كمستفيدين بلا خطأ', () => {
+    const row = buildDeliveryOrderRow(ORDER);
+    delete row[COL_ENTITY];
+    const { payload, errors } = parseDeliveryOrderRow(row, REFS, 'صف 2');
+    expect(errors).toEqual([]);
+    expect(payload).toMatchObject({ entity_type: 'beneficiary' });
+  });
+
+  it('يقبل المفرد والإنجليزي كما يكتبهما المستخدم يدوياً', () => {
+    for (const [written, expected] of [['مرافقين', 'companion'], ['مستفيد', 'beneficiary'], ['companion', 'companion']]) {
+      const row = { ...buildDeliveryOrderRow(ORDER), [COL_ENTITY]: written };
+      expect(parseDeliveryOrderRow(row, REFS, 'صف 2').payload).toMatchObject({ entity_type: expected });
+    }
+  });
+
+  it('يرفض فئة غير معروفة برسالة تشرح المقبول', () => {
+    const row = { ...buildDeliveryOrderRow(ORDER), [COL_ENTITY]: 'زوار' };
+    const { payload, errors } = parseDeliveryOrderRow(row, REFS, 'صف 2');
+    expect(payload).toBeNull();
+    expect(errors.join(' ')).toContain('الفئة "زوار" غير معروفة');
   });
 });
 

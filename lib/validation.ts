@@ -154,6 +154,7 @@ const deliveryOrderItemSchema = z.object({
 
 export const deliveryOrderSchema = z.object({
   source_order_id: uuidSchema.nullable().optional(),
+  entity_type: z.enum(['beneficiary', 'companion']).optional(),
   date: dateStringSchema,
   meal_type: deliveryMealTypeSchema,
   delivery_location_id: uuidSchema.nullable().optional(),

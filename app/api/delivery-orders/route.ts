@@ -4,19 +4,15 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
 import { deliveryOrderSchema, parseJson } from '@/lib/validation';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { deliveryOrderSelect, isMissingEntityTypeColumn } from '@/lib/delivery-order-select';
 
 export const dynamic = 'force-dynamic';
 
-const SELECT_LIST = `
-  id, order_number, source_order_id, date, meal_type,
-  delivery_location_id, creator_id, created_by_name, created_by_phone,
-  delivery_date, delivery_time, notes,
-  creator_signature_url, receiver_signature_url,
-  created_at, updated_at,
-  delivery_locations(id, name, city_id, created_at, cities(id, name, created_at)),
-  delivery_creators(id, name, phone, created_at),
-  delivery_order_items(id, delivery_order_id, display_name, meal_type, quantity, receiver_signature_url, position, created_at)
-`;
+/** الحد الأدنى الذي تلمسه هذه الواجهة من صف الأمر — البنود تُرتَّب قبل الإرسال */
+type OrderRowWithItems = Record<string, unknown> & {
+  delivery_order_items?: { position: number }[];
+};
+
 
 export async function GET() {
   const supabase = createClient();
@@ -25,20 +21,23 @@ export async function GET() {
 
   // قراءة على دفعات — بدونها يقصّ PostgREST القائمة عند ١٠٠٠ أمر بصمت
   // فتختفي أوامر من الصفحة ومن التصدير بلا أي مؤشّر.
-  const { data, error } = await fetchAllRows((from, to) =>
+  const readAll = (select: string) => fetchAllRows((from, to) =>
     supabase
       .from('delivery_orders')
-      .select(SELECT_LIST)
+      .select(select)
       .order('created_at', { ascending: false })
       .order('id')
       .range(from, to));
 
+  let { data, error } = await readAll(deliveryOrderSelect(true));
+  if (error && isMissingEntityTypeColumn(error.message)) {
+    ({ data, error } = await readAll(deliveryOrderSelect(false)));
+  }
+
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const sorted = (data ?? []).map(o => {
-    const items = (o.delivery_order_items ?? []).slice().sort(
-      (a: { position: number }, b: { position: number }) => a.position - b.position
-    );
+  const sorted = ((data ?? []) as unknown as OrderRowWithItems[]).map(o => {
+    const items = (o.delivery_order_items ?? []).slice().sort((a, b) => a.position - b.position);
     return { ...o, delivery_order_items: items };
   });
   return NextResponse.json(sorted);
@@ -64,9 +63,7 @@ export async function POST(request: NextRequest) {
 
   const { items, ...orderData } = parsed.data;
 
-  const { data: created, error: insertError } = await supabase
-    .from('delivery_orders')
-    .insert({
+  const orderRow = {
       source_order_id: orderData.source_order_id ?? null,
       date: orderData.date,
       meal_type: orderData.meal_type,
@@ -79,9 +76,17 @@ export async function POST(request: NextRequest) {
       notes: orderData.notes ?? null,
       creator_signature_url: orderData.creator_signature_url ?? null,
       receiver_signature_url: orderData.receiver_signature_url ?? null,
-    })
-    .select('id')
-    .single();
+      entity_type: orderData.entity_type ?? 'beneficiary',
+  };
+
+  const insertOrder = (row: Record<string, unknown>) =>
+    supabase.from('delivery_orders').insert(row).select('id').single();
+
+  let { data: created, error: insertError } = await insertOrder(orderRow);
+  if (insertError && isMissingEntityTypeColumn(insertError.message)) {
+    const { entity_type: _dropped, ...withoutEntityType } = orderRow;
+    ({ data: created, error: insertError } = await insertOrder(withoutEntityType));
+  }
 
   if (insertError || !created) {
     return NextResponse.json({ error: insertError?.message ?? 'تعذّر إنشاء أمر التسليم' }, { status: 500 });
@@ -103,11 +108,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: itemsError.message }, { status: 500 });
   }
 
-  const { data: full } = await supabase
-    .from('delivery_orders')
-    .select(SELECT_LIST)
-    .eq('id', created.id)
-    .single();
+  const readOne = (select: string) =>
+    supabase.from('delivery_orders').select(select).eq('id', created.id).single();
+
+  let { data: full, error: readError } = await readOne(deliveryOrderSelect(true));
+  if (readError && isMissingEntityTypeColumn(readError.message)) {
+    ({ data: full } = await readOne(deliveryOrderSelect(false)));
+  }
 
   return NextResponse.json(full, { status: 201 });
 }

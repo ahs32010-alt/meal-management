@@ -28,38 +28,53 @@
 
 ---
 
-## الإعداد — أربع خطوات
+## الإعداد
+
+الأداة `npm run telegram` تتكفّل بالباقي بعد أن تنشئ البوت.
+
+```bash
+npm run telegram                 # ما المضبوط وما الناقص
+npm run telegram setup <token>   # تحقّق من الرمز واحفظه واربط كل شيء
+npm run telegram migrate         # ترحيل قاعدة البيانات
+npm run telegram dev             # شغّل البوت محلياً بلا نشر ولا ويب‑هوك
+npm run telegram webhook <url>   # سجّل الويب‑هوك على نطاق منشور
+npm run telegram webhook off     # ألغِ التسجيل
+```
 
 ### ① أنشئ البوت
 
-في تليقرام، افتح [@BotFather](https://t.me/BotFather) وأرسل `/newbot`، واتبع
-الخطوات. سينتهي بإعطائك رمزاً بهذا الشكل:
+في تليقرام، افتح [@BotFather](https://t.me/BotFather) وأرسل `/newbot`. سينتهي
+بإعطائك رمزاً بهذا الشكل:
 
 ```
 8123456789:AAH_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-### ② شغّل الترحيل على قاعدة البيانات
+### ② شغّل الترحيل
 
-من لوحة Supabase ← SQL Editor، الصق محتوى الملف ونفّذه:
-
+```bash
+npm run telegram migrate
 ```
-supabase/telegram-migration.sql
+
+بلا رابط اتصال مباشر يطبع لك رابط محرّر SQL في Supabase لتلصق فيه
+`supabase/telegram-migration.sql` — الترحيل (DDL) لا يمرّ عبر مفتاح الخدمة.
+ومع رابط الاتصال يشغّله بنفسه:
+
+```bash
+SUPABASE_DB_URL='postgresql://…' npm run telegram migrate
 ```
 
 يُنشئ خمسة جداول: الروابط، وأكواد الربط، وجلسات الحوار، والخطط المعلّقة،
-وسجلّ التحديثات المعالَجة. كلها مغلقة أمام المتصفح (RLS بلا سياسات سماح) —
-الخادم وحده يصل إليها بمفتاح الخدمة.
+وسجلّ التحديثات المعالَجة. كلها مغلقة أمام المتصفح (RLS بلا سياسات سماح).
 
-### ③ اضبط متغيّرات البيئة
-
-على Vercel: Settings ← Environment Variables. ومحلياً في `.env.local`:
+### ③ فعّل الرمز
 
 ```bash
-TELEGRAM_BOT_TOKEN=8123456789:AAH_xxxxxxxxxxxxxxxxx
-TELEGRAM_WEBHOOK_SECRET=<ولّده بـ: openssl rand -hex 32>
-NEXT_PUBLIC_APP_URL=https://your-app.vercel.app
+npm run telegram setup 8123456789:AAH_xxxxxxxxxxxxx
 ```
+
+يتحقّق من الرمز عند تليقرام قبل حفظه، ويكتبه في `.env.local`، ويولّد
+`TELEGRAM_WEBHOOK_SECRET` إن لم يكن موجوداً، ويسجّل قائمة الأوامر في تليقرام.
 
 كذلك لازم يكون مضبوطاً من قبل:
 
@@ -67,25 +82,32 @@ NEXT_PUBLIC_APP_URL=https://your-app.vercel.app
   الربط والصلاحيات. وهو نفسه مفتاح توقيع رموز التراجع.
 - `GEMINI_API_KEY` أو `ANTHROPIC_API_KEY` — عقل المساعد. بدونهما لا يجاوب البوت.
 
-> **`TELEGRAM_WEBHOOK_SECRET` ليس اختيارياً.** مسار الويب‑هوك عام على الإنترنت،
-> وهذا السرّ هو ما يثبت أن الطلب من تليقرام. بدونه يرفض المسار كل طلب يصله.
+### ④ وصّله بالخادم
 
-### ④ فعّل الويب‑هوك
-
-بعد النشر: الموقع ← **الإعدادات ← بوت تليقرام** ← زر **«تفعيل الويب‑هوك»**
-(يظهر للأدمن فقط). الصفحة نفسها تعرض حالة الاتصال وآخر خطأ سجّله تليقرام.
-
-بديل من الطرفية إن أردت:
+**محلياً** (بلا نشر ولا عنوان عام) — نافذتان:
 
 ```bash
-curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
-  -H 'Content-Type: application/json' \
-  -d '{"url":"https://your-app.vercel.app/api/telegram/webhook",
-       "secret_token":"'"$TELEGRAM_WEBHOOK_SECRET"'",
-       "allowed_updates":["message","callback_query"]}'
+npm run dev            # الأولى
+npm run telegram dev   # الثانية
 ```
 
----
+الوضع الثاني يسحب التحديثات من تليقرام ويمرّرها لمسار الويب‑هوك المحلي بنفس
+السرّ، فالمسار لا يعرف الفرق: ما تجرّبه محلياً هو ما سيعمل منشوراً.
+
+> ابدأ الخادم **قبل** الجسر: `predev` يقتل ما يستمع على المنفذ ٣٠٠٠.
+
+**منشوراً على Vercel:**
+
+1. أضف في Settings ← Environment Variables: `TELEGRAM_BOT_TOKEN`،
+   و`TELEGRAM_WEBHOOK_SECRET` (نفس القيمة التي في `.env.local`)،
+   و`NEXT_PUBLIC_APP_URL` (نطاق النشر).
+2. انشر، ثم:
+
+```bash
+npm run telegram webhook https://your-app.vercel.app
+```
+
+أو من الموقع: **الإعدادات ← بوت تليقرام ← تفعيل الويب‑هوك** (للأدمن).
 
 ## ربط المستخدمين
 
@@ -147,6 +169,7 @@ lib/telegram/handle        ← الهوية، الذاكرة، الأزرار
 | «المساعد غير مفعّل» | ينقص `GEMINI_API_KEY` أو `ANTHROPIC_API_KEY`. |
 | «ما عندك صلاحية…» | صلاحيات الحساب المربوط. تُعدَّل من الإعدادات ← المستخدمون. |
 | «تعديلاتك تحتاج موافقة الأدمن» | مقصود — نفّذ العملية من الموقع لتمرّ على مسار الموافقات. |
+| البوت يرد ببطء شديد ثم يفشل | نموذج Gemini صامت لمفتاحك. الآن يُقطع بعد ٢٠ ثانية ويُسقَط للتالي تلقائياً، وتقدر تزيحه نهائياً: `GEMINI_MODEL=gemini-3.6-flash,gemini-3.5-flash-lite` |
 | زر التراجع لا يعمل | صلاحية رمز التراجع ساعة واحدة، ثم ينتهي. |
 | تفعيل الويب‑هوك يرفض localhost | تليقرام يقبل HTTPS فقط. استعمل نطاق النشر، أو نفقاً مثل ngrok للتجربة محلياً. |
 

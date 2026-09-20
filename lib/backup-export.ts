@@ -78,6 +78,8 @@ interface DeliveryLocationRow { id: string; name: string; city_id?: string | nul
 interface DeliveryMealRow { id: string; name: string; meal_type: MealType; is_snack: boolean; created_at?: string }
 interface DeliveryOrderRow {
   id: string; order_number: string; date: string; meal_type: string;
+  /** غائب في النسخ المأخوذة قبل ترقية الفئة — تُقرأ وقتها كمستفيدين */
+  entity_type?: string | null;
   delivery_location_id?: string | null;
   notes?: string | null;
   created_at?: string;
@@ -283,6 +285,7 @@ function buildDeliveryOrdersSheet(
     return {
       'رقم الأمر': o.order_number,
       'التاريخ': o.date,
+      'الفئة': o.entity_type === 'companion' ? 'المرافقون' : 'المستفيدون',
       'نوع الوجبة': mealTypeAr(o.meal_type),
       'موقع التسليم': loc?.name ?? '',
       'المدينة': cityName,

@@ -4,8 +4,18 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { updateDetails, valueDetails, listDiffDetails } from '@/lib/activity-diff';
-import type { City, DailyOrder, DeliveryLocation, DeliveryMeal, DeliveryMealType, DeliveryOrder, MealType } from '@/lib/types';
-import { DELIVERY_MEAL_TYPE_LABELS, MEAL_TYPE_LABELS } from '@/lib/types';
+import type { City, DailyOrder, DeliveryLocation, DeliveryMeal, DeliveryMealType, DeliveryOrder, EntityType, MealType } from '@/lib/types';
+import {
+  DELIVERY_MEAL_TYPE_LABELS,
+  ENTITY_BADGE_STYLES,
+  ENTITY_TYPE_LABELS_PLURAL,
+  MEAL_TYPE_LABELS,
+} from '@/lib/types';
+
+const ENTITY_ICON: Record<EntityType, string> = {
+  beneficiary: '👥',
+  companion: '🧑‍🤝‍🧑',
+};
 
 interface SourceMode {
   type: 'manual' | 'from_order';
@@ -47,7 +57,15 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
   const [mode, setMode] = useState<SourceMode['type']>(
     isEdit ? (editingOrder?.source_order_id ? 'from_order' : 'manual') : 'manual'
   );
-  const [step, setStep] = useState<'pick_mode' | 'edit'>(isEdit ? 'edit' : 'pick_mode');
+  // الفئة تسبق طريقة الإنشاء: أمر التشغيل الذي نجلب منه يخص فئة بعينها،
+  // فاختيارها أولاً هو ما يجعل قائمة الأوامر المعروضة صحيحة أصلاً.
+  // الأوامر القديمة (قبل الترقية) بلا عمود → تُعامَل كمستفيدين.
+  const [entityType, setEntityType] = useState<EntityType>(
+    editingOrder?.entity_type === 'companion' ? 'companion' : 'beneficiary'
+  );
+  const [step, setStep] = useState<'pick_entity' | 'pick_mode' | 'edit'>(
+    isEdit ? 'edit' : 'pick_entity'
+  );
 
   // Header fields
   const [date, setDate] = useState(editingOrder?.date ?? new Date().toISOString().split('T')[0]);
@@ -107,21 +125,43 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
   // Initial load
   useEffect(() => {
     (async () => {
-      const [citiesRes, locsRes, mealsRes, ordersRes] = await Promise.all([
+      const [citiesRes, locsRes, mealsRes] = await Promise.all([
         fetch('/api/cities').then(r => r.ok ? r.json() : []),
         fetch('/api/delivery-locations').then(r => r.ok ? r.json() : []),
         fetch('/api/delivery-meals').then(r => r.ok ? r.json() : []),
-        supabase.from('daily_orders')
-          .select('id, date, meal_type, week_number, day_of_week, entity_type, created_at')
-          .order('date', { ascending: false })
-          .limit(100),
       ]);
       setCities(citiesRes ?? []);
       setLocations(locsRes ?? []);
       setDeliveryMeals(mealsRes ?? []);
-      setProductionOrders((ordersRes.data ?? []) as unknown as DailyOrder[]);
     })();
-  }, [supabase]);
+  }, []);
+
+  /**
+   * أوامر التشغيل تُجلب مفلترة بالفئة من القاعدة لا بعد القراءة: السقف ١٠٠
+   * صف، ولو فلترنا محلياً بعد جلب المختلط قد لا يبقى ولا أمر مرافقين في
+   * القائمة رغم وجودها فعلاً. ولو عمود entity_type غير موجود (الترقية ما
+   * اتشغّلت) نرجع للقائمة كاملة بدل ما تطلع فاضية.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const columns = 'id, date, meal_type, week_number, day_of_week, entity_type, created_at';
+      let res = await supabase.from('daily_orders')
+        .select(columns)
+        .eq('entity_type', entityType)
+        .order('date', { ascending: false })
+        .limit(100);
+      if (res.error && /entity_type|column/i.test(res.error.message)) {
+        res = await supabase.from('daily_orders')
+          .select('id, date, meal_type, week_number, day_of_week, created_at')
+          .order('date', { ascending: false })
+          .limit(100) as typeof res;
+      }
+      if (cancelled) return;
+      setProductionOrders((res.data ?? []) as unknown as DailyOrder[]);
+    })();
+    return () => { cancelled = true; };
+  }, [entityType]);
 
   // Group delivery meals by (meal_type, is_snack) for the dropdown
   const groupedMeals = useMemo(() => {
@@ -382,6 +422,7 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
     try {
       const payload = {
         source_order_id: sourceOrderId,
+        entity_type: entityType,
         date,
         meal_type: mealType,
         delivery_location_id: locationId,
@@ -415,12 +456,15 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
         action: isEdit ? 'update' : 'create',
         entity_type: 'order',
         entity_id: j.id ?? editingOrder?.id ?? null,
-        entity_name: `أمر تسليم ${j.order_number ?? editingOrder?.order_number ?? ''}`,
+        entity_name: `أمر تسليم ${j.order_number ?? editingOrder?.order_number ?? ''} — ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`,
         details: (() => {
           // البنود تُوصف «الاسم ×الكمية» فيظهر تغيير الكمية سطراً مُزالاً وآخر مُضافاً
           const describeItem = (it: { display_name: string; quantity: number }) =>
             `${it.display_name.trim()} ×${it.quantity}`;
-          const after = { date, meal_type: mealType, notes: notes.trim() || null };
+          const after = {
+            date, meal_type: mealType, notes: notes.trim() || null,
+            entity_type: entityType,
+          };
           if (!isEdit) {
             return {
               ...valueDetails(after),
@@ -433,9 +477,10 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
               date: editingOrder?.date,
               meal_type: editingOrder?.meal_type,
               notes: editingOrder?.notes ?? null,
+              entity_type: editingOrder?.entity_type ?? 'beneficiary',
             },
             after,
-            ['date', 'meal_type', 'notes'],
+            ['date', 'meal_type', 'notes', 'entity_type'],
             {
               ...listDiffDetails(
                 'items',
@@ -454,17 +499,75 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
     }
   };
 
+  // ── Entity picker step ────────────────────────────────────────────────────
+  // الخطوة الأولى في الإنشاء: لمن هذا الأمر؟ نفس ترتيب صفحة أوامر التشغيل.
+  if (step === 'pick_entity') {
+    return (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-start justify-between gap-3">
+            <div>
+              <h3 className="font-bold text-slate-800">أمر تسليم لمن؟</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                اختَر الفئة أولاً — تُعرض بعدها أوامر التشغيل الخاصة بها فقط.
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className="w-8 h-8 shrink-0 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-lg"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="p-4 grid grid-cols-2 gap-3">
+            {(['beneficiary', 'companion'] as EntityType[]).map(t => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => { setEntityType(t); setStep('pick_mode'); }}
+                className={`flex flex-col items-center gap-2 py-5 rounded-xl border-2 transition-all hover:shadow-md ${
+                  t === 'beneficiary'
+                    ? 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800'
+                    : 'border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800'
+                }`}
+              >
+                <span className="text-3xl">{ENTITY_ICON[t]}</span>
+                <span className="font-bold text-sm">{ENTITY_TYPE_LABELS_PLURAL[t]}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ── Mode picker step ──────────────────────────────────────────────────────
   if (step === 'pick_mode') {
     return (
       <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-            <h3 className="font-bold text-slate-800">إنشاء أمر تسليم</h3>
-            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-lg">✕</button>
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="font-bold text-slate-800">إنشاء أمر تسليم</h3>
+              <span className={`badge ${ENTITY_BADGE_STYLES[entityType]}`}>
+                {ENTITY_ICON[entityType]} {ENTITY_TYPE_LABELS_PLURAL[entityType]}
+              </span>
+            </div>
+            <button onClick={onClose} className="w-8 h-8 shrink-0 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-lg">✕</button>
           </div>
           <div className="p-5 space-y-3">
-            <p className="text-sm text-slate-500">اختر طريقة إنشاء الأمر:</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm text-slate-500">اختر طريقة إنشاء الأمر:</p>
+              {/* الرجوع للفئة يعيد ضبط الاختيار قبل ما يُبنى الأمر — بعد
+                  الدخول لشاشة التحرير الفئة تتبع الأمر نفسه */}
+              <button
+                type="button"
+                onClick={() => { setStep('pick_entity'); setSourceOrderId(null); }}
+                className="text-xs font-semibold text-slate-500 hover:text-slate-700 px-2 py-1 rounded-lg hover:bg-slate-100"
+              >
+                ← تغيير الفئة
+              </button>
+            </div>
             <button
               type="button"
               onClick={() => { setMode('from_order'); }}
@@ -503,7 +606,9 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
 
             {mode === 'from_order' && (
               <div className="pt-2 space-y-2">
-                <label className="label">اختر أمر التشغيل</label>
+                <label className="label">
+                  اختر أمر التشغيل ({ENTITY_TYPE_LABELS_PLURAL[entityType]})
+                </label>
                 <select
                   className="input-field"
                   defaultValue=""
@@ -513,12 +618,18 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
                   <option value="">— اختر أمر تشغيل —</option>
                   {productionOrders.map(o => (
                     <option key={o.id} value={o.id}>
-                      {o.date} — {DELIVERY_MEAL_TYPE_LABELS[o.meal_type]} ({o.entity_type === 'companion' ? 'مرافقين' : 'مستفيدين'})
+                      {o.date} — {DELIVERY_MEAL_TYPE_LABELS[o.meal_type]}
                     </option>
                   ))}
                 </select>
                 {loadingFromOrder && (
                   <p className="text-xs text-slate-500">جاري جلب بيانات الأمر...</p>
+                )}
+                {!loadingFromOrder && productionOrders.length === 0 && (
+                  <p className="text-xs text-amber-600">
+                    ما فيه أوامر تشغيل لـ{ENTITY_TYPE_LABELS_PLURAL[entityType]} —
+                    أنشئ أمر تشغيل أولاً، أو اختر «إنشاء يدوي».
+                  </p>
                 )}
               </div>
             )}
@@ -537,6 +648,9 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
             <h2 className="text-lg font-bold text-slate-800">
               {isEdit ? `تعديل أمر التسليم — ${editingOrder!.order_number}` : 'إنشاء أمر تسليم جديد'}
             </h2>
+            <span className={`badge ${ENTITY_BADGE_STYLES[entityType]}`}>
+              {ENTITY_ICON[entityType]} {ENTITY_TYPE_LABELS_PLURAL[entityType]}
+            </span>
             {sourceOrderId && (
               <span className="badge bg-emerald-100 text-emerald-700">من أمر تشغيل</span>
             )}

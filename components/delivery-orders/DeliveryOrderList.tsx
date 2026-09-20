@@ -4,8 +4,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { logActivity } from '@/lib/activity-log';
-import type { DeliveryOrder } from '@/lib/types';
-import { DELIVERY_MEAL_TYPE_LABELS, DAY_LABELS } from '@/lib/types';
+import type { DeliveryOrder, EntityType } from '@/lib/types';
+import {
+  DELIVERY_MEAL_TYPE_LABELS,
+  DAY_LABELS,
+  ENTITY_BADGE_STYLES,
+  ENTITY_TYPE_LABELS_PLURAL,
+} from '@/lib/types';
+
+/** الأوامر المُنشأة قبل ترقية الفئة بلا عمود — كلها كانت للمستفيدين */
+const entityOf = (o: DeliveryOrder): EntityType =>
+  o.entity_type === 'companion' ? 'companion' : 'beneficiary';
 import { formatDate, formatDateTime } from '@/lib/date-utils';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import { exportXLSX } from '@/lib/xlsx-utils';
@@ -40,6 +49,7 @@ export default function DeliveryOrderList() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   const [search, setSearch] = useState('');
+  const [entityFilter, setEntityFilter] = useState<'all' | EntityType>('all');
   const [importOpen, setImportOpen] = useState(false);
 
   const fetchOrders = useCallback(async () => {
@@ -88,10 +98,20 @@ export default function DeliveryOrderList() {
     });
   };
 
+  const entityCounts = useMemo(() => {
+    let beneficiary = 0;
+    let companion = 0;
+    for (const o of orders) entityOf(o) === 'companion' ? companion++ : beneficiary++;
+    return { all: orders.length, beneficiary, companion };
+  }, [orders]);
+
   const filteredOrders = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return orders;
-    return orders.filter(order => {
+    const byEntity = entityFilter === 'all'
+      ? orders
+      : orders.filter(o => entityOf(o) === entityFilter);
+    if (!q) return byEntity;
+    return byEntity.filter(order => {
       const dayLabel = DAY_LABELS[new Date(order.date).getDay()] ?? '';
       const itemsText = (order.delivery_order_items ?? [])
         .map(i => i.display_name)
@@ -102,6 +122,7 @@ export default function DeliveryOrderList() {
         formatDate(order.date),
         dayLabel,
         DELIVERY_MEAL_TYPE_LABELS[order.meal_type] ?? '',
+        ENTITY_TYPE_LABELS_PLURAL[entityOf(order)],
         order.delivery_locations?.name ?? '',
         order.delivery_locations?.cities?.name ?? '',
         order.created_by_name ?? '',
@@ -110,7 +131,7 @@ export default function DeliveryOrderList() {
       ].join(' ').toLowerCase();
       return haystack.includes(q);
     });
-  }, [orders, search]);
+  }, [orders, search, entityFilter]);
 
   const pagination = usePagination(filteredOrders, { pageSize: 25 });
 
@@ -190,7 +211,7 @@ export default function DeliveryOrderList() {
         <div>
           <h1 className="text-2xl font-bold text-slate-800">أوامر التسليم</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            {search.trim()
+            {search.trim() || entityFilter !== 'all'
               ? `${filteredOrders.length} نتيجة من ${orders.length} أمر تسليم`
               : `${orders.length} أمر تسليم`}
           </p>
@@ -250,6 +271,32 @@ export default function DeliveryOrderList() {
             </button>
           )}
         </div>
+
+        {/* فلتر الفئة — نفس تقسيم أوامر التشغيل، عشان تفصل أوامر المرافقين
+            عن المستفيدين بنظرة واحدة بدل ما تدوّرها في القائمة */}
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          {([
+            { key: 'all' as const, label: 'الكل', count: entityCounts.all },
+            { key: 'beneficiary' as const, label: ENTITY_TYPE_LABELS_PLURAL.beneficiary, count: entityCounts.beneficiary },
+            { key: 'companion' as const, label: ENTITY_TYPE_LABELS_PLURAL.companion, count: entityCounts.companion },
+          ]).map(t => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => { setEntityFilter(t.key); pagination.setPage(1); }}
+              className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                entityFilter === t.key
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              {t.label}
+              <span className={`mr-1.5 ${entityFilter === t.key ? 'opacity-80' : 'text-slate-400'}`}>
+                {t.count}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Table */}
@@ -285,6 +332,7 @@ export default function DeliveryOrderList() {
                   <th className="table-header">رقم الأمر</th>
                   <th className="table-header">التاريخ</th>
                   <th className="table-header">اليوم</th>
+                  <th className="table-header">الفئة</th>
                   <th className="table-header">نوع الوجبة</th>
                   <th className="table-header">موقع التسليم</th>
                   <th className="table-header">المدينة</th>
@@ -308,6 +356,11 @@ export default function DeliveryOrderList() {
                     </td>
                     <td className="table-cell text-slate-600">
                       {DAY_LABELS[new Date(order.date).getDay()] ?? '—'}
+                    </td>
+                    <td className="table-cell">
+                      <span className={`badge ${ENTITY_BADGE_STYLES[entityOf(order)]}`}>
+                        {ENTITY_TYPE_LABELS_PLURAL[entityOf(order)]}
+                      </span>
                     </td>
                     <td className="table-cell">
                       <span className={`badge ${MEAL_TYPE_STYLES[order.meal_type]}`}>

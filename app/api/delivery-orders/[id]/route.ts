@@ -3,19 +3,30 @@ import { getCachedUser } from '@/lib/auth';
 import { NextResponse, type NextRequest } from 'next/server';
 import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
 import { uuidSchema, deliveryOrderSchema, parseJson } from '@/lib/validation';
+import { deliveryOrderSelect, isMissingEntityTypeColumn } from '@/lib/delivery-order-select';
 
 export const dynamic = 'force-dynamic';
 
-const SELECT_FULL = `
-  id, order_number, source_order_id, date, meal_type,
-  delivery_location_id, creator_id, created_by_name, created_by_phone,
-  delivery_date, delivery_time, notes,
-  creator_signature_url, receiver_signature_url,
-  created_at, updated_at,
-  delivery_locations(id, name, city_id, created_at, cities(id, name, created_at)),
-  delivery_creators(id, name, phone, created_at),
-  delivery_order_items(id, delivery_order_id, display_name, meal_type, quantity, receiver_signature_url, position, created_at)
-`;
+/** الحد الأدنى الذي تلمسه هذه الواجهة من صف الأمر — البنود تُرتَّب قبل الإرسال */
+type OrderRowWithItems = Record<string, unknown> & {
+  delivery_order_items?: { position: number }[];
+};
+
+
+/** قراءة الأمر كاملاً، مع تجاوز عمود الفئة لو الترقية ما اتشغّلت بعد */
+async function readFullOrder(
+  supabase: ReturnType<typeof createClient>,
+  id: string,
+) {
+  const readOne = (select: string) =>
+    supabase.from('delivery_orders').select(select).eq('id', id).single();
+
+  const first = await readOne(deliveryOrderSelect(true));
+  if (first.error && isMissingEntityTypeColumn(first.error.message)) {
+    return readOne(deliveryOrderSelect(false));
+  }
+  return first;
+}
 
 export async function GET(_request: NextRequest, { params }: { params: { id: string } }) {
   if (!uuidSchema.safeParse(params.id).success) {
@@ -26,20 +37,15 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
   const user = await getCachedUser(supabase);
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const { data, error } = await supabase
-    .from('delivery_orders')
-    .select(SELECT_FULL)
-    .eq('id', params.id)
-    .single();
+  const { data, error } = await readFullOrder(supabase, params.id);
 
   if (error || !data) {
     return NextResponse.json({ error: 'أمر التسليم غير موجود' }, { status: 404 });
   }
 
-  const items = (data.delivery_order_items ?? []).slice().sort(
-    (a: { position: number }, b: { position: number }) => a.position - b.position
-  );
-  return NextResponse.json({ ...data, delivery_order_items: items });
+  const row = data as unknown as OrderRowWithItems;
+  const items = (row.delivery_order_items ?? []).slice().sort((a, b) => a.position - b.position);
+  return NextResponse.json({ ...row, delivery_order_items: items });
 }
 
 export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
@@ -66,9 +72,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
 
   const { items, ...orderData } = parsed.data;
 
-  const { error: updateError } = await supabase
-    .from('delivery_orders')
-    .update({
+  const orderRow = {
       source_order_id: orderData.source_order_id ?? null,
       date: orderData.date,
       meal_type: orderData.meal_type,
@@ -81,8 +85,17 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       notes: orderData.notes ?? null,
       creator_signature_url: orderData.creator_signature_url ?? null,
       receiver_signature_url: orderData.receiver_signature_url ?? null,
-    })
-    .eq('id', params.id);
+      entity_type: orderData.entity_type ?? 'beneficiary',
+  };
+
+  const updateOrder = (row: Record<string, unknown>) =>
+    supabase.from('delivery_orders').update(row).eq('id', params.id);
+
+  let { error: updateError } = await updateOrder(orderRow);
+  if (updateError && isMissingEntityTypeColumn(updateError.message)) {
+    const { entity_type: _dropped, ...withoutEntityType } = orderRow;
+    ({ error: updateError } = await updateOrder(withoutEntityType));
+  }
 
   if (updateError) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });
@@ -110,11 +123,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
     return NextResponse.json({ error: insertError.message }, { status: 500 });
   }
 
-  const { data: full } = await supabase
-    .from('delivery_orders')
-    .select(SELECT_FULL)
-    .eq('id', params.id)
-    .single();
+  const { data: full } = await readFullOrder(supabase, params.id);
 
   return NextResponse.json(full);
 }
