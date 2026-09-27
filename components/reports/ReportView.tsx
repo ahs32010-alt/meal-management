@@ -9,6 +9,7 @@ import { formatDate, formatDateFull, formatNow } from '@/lib/date-utils';
 import { MENU_DAYS, WEEK_NUMBERS, WEEK_TITLES } from '@/lib/menu-utils';
 import type { MenuPeriodReport } from '@/lib/menu-period-report';
 import OrderSelect from '@/components/shared/OrderSelect';
+import FixedExtrasView from '@/components/reports/FixedExtrasView';
 
 // ── Styles ──────────────────────────────────────────────────────────────────
 const MEAL_TYPE_STYLES: Record<string, string> = {
@@ -41,7 +42,7 @@ interface FullReport {
   fixedSummary: MealCount[];
 }
 
-type Mode = 'daily' | 'period';
+type Mode = 'daily' | 'period' | 'extras';
 
 // ── SummaryPair ──────────────────────────────────────────────────────────────
 function SummaryPair({
@@ -377,7 +378,7 @@ export default function ReportView({ initialOrderId }: Props) {
         <div>
           <h1 className="text-2xl font-bold text-slate-800">التقارير</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            {mode === 'daily' ? 'تقرير تفصيلي لأمر التشغيل' : 'إحصاء الأصناف من قائمة الطعام'}
+            {mode === 'daily' ? 'تقرير تفصيلي لأمر التشغيل' : mode === 'extras' ? 'حصر الأصناف اليومية الإضافية لفترة بالتاريخ' : 'إحصاء الأصناف من قائمة الطعام'}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -393,6 +394,12 @@ export default function ReportView({ initialOrderId }: Props) {
               className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'period' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
             >
               فترة زمنية
+            </button>
+            <button
+              onClick={() => setMode('extras')}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'extras' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              حصر الإضافات
             </button>
           </div>
           {mode === 'daily' && report && (
@@ -854,6 +861,9 @@ export default function ReportView({ initialOrderId }: Props) {
           })()}
         </>
       )}
+
+      {/* ══════════════════════ FIXED EXTRAS MODE ══════════════════════════ */}
+      {mode === 'extras' && <FixedExtrasView />}
     </div>
   );
 }
