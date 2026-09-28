@@ -10,6 +10,7 @@ export type PageKey =
   | 'beneficiaries'
   | 'companions'
   | 'meals'
+  | 'diets'
   | 'menu'
   | 'orders'
   | 'delivery_orders'
@@ -50,6 +51,7 @@ export const PAGES: { key: PageKey; label: string; href: string }[] = [
   { key: 'beneficiaries', label: 'المستفيدون',   href: '/beneficiaries' },
   { key: 'companions',    label: 'المرافقون',    href: '/companions' },
   { key: 'meals',         label: 'الأصناف',      href: '/meals' },
+  { key: 'diets',         label: 'النظام الغذائي', href: '/diets' },
   { key: 'menu',          label: 'قائمة الطعام', href: '/menu' },
   { key: 'orders',          label: 'أوامر التشغيل', href: '/orders' },
   { key: 'delivery_orders', label: 'أوامر التسليم', href: '/delivery-orders' },
@@ -77,6 +79,7 @@ export const PAGE_AVAILABLE_ACTIONS: Record<PageKey, PermissionAction[]> = {
   beneficiaries: ['view', 'add', 'edit', 'delete'],
   companions:    ['view', 'add', 'edit', 'delete'],
   meals:         ['view', 'add', 'edit', 'delete'],
+  diets:         ['view', 'add', 'edit', 'delete'],
   menu:          ['view', 'edit'],
   orders:          ['view', 'add', 'edit', 'delete'],
   delivery_orders: ['view', 'add', 'edit', 'delete'],

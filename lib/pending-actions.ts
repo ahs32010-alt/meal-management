@@ -34,8 +34,13 @@ export interface PendingAction {
 export interface CreatePayload {
   // البيانات الأساسية للمستفيد/المرافق
   beneficiary: Record<string, unknown>;
-  // قائمة المحظورات
+  // قائمة المحظورات (الشخصية فقط — محظورات الأنظمة تُشتق من diet_ids)
   exclusions: Array<{ meal_id: string; alternative_meal_id: string | null }>;
+  /**
+   * الأنظمة الغذائية المسندة. اختيارية: غيابها (طلب قديم أو قبل ترقية
+   * diet-systems) يعني «لا تمسّ الأنظمة»، والمصفوفة الفارغة تعني «أزلها كلها».
+   */
+  diet_ids?: string[];
   // قائمة الأصناف الثابتة
   fixed_meals: Array<{
     day_of_week: number;
@@ -70,6 +75,36 @@ export interface CreatePayload {
  * لو الجدول غير موجود (ترقية القرارات ما اتشغّلت) نتجاهل بصمت بدل ما نفشّل
  * الموافقة كلها — بقية بيانات المستفيد تُطبَّق كما هي.
  */
+/**
+ * إسناد الأنظمة الغذائية لمستفيد — بالفرق (حذف المُزال وإدراج الجديد) فيبقى
+ * ترتيب الإسناد. undefined = الطلب لا يحمل أنظمة → لا نمسّها. المزامنة مع
+ * exclusions تجري في القاعدة (diet-systems-migration.sql).
+ */
+async function setBeneficiaryDiets(
+  supabase: SupabaseClient,
+  beneficiaryId: string,
+  dietIds: string[] | undefined,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!dietIds) return { ok: true };
+  const { data, error } = await supabase
+    .from('beneficiary_diets').select('diet_id').eq('beneficiary_id', beneficiaryId);
+  if (error) return { ok: false, error: error.message };
+  const before = new Set((data ?? []).map((r: { diet_id: string }) => r.diet_id));
+  const removed = [...before].filter(d => !dietIds.includes(d));
+  const added = dietIds.filter(d => !before.has(d));
+  if (removed.length > 0) {
+    const { error: e } = await supabase.from('beneficiary_diets').delete()
+      .eq('beneficiary_id', beneficiaryId).in('diet_id', removed);
+    if (e) return { ok: false, error: e.message };
+  }
+  if (added.length > 0) {
+    const { error: e } = await supabase.from('beneficiary_diets')
+      .insert(added.map(diet_id => ({ beneficiary_id: beneficiaryId, diet_id })));
+    if (e) return { ok: false, error: e.message };
+  }
+  return { ok: true };
+}
+
 async function replaceMenuOverrides(
   supabase: SupabaseClient,
   beneficiaryId: string,
@@ -393,6 +428,9 @@ export async function approveAction(
         if (fmErr) return { ok: false, error: `تم إنشاء المستفيد لكن الأصناف الثابتة فشلت: ${fmErr.message}` };
       }
 
+      const dRes = await setBeneficiaryDiets(supabase, newId, cp.diet_ids);
+      if (!dRes.ok) return { ok: false, error: `تم إنشاء المستفيد لكن الأنظمة الغذائية فشلت: ${dRes.error}` };
+
       const ovRes = await replaceMenuOverrides(supabase, newId, cp.menu_overrides);
       if (!ovRes.ok) return { ok: false, error: `تم إنشاء المستفيد لكن قرارات المنيو فشلت: ${ovRes.error}` };
 
@@ -416,8 +454,14 @@ export async function approveAction(
       // قرأناها بعده سجّلنا «ما تغيّر شيء» بينما التغيير حصل فعلاً.
       const { data: beforeRow } = await supabase
         .from('beneficiaries').select('*').eq('id', id).maybeSingle();
-      const { data: beforeExRows } = await supabase
-        .from('exclusions').select('meal_id, alternative_meal_id').eq('beneficiary_id', id);
+      // الشخصية فقط — صفوف الأنظمة ليست ما يحرّره الطلب (diet_id اختياري قبل ترقيته)
+      type ExRow = { meal_id: string; alternative_meal_id: string | null; diet_id?: string | null };
+      const exWithDiet = await supabase
+        .from('exclusions').select('meal_id, alternative_meal_id, diet_id').eq('beneficiary_id', id);
+      const exRes = exWithDiet.error
+        ? await supabase.from('exclusions').select('meal_id, alternative_meal_id').eq('beneficiary_id', id)
+        : exWithDiet;
+      const beforeExRows = ((exRes.data ?? []) as ExRow[]).filter(r => !r.diet_id);
       const { data: beforeFmRows } = await supabase
         .from('beneficiary_fixed_meals')
         .select('meal_id, meal_type, day_of_week, quantity, is_alternative')
@@ -450,6 +494,9 @@ export async function approveAction(
       }
 
       // استبدال قرارات المنيو
+      const dRes = await setBeneficiaryDiets(supabase, id, cp.diet_ids);
+      if (!dRes.ok) return { ok: false, error: `تحديث الأنظمة الغذائية فشل: ${dRes.error}` };
+
       const ovRes = await replaceMenuOverrides(supabase, id, cp.menu_overrides);
       if (!ovRes.ok) return { ok: false, error: `تحديث قرارات المنيو فشل: ${ovRes.error}` };
 

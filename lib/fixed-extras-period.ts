@@ -47,6 +47,10 @@ export interface FixedExtrasRow {
   total: number;
   /** عدد المستفيدين الذين يأخذون هذا الصنف في الفترة */
   beneficiaries: number;
+  /** سعر بيع الحبة من «الأسعار والتكاليف» (meal_pricing) — null = غير مسعَّر */
+  unitPrice: number | null;
+  /** الكمية × سعر الحبة (صفر لو غير مسعَّر) */
+  totalPrice: number;
 }
 
 export interface FixedExtrasReport {
@@ -60,8 +64,12 @@ export interface FixedExtrasReport {
   /** خانات حُسبت من التسجيل وحده (لا يوجد لها أمر) */
   slotsFromRegistration: number;
   rows: FixedExtrasRow[];
-  byBeneficiary: { id: string; name: string; code: string; total: number; items: { meal: Meal; qty: number }[] }[];
+  byBeneficiary: { id: string; name: string; code: string; total: number; totalPrice: number; items: { meal: Meal; qty: number }[] }[];
   grandTotal: number;
+  /** مجموع أسعار كل الإضافات المسعَّرة */
+  grandTotalPrice: number;
+  /** أصناف ظهرت في الحصر بلا سعر بيع — مجموعها ناقص بقدرها */
+  unpricedCount: number;
 }
 
 /** كل التواريخ من from إلى to شاملة (YYYY-MM-DD). */
@@ -90,8 +98,15 @@ export function computeFixedExtras(params: {
   orders: FixedExtrasOrder[];
   overrides: (PersonalMenuOverride & { beneficiary_id: string })[];
   meals: Record<string, Meal>;
+  /** سعر بيع الحبة لكل صنف (meal_id → سعر) */
+  prices?: Record<string, number>;
 }): FixedExtrasReport {
   const { from, to, mealTypes, entityType, meals } = params;
+  const prices = params.prices ?? {};
+  const priceOf = (id: string): number | null =>
+    typeof prices[id] === 'number' && Number.isFinite(prices[id]) ? prices[id] : null;
+  // تقريب لخانتين بعد كل ضرب — تفادي 0.1+0.2 في المجاميع
+  const money = (v: number) => Math.round(v * 100) / 100;
   const dates = datesInRange(from, to);
   const entityOf = (e?: EntityType | null): EntityType => (e === 'companion' ? 'companion' : 'beneficiary');
 
@@ -117,7 +132,7 @@ export function computeFixedExtras(params: {
     if (!meal || qty <= 0) return;
     let row = rows.get(mealId);
     if (!row) {
-      row = { meal, byMealType: ZERO(), total: 0, beneficiaries: 0, benIds: new Set() };
+      row = { meal, byMealType: ZERO(), total: 0, beneficiaries: 0, unitPrice: priceOf(mealId), totalPrice: 0, benIds: new Set() };
       rows.set(mealId, row);
     }
     row.byMealType[mealType] += qty;
@@ -181,12 +196,17 @@ export function computeFixedExtras(params: {
       const items = [...m.entries()]
         .map(([mealId, qty]) => ({ meal: meals[mealId], qty }))
         .sort((a, b) => b.qty - a.qty);
-      return { id, name: b.name, code: b.code, total: items.reduce((s, x) => s + x.qty, 0), items };
+      const totalPrice = money(items.reduce((s, x) => s + x.qty * (priceOf(x.meal.id) ?? 0), 0));
+      return { id, name: b.name, code: b.code, total: items.reduce((s, x) => s + x.qty, 0), totalPrice, items };
     })
     .sort((a, b) => a.name.localeCompare(b.name, 'ar'));
 
   const outRows = [...rows.values()]
-    .map(({ benIds, ...r }) => ({ ...r, beneficiaries: benIds.size }))
+    .map(({ benIds, ...r }) => ({
+      ...r,
+      beneficiaries: benIds.size,
+      totalPrice: r.unitPrice === null ? 0 : money(r.total * r.unitPrice),
+    }))
     .sort((a, b) => b.total - a.total);
 
   return {
@@ -199,6 +219,8 @@ export function computeFixedExtras(params: {
     rows: outRows,
     byBeneficiary,
     grandTotal: outRows.reduce((s, r) => s + r.total, 0),
+    grandTotalPrice: money(outRows.reduce((s, r) => s + r.totalPrice, 0)),
+    unpricedCount: outRows.filter(r => r.unitPrice === null).length,
   };
 }
 
@@ -252,8 +274,13 @@ export async function buildFixedExtrasReport(
     fetchAllRows((a, b) =>
       supabase.from('meals').select('id, name, english_name, type, is_snack').order('id').range(a, b));
 
-  let [bensRes, ordersRes, ovRes, mealsRes] = await Promise.all([
-    fetchBens(true), fetchOrders(true), fetchOverrides(), fetchMeals(),
+  // أسعار البيع من «الأسعار والتكاليف» — الجدول اختياري (costs-selling-price-migration)
+  const fetchPrices = () =>
+    fetchAllRows((a, b) =>
+      supabase.from('meal_pricing').select('meal_id, selling_price').order('meal_id').range(a, b));
+
+  let [bensRes, ordersRes, ovRes, mealsRes, pricesRes] = await Promise.all([
+    fetchBens(true), fetchOrders(true), fetchOverrides(), fetchMeals(), fetchPrices(),
   ]);
   if (bensRes.error) bensRes = await fetchBens(false);
   if (ordersRes.error) ordersRes = await fetchOrders(false);
@@ -267,6 +294,14 @@ export async function buildFixedExtrasReport(
     date: string; meal_type: MealType; entity_type?: EntityType;
     week_number?: number; day_of_week?: number; order_items: { meal_id: string }[] | null;
   };
+  // numeric يرجع نصاً عبر PostgREST — نحوّله رقماً هنا
+  const prices: Record<string, number> = {};
+  if (!pricesRes.error) {
+    for (const p of (pricesRes.data ?? []) as unknown as { meal_id: string; selling_price: number | string | null }[]) {
+      const v = Number(p.selling_price);
+      if (p.selling_price !== null && Number.isFinite(v)) prices[p.meal_id] = v;
+    }
+  }
   const meals: Record<string, Meal> = {};
   for (const m of (mealsRes.data ?? []) as unknown as Meal[]) meals[m.id] = m;
 
@@ -285,5 +320,6 @@ export async function buildFixedExtrasReport(
     // جدول القرارات قد لا يكون موجوداً قبل ترقيته — نكمل بدونه
     overrides: ovRes.error ? [] : ovRes.data ?? [],
     meals,
+    prices,
   });
 }

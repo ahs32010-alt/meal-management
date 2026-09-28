@@ -247,7 +247,10 @@ async function planSetExclusion(
     .select('*')
     .eq('beneficiary_id', person.item.id)
     .eq('meal_id', meal.item.id);
-  const existing = ((existingRaw as unknown as Array<{ id: string; alternative_meal_id: string | null }>) ?? [])[0];
+  // صف من نظام غذائي لا يُعدَّل مباشرة (المزامنة ترجّعه) — منع شخصي جديد
+  // على نفس الصنف يغلب النظام، فنعامله كإضافة
+  const existing = ((existingRaw as unknown as Array<{ id: string; alternative_meal_id: string | null; diet_id?: string | null }>) ?? [])
+    .filter(e => !e.diet_id)[0];
 
   const warnings: string[] = [];
   if (!person.item.is_active) warnings.push('هذا الشخص معطّل مؤقتاً — التعديل يُحفظ لكن لن يظهر في الأوامر حتى تفعّله.');
@@ -329,12 +332,23 @@ async function planClearExclusion(
     .select('*')
     .eq('beneficiary_id', person.item.id)
     .eq('meal_id', meal.item.id);
-  const existing = ((existingRaw as unknown as Array<{ id: string }>) ?? [])[0];
+  const existing = ((existingRaw as unknown as Array<{ id: string; diet_id?: string | null }>) ?? [])[0];
 
   if (!existing) {
     return problem(
       'لا يوجد ما يُحذف',
       `«${meal.item.name}» غير ممنوع أصلاً عن ${person.item.name}.`,
+    );
+  }
+
+  // المنع قادم من نظام غذائي — حذفه يرجع بالمزامنة فوراً، فنوجّه للمكان الصحيح
+  if (existing.diet_id) {
+    const { data: diet } = await supabase.from('diet_systems').select('name').eq('id', existing.diet_id).maybeSingle();
+    const dietName = (diet as { name?: string } | null)?.name ?? 'نظامه الغذائي';
+    return problem(
+      'المنع من نظام غذائي',
+      `«${meal.item.name}» ممنوع عن ${person.item.name} لأنه ضمن نظام «${dietName}». ` +
+      'عدّل النظام من صفحة «النظام الغذائي»، أو أزل النظام عن الشخص من صفحته.',
     );
   }
 

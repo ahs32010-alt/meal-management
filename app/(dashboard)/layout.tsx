@@ -15,6 +15,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/':              'الرئيسية',
   '/beneficiaries': 'المستفيدون',
   '/meals':         'الأصناف',
+  '/diets':         'النظام الغذائي',
   '/orders':          'أوامر التشغيل',
   '/delivery-orders': 'أوامر التسليم',
   '/costs':           'الأسعار والتكاليف',

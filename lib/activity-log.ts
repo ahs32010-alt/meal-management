@@ -19,7 +19,8 @@ export type ActivityEntityType =
   | 'meal_price'
   | 'cost_unit'
   | 'recipe_item'
-  | 'order_cost';
+  | 'order_cost'
+  | 'diet_system';
 
 export interface LogActivityInput {
   action: ActivityAction;
@@ -102,6 +103,7 @@ export const ENTITY_LABELS: Record<ActivityEntityType, string> = {
   cost_unit: 'وحدة قياس',
   recipe_item: 'مكوّن وصفة',
   order_cost: 'تكلفة أمر',
+  diet_system: 'نظام غذائي',
 };
 
 export const ACTION_LABELS_AR: Record<ActivityAction, string> = {
@@ -131,4 +133,5 @@ export const ENTITY_STYLES: Record<ActivityEntityType, string> = {
   cost_unit: 'bg-sky-50 text-sky-700 border-sky-200',
   recipe_item: 'bg-orange-50 text-orange-700 border-orange-200',
   order_cost: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200',
+  diet_system: 'bg-green-50 text-green-700 border-green-200',
 };

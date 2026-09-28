@@ -81,6 +81,8 @@ export interface Beneficiary {
   entity_type?: EntityType;
   exclusions?: Exclusion[];
   fixed_meals?: BeneficiaryFixedMeal[];
+  /** الأنظمة الغذائية المسندة (beneficiary_diets) — اختياري قبل diet-systems-migration */
+  diets?: { diet_id: string }[];
 }
 
 export interface Meal {
@@ -102,8 +104,30 @@ export interface Exclusion {
   beneficiary_id: string;
   meal_id: string;
   alternative_meal_id?: string | null;
+  /**
+   * مصدر المحظور: null = شخصي (يُحرَّر من صفحة المستفيد)، وإلا = مشتق من
+   * نظام غذائي (يُكتب ويُزال تلقائياً بالمزامنة في diet-systems-migration.sql).
+   */
+  diet_id?: string | null;
   meals?: Meal;
   alternative_meal?: Meal;
+}
+
+/** نظام غذائي — اسم + أصناف مستبعدة، يُسند لمستفيد أو أكثر */
+export interface DietSystem {
+  id: string;
+  name: string;
+  description?: string | null;
+  created_at: string;
+  exclusions?: DietSystemExclusion[];
+  beneficiary_diets?: { beneficiary_id: string }[];
+}
+
+export interface DietSystemExclusion {
+  id?: string;
+  diet_id?: string;
+  meal_id: string;
+  alternative_meal_id?: string | null;
 }
 
 export interface BeneficiaryFixedMeal {

@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
-import { formatDate, formatNow } from '@/lib/date-utils';
+import { APP_TIME_ZONE } from '@/lib/date-utils';
 import type { FixedExtrasReport } from '@/lib/fixed-extras-period';
 import { exportPagesToPdf } from '@/components/reports/node-pdf-export';
+import { formatMoney } from '@/lib/costs';
 
 /**
  * نسخة الطباعة من «حصر الإضافات»: صفحات A4 مصمَّمة للورق (٧٩٤×١١٢٣ بكسل =
@@ -32,42 +33,60 @@ const C = {
 
 const FONT = "'Cairo', Tahoma, Arial, sans-serif";
 
+/** 2026-09-01 → 01/09/2026 — أرقام قصيرة لا تنكسر على سطرين مثل اسم الشهر */
+const dmy = (iso: string) => iso.split('-').reverse().join('/');
+const stampNow = () => {
+  const d = new Date();
+  const date = d.toLocaleDateString('en-GB', { timeZone: APP_TIME_ZONE });
+  const time = d.toLocaleTimeString('en-GB', { timeZone: APP_TIME_ZONE, hour: '2-digit', minute: '2-digit' });
+  return `${date} — ${time}`;
+};
+
 type Report = FixedExtrasReport;
 type Page = { first: boolean; main: number[]; mainTotal: boolean; bens: number[] };
 
 const th: CSSProperties = {
-  background: C.brand, color: '#fff', fontSize: 15, fontWeight: 700,
-  padding: '10px 12px', textAlign: 'center', border: `1px solid ${C.brand}`,
+  background: C.brand, color: '#fff', fontSize: 14, fontWeight: 700, lineHeight: 1.35,
+  padding: '9px 6px', textAlign: 'center', border: `1px solid ${C.brand}`,
 };
 const td: CSSProperties = {
-  fontSize: 17, color: C.ink, padding: '9px 12px', textAlign: 'center',
-  border: `1px solid ${C.line}`, lineHeight: 1.5,
+  fontSize: 16, color: C.ink, padding: '8px 6px', textAlign: 'center',
+  border: `1px solid ${C.line}`, lineHeight: 1.45, overflowWrap: 'anywhere',
 };
+/** خلية الأسماء — محاذاة لليمين بهامش أوسع */
+const tdName: CSSProperties = { ...td, textAlign: 'right', paddingRight: 10, fontWeight: 600 };
+const num: CSSProperties = { fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
 
 function FirstHeader({ report }: { report: Report }) {
   const info: [string, string][] = [
-    ['الفترة', `${formatDate(report.from)} — ${formatDate(report.to)}`],
+    ['الفترة', `من ${dmy(report.from)} إلى ${dmy(report.to)}`],
     ['عدد الأيام', `${report.days} يوم`],
     ['الوجبات', report.mealTypes.map(t => MEAL_TYPE_LABELS[t]).join(' + ')],
     ['الفئة', report.entityType ? ENTITY_TYPE_LABELS_PLURAL[report.entityType] : 'الكل'],
   ];
   return (
     <div style={{ paddingBottom: SECTION_GAP }}>
-      <div style={{ borderBottom: `3px solid ${C.brand}`, paddingBottom: 14, marginBottom: 18, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-        <div>
+      <div style={{ borderBottom: `3px solid ${C.brand}`, paddingBottom: 14, marginBottom: 18, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16 }}>
+        <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 15, color: C.muted, fontWeight: 600 }}>مركز خطوة أمل</div>
           <div style={{ fontSize: 28, fontWeight: 800, color: C.ink, lineHeight: 1.3 }}>حصر الأصناف اليومية الإضافية</div>
         </div>
-        <div style={{ textAlign: 'center', background: C.brandSoft, border: `2px solid ${C.brand}`, borderRadius: 12, padding: '6px 18px' }}>
-          <div style={{ fontSize: 13, color: C.brand, fontWeight: 700 }}>إجمالي الإضافات</div>
-          <div style={{ fontSize: 30, color: C.brand, fontWeight: 800, lineHeight: 1.2 }}>{report.grandTotal}</div>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          <div style={{ textAlign: 'center', background: C.brandSoft, border: `2px solid ${C.brand}`, borderRadius: 12, padding: '6px 16px' }}>
+            <div style={{ fontSize: 13, color: C.brand, fontWeight: 700 }}>إجمالي الإضافات</div>
+            <div style={{ fontSize: 28, color: C.brand, fontWeight: 800, lineHeight: 1.2 }}>{report.grandTotal}</div>
+          </div>
+          <div style={{ textAlign: 'center', background: C.brandSoft, border: `2px solid ${C.brand}`, borderRadius: 12, padding: '6px 16px' }}>
+            <div style={{ fontSize: 13, color: C.brand, fontWeight: 700 }}>إجمالي السعر (ريال)</div>
+            <div dir="ltr" style={{ fontSize: 28, color: C.brand, fontWeight: 800, lineHeight: 1.2 }}>{formatMoney(report.grandTotalPrice)}</div>
+          </div>
         </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 0.8fr 1.2fr 0.9fr', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 0.7fr 1.3fr 0.9fr', gap: 10 }}>
         {info.map(([k, v]) => (
           <div key={k} style={{ border: `1px solid ${C.line}`, borderRadius: 10, padding: '8px 12px', background: C.zebra }}>
             <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{k}</div>
-            <div style={{ fontSize: 16, color: C.ink, fontWeight: 700 }}>{v}</div>
+            <div style={{ fontSize: 15, color: C.ink, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</div>
           </div>
         ))}
       </div>
@@ -91,43 +110,55 @@ function MainTable({ report, rows, total }: { report: Report; rows: number[]; to
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
       <colgroup>
-        <col style={{ width: 48 }} />
+        <col style={{ width: 32 }} />
         <col />
-        {cols.map(t => <col key={t} style={{ width: 84 }} />)}
+        {cols.map(t => <col key={t} style={{ width: 52 }} />)}
+        <col style={{ width: 62 }} />
+        <col style={{ width: 70 }} />
         <col style={{ width: 92 }} />
-        <col style={{ width: 96 }} />
+        <col style={{ width: 72 }} />
       </colgroup>
       <thead data-m="main-head">
         <tr>
           <th style={th}>#</th>
-          <th style={{ ...th, textAlign: 'right' }}>الصنف</th>
+          <th style={{ ...th, textAlign: 'right', paddingRight: 10 }}>الصنف</th>
           {cols.map(t => <th key={t} style={th}>{MEAL_TYPE_LABELS[t]}</th>)}
-          <th style={th}>المجموع</th>
-          <th style={th}>المستفيدون</th>
+          <th style={th}>العدد</th>
+          <th style={th}>سعر<br />الحبة</th>
+          <th style={th}>الإجمالي<br /><span style={{ fontSize: 11, fontWeight: 600 }}>(ريال)</span></th>
+          <th style={{ ...th, fontSize: 13 }}>عدد<br />الأشخاص</th>
         </tr>
       </thead>
       <tbody>
         {report.rows.length === 0 && (
-          <tr><td colSpan={cols.length + 4} style={{ ...td, color: C.muted, padding: 24 }}>لا توجد إضافات مسجّلة لهذه الفترة</td></tr>
+          <tr><td colSpan={cols.length + 6} style={{ ...td, color: C.muted, padding: 24 }}>لا توجد إضافات مسجّلة لهذه الفترة</td></tr>
         )}
         {rows.map(i => {
           const r = report.rows[i];
           return (
             <tr key={r.meal.id} data-m="main-row" style={{ background: i % 2 ? C.zebra : '#fff' }}>
-              <td style={{ ...td, color: C.muted, fontSize: 14 }}>{i + 1}</td>
-              <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{r.meal.name}</td>
-              {cols.map(t => <td key={t} style={td}>{r.byMealType[t] || <span style={{ color: '#cbd5e1' }}>—</span>}</td>)}
-              <td style={{ ...td, fontWeight: 800, fontSize: 19, color: C.brand }}>{r.total}</td>
-              <td style={{ ...td, color: C.muted }}>{r.beneficiaries}</td>
+              <td style={{ ...td, color: C.muted, fontSize: 13 }}>{i + 1}</td>
+              <td style={tdName}>{r.meal.name}</td>
+              {cols.map(t => <td key={t} style={{ ...td, ...num }}>{r.byMealType[t] || <span style={{ color: '#cbd5e1' }}>—</span>}</td>)}
+              <td style={{ ...td, ...num, fontWeight: 800, fontSize: 18, color: C.brand }}>{r.total}</td>
+              <td style={{ ...td, ...num, fontSize: 14 }}>
+                {r.unitPrice === null ? <span style={{ color: '#d97706', fontSize: 12 }}>بلا سعر</span> : formatMoney(r.unitPrice)}
+              </td>
+              <td style={{ ...td, ...num, fontSize: 15, fontWeight: 700, color: C.brand }}>
+                {r.unitPrice === null ? <span style={{ color: '#cbd5e1' }}>—</span> : formatMoney(r.totalPrice)}
+              </td>
+              <td style={{ ...td, ...num, color: C.muted, fontSize: 14 }}>{r.beneficiaries}</td>
             </tr>
           );
         })}
         {total && report.rows.length > 0 && (
           <tr data-m="main-total" style={{ background: C.brandSoft }}>
             <td style={{ ...td, borderTop: `2px solid ${C.brand}` }} />
-            <td style={{ ...td, textAlign: 'right', fontWeight: 800, borderTop: `2px solid ${C.brand}` }}>المجموع</td>
-            {cols.map(t => <td key={t} style={{ ...td, fontWeight: 800, borderTop: `2px solid ${C.brand}` }}>{colTotal(t)}</td>)}
-            <td style={{ ...td, fontWeight: 800, fontSize: 20, color: C.brand, borderTop: `2px solid ${C.brand}` }}>{report.grandTotal}</td>
+            <td style={{ ...tdName, fontWeight: 800, borderTop: `2px solid ${C.brand}` }}>المجموع</td>
+            {cols.map(t => <td key={t} style={{ ...td, ...num, fontWeight: 800, borderTop: `2px solid ${C.brand}` }}>{colTotal(t)}</td>)}
+            <td style={{ ...td, ...num, fontWeight: 800, fontSize: 18, color: C.brand, borderTop: `2px solid ${C.brand}` }}>{report.grandTotal}</td>
+            <td style={{ ...td, borderTop: `2px solid ${C.brand}` }} />
+            <td style={{ ...td, ...num, fontWeight: 800, fontSize: 15, color: C.brand, borderTop: `2px solid ${C.brand}` }}>{formatMoney(report.grandTotalPrice)}</td>
             <td style={{ ...td, borderTop: `2px solid ${C.brand}` }} />
           </tr>
         )}
@@ -144,19 +175,21 @@ function BenTable({ report, rows, gapBefore }: { report: Report; rows: number[];
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
         <colgroup>
-          <col style={{ width: 44 }} />
-          <col style={{ width: 170 }} />
-          <col style={{ width: 80 }} />
+          <col style={{ width: 32 }} />
+          <col style={{ width: 168 }} />
+          <col style={{ width: 70 }} />
           <col />
-          <col style={{ width: 76 }} />
+          <col style={{ width: 56 }} />
+          <col style={{ width: 84 }} />
         </colgroup>
         <thead data-m="ben-head">
           <tr>
             <th style={th}>#</th>
-            <th style={{ ...th, textAlign: 'right' }}>المستفيد</th>
+            <th style={{ ...th, textAlign: 'right', paddingRight: 10 }}>المستفيد</th>
             <th style={th}>الكود</th>
-            <th style={{ ...th, textAlign: 'right' }}>الإضافات</th>
-            <th style={th}>المجموع</th>
+            <th style={{ ...th, textAlign: 'right', paddingRight: 10 }}>الإضافات</th>
+            <th style={th}>العدد</th>
+            <th style={th}>السعر<br /><span style={{ fontSize: 11, fontWeight: 600 }}>(ريال)</span></th>
           </tr>
         </thead>
         <tbody>
@@ -164,13 +197,20 @@ function BenTable({ report, rows, gapBefore }: { report: Report; rows: number[];
             const b = report.byBeneficiary[i];
             return (
               <tr key={b.id} data-m="ben-row" style={{ background: i % 2 ? C.zebra : '#fff' }}>
-                <td style={{ ...td, color: C.muted, fontSize: 14 }}>{i + 1}</td>
-                <td style={{ ...td, textAlign: 'right', fontWeight: 600, fontSize: 16 }}>{b.name}</td>
-                <td style={{ ...td, fontSize: 14, color: C.muted }}>{b.code}</td>
-                <td style={{ ...td, textAlign: 'right', fontSize: 15 }}>
-                  {b.items.map(x => `${x.meal.name} ×${x.qty}`).join('، ')}
+                <td style={{ ...td, color: C.muted, fontSize: 13 }}>{i + 1}</td>
+                <td style={{ ...tdName, fontSize: 15 }}>{b.name}</td>
+                <td style={{ ...td, ...num, fontSize: 13, color: C.muted }}>{b.code}</td>
+                <td style={{ ...tdName, fontWeight: 400, fontSize: 14, lineHeight: 1.6 }}>
+                  {/* الفاصل خارج الـspan — هو نقطة الالتفاف بين الأصناف، والصنف نفسه لا ينكسر عن كميته */}
+                  {b.items.map((x, k) => (
+                    <span key={x.meal.id}>
+                      {k > 0 && '، '}
+                      <span style={{ whiteSpace: 'nowrap' }}>{x.meal.name} <b style={{ color: C.brand }}>×{x.qty}</b></span>
+                    </span>
+                  ))}
                 </td>
-                <td style={{ ...td, fontWeight: 800, color: C.brand }}>{b.total}</td>
+                <td style={{ ...td, ...num, fontWeight: 800, color: C.brand }}>{b.total}</td>
+                <td style={{ ...td, ...num, fontSize: 14, fontWeight: 700, color: C.brand }}>{formatMoney(b.totalPrice)}</td>
               </tr>
             );
           })}
@@ -250,7 +290,7 @@ export default function FixedExtrasPdf({ report, includeBens, onDone }: {
   const measureRef = useRef<HTMLDivElement>(null);
   const pagesRef = useRef<HTMLDivElement>(null);
   const [pages, setPages] = useState<Page[] | null>(null);
-  const [stamp] = useState(() => formatNow());
+  const [stamp] = useState(stampNow);
   const allMain = report.rows.map((_, i) => i);
   const allBens = includeBens ? report.byBeneficiary.map((_, i) => i) : [];
 

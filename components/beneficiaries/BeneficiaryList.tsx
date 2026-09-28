@@ -150,6 +150,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       // الصف، فلو ما انقرأ ظهرت كل الأصناف الثابتة «غير بديلة» وأي حفظ للمستفيد
       // يمسح العلامة — وتنتقل كميات في تقرير الأمر من خانة البدائل للثابتة.
       let withFixedAlt = true;
+      // الأنظمة الغذائية (diet-systems-migration) — diet_id يفصل المحظور الشخصي
+      // عن المشتق من نظام، فلا يحوّل حفظُ المستفيد محظوراتِ النظام إلى شخصية.
+      let withDiets = true;
       const fetchBens = (withFixedCategory: boolean, withEntityType: boolean, withFlags: boolean) => {
         const flagCols = withFlags ? ', no_fish, no_pasta_sandwich, low_carb, is_active' : '';
         const fixedCols =
@@ -162,14 +165,14 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
             id, name, english_name, code, category, villa, diet_type,
             fixed_items, notes, created_at${withEntityType ? ', entity_type' : ''}${flagCols},
             exclusions(
-              id, beneficiary_id, meal_id, alternative_meal_id,
+              id, beneficiary_id, meal_id, alternative_meal_id${withDiets ? ', diet_id' : ''},
               meals:meals!exclusions_meal_id_fkey(id, name, type, is_snack),
               alternative_meal:meals!exclusions_alternative_meal_id_fkey(id, name, type, is_snack)
             ),
             fixed_meals:beneficiary_fixed_meals(
               ${fixedCols},
               meals!meal_id(id, name, type, is_snack)
-            )
+            )${withDiets ? ', diets:beneficiary_diets(diet_id)' : ''}
           `)
           .order('name')
           .order('id')
@@ -187,6 +190,10 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         companionsNeedMigration?: boolean;
       }> => {
         let res = await fetchBens(true, true, true);
+        if (res.error && /diet_id|beneficiary_diets/i.test(res.error.message)) {
+          withDiets = false;
+          res = await fetchBens(true, true, true);
+        }
         // عمود is_alternative غير موجود (الترقية ما اتشغّلت) → نسقطه وحده
         if (res.error && /is_alternative/i.test(res.error.message)) {
           withFixedAlt = false;
@@ -371,7 +378,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     const mealsById = buildSheetMealsMap();
     const rows = beneficiaries.map(b => buildBeneficiaryRow(
       b as SheetBeneficiary,
-      (b.exclusions ?? []) as SheetExclusion[],
+      // محظورات الأنظمة الغذائية لا تُصدَّر — تُشتق من النظام نفسه، ولو دخلت
+      // الملف لرجعت بالاستيراد محظورات شخصية منفصلة عن نظامها
+      (b.exclusions ?? []).filter(e => !e.diet_id) as SheetExclusion[],
       (b.fixed_meals ?? []) as unknown as SheetFixedMeal[],
       mealsById,
     ));

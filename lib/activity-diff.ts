@@ -118,7 +118,7 @@ export function diffLists(before: string[], after: string[]): { added: string[];
 
 /** يدمج فرق قائمة في التفاصيل تحت مفتاحي «مُضاف» و«مُزال» — ويتخطّى الفارغ */
 export function listDiffDetails(
-  key: 'exclusions' | 'fixed_meals' | 'menu_overrides' | 'ingredients' | 'items' | 'menu_meals',
+  key: 'exclusions' | 'fixed_meals' | 'menu_overrides' | 'ingredients' | 'items' | 'menu_meals' | 'diets' | 'diet_exclusions',
   before: string[],
   after: string[]
 ): Record<string, unknown> {

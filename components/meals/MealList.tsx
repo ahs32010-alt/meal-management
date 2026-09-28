@@ -546,11 +546,17 @@ export default function MealList() {
       if (!newId) throw new Error('تعذّر إيجاد اسم فريد للنسخة بعد 50 محاولة');
 
       // 2) نسخ المحظورات — كل صف يستهدف الأصلي ندرج صفّاً جديداً للنسخة
-      const { data: excls, error: exErr } = await supabase
+      // الشخصية فقط — استبعاد النظام الغذائي يخص الصنف الأصلي في النظام، ولو
+      // نُسخ هنا لصار محظوراً شخصياً منفصلاً عن نظامه
+      const exSel = (withDiet: boolean) => supabase
         .from('exclusions')
-        .select('beneficiary_id, alternative_meal_id')
+        .select(`beneficiary_id, alternative_meal_id${withDiet ? ', diet_id' : ''}`)
         .eq('meal_id', meal.id);
-      if (exErr) throw exErr;
+      let exRes = await exSel(true);
+      if (exRes.error && /diet_id/i.test(exRes.error.message)) exRes = await exSel(false);
+      if (exRes.error) throw exRes.error;
+      const excls = ((exRes.data ?? []) as unknown as { beneficiary_id: string; alternative_meal_id: string | null; diet_id?: string | null }[])
+        .filter(e => !e.diet_id);
 
       let exclCount = 0;
       if (excls && excls.length > 0) {

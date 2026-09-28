@@ -370,12 +370,14 @@ export default function BulkCustomization({ entityType }: Props) {
         const validMealIds = unexclMealIds.filter(Boolean);
         const allAffected = new Set<string>();
         for (const mealId of validMealIds) {
-          const { data, error } = await supabase
-            .from('exclusions')
-            .delete()
-            .eq('meal_id', mealId)
-            .in('beneficiary_id', ids)
-            .select('id, beneficiary_id');
+          // الشخصية فقط — صف النظام الغذائي يرجع بالمزامنة فوراً، فحذفه لا
+          // يزيل شيئاً فعلياً (diet_id اختياري قبل diet-systems-migration)
+          const del = (personalOnly: boolean) => {
+            const q = supabase.from('exclusions').delete().eq('meal_id', mealId).in('beneficiary_id', ids);
+            return (personalOnly ? q.is('diet_id', null) : q).select('id, beneficiary_id');
+          };
+          let { data, error } = await del(true);
+          if (error && /diet_id/i.test(error.message)) ({ data, error } = await del(false));
           if (error) throw error;
           (data ?? []).forEach((r: { id: string; beneficiary_id: string }) => allAffected.add(r.beneficiary_id));
         }

@@ -38,6 +38,7 @@ export const PAGE_LABELS: Record<string, string> = {
   '/orders': 'أوامر التشغيل',
   '/delivery-orders': 'أوامر التسليم',
   '/costs': 'الأسعار والتكاليف',
+  '/diets': 'النظام الغذائي',
   '/reports': 'التقارير',
   '/stickers': 'ستيكرات الفطور',
   '/lunch-dinner-stickers': 'ستيكرات الغداء والعشاء',
@@ -116,6 +117,7 @@ const ENTITY_OBJECT_LABELS: Record<string, string> = {
   cost_unit: 'وحدة قياس',
   recipe_item: 'مكوّناً في وصفة',
   order_cost: 'تكلفة أمر تشغيل',
+  diet_system: 'نظاماً غذائياً',
 };
 
 export interface ActivityLike {
@@ -281,6 +283,11 @@ export const DETAIL_LABELS: Record<string, string> = {
   removed_items: 'بنود مُزالة',
   added_menu_meals: 'أصناف مُضافة للمنيو',
   removed_menu_meals: 'أصناف مسحوبة من المنيو',
+  added_diets: 'أنظمة غذائية مُضافة',
+  removed_diets: 'أنظمة غذائية مُزالة',
+  diets: 'الأنظمة الغذائية',
+  added_diet_exclusions: 'استبعادات مُضافة للنظام',
+  removed_diet_exclusions: 'استبعادات مُزالة من النظام',
   items: 'البنود',
   granted_permissions: 'صلاحيات مُنِحت',
   revoked_permissions: 'صلاحيات سُحِبت',

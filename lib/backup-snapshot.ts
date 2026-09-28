@@ -34,9 +34,12 @@ export const BACKUP_TABLES = [
   'delivery_meals',
   'delivery_creators',
   'delivery_print_header',
+  'diet_systems',
   // ── تابعة لـ meals / beneficiaries ──
   'meal_alternatives',
-  'exclusions',
+  'diet_system_exclusions', // ← diet_systems + meals
+  'beneficiary_diets',      // ← beneficiaries + diet_systems
+  'exclusions',             // ← … + diet_systems (diet_id)
   'beneficiary_fixed_meals',
   'beneficiary_menu_overrides', // ← beneficiaries + meals + menu_items (قرارات الخانة)
   'menu_items',
@@ -115,6 +118,9 @@ const TABLE_KEY: Record<BackupTableName, string> = {
   delivery_meals: 'id',
   delivery_creators: 'id',
   delivery_print_header: 'id',
+  diet_systems: 'id',
+  diet_system_exclusions: 'id',
+  beneficiary_diets: 'id',
   meal_alternatives: 'id',
   exclusions: 'id',
   beneficiary_fixed_meals: 'id',

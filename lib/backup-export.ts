@@ -31,6 +31,7 @@ interface BeneficiaryRow {
 interface ExclusionRow {
   beneficiary_id: string; meal_id: string;
   alternative_meal_id?: string | null;
+  diet_id?: string | null;
 }
 
 interface FixedMealRow {
@@ -395,7 +396,8 @@ export async function downloadBackupAsXLSX(
   const t = snapshot.tables as unknown as Record<string, unknown[]>;
   const meals = (t.meals ?? []) as unknown as MealRow[];
   const bens = (t.beneficiaries ?? []) as unknown as BeneficiaryRow[];
-  const excls = (t.exclusions ?? []) as unknown as ExclusionRow[];
+  // الشخصية فقط — صفوف الأنظمة الغذائية مشتقة، وورقة المستفيدين تُستورد
+  const excls = ((t.exclusions ?? []) as unknown as ExclusionRow[]).filter(e => !e.diet_id);
   const fixed = (t.beneficiary_fixed_meals ?? []) as unknown as FixedMealRow[];
   const menu = (t.menu_items ?? []) as unknown as MenuRow[];
   const orders = (t.daily_orders ?? []) as unknown as OrderRow[];

@@ -8,10 +8,11 @@ import { updateDetails, valueDetails, listDiffDetails } from '@/lib/activity-dif
 import { useCurrentUser } from '@/lib/use-current-user';
 import { needsApproval } from '@/lib/permissions';
 import { enqueueCreate, enqueueUpdate, type CreatePayload } from '@/lib/pending-actions';
-import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
+import type { Beneficiary, Meal, MealType, ItemCategory, EntityType, DietSystem } from '@/lib/types';
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS, CATEGORY_LABELS } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import DietTypeSelect from '@/components/shared/DietTypeSelect';
+import ExclusionSectionsEditor from '@/components/shared/ExclusionSectionsEditor';
 import { WEEK_TITLES, type WeekNumber } from '@/lib/menu-utils';
 
 // تبويب «المنيو» — عرض فقط، ويُحمَّل عند فتحه فقط عشان ما يثقّل النافذة
@@ -324,142 +325,91 @@ function MealPicker({
   );
 }
 
-// ─── Meal type exclusion section ────────────────────────────────────────────
-type SectionColorKey = 'amber' | 'amber-snack' | 'emerald' | 'emerald-snack' | 'blue' | 'blue-snack';
-
-const SECTION_STYLES: Record<SectionColorKey, { header: string; badge: string; chip: string; addBtn: string; dot: string }> = {
-  'amber':        { header: 'bg-amber-50 border-amber-200',      badge: 'bg-amber-100 text-amber-700',    chip: 'bg-amber-50 border-amber-200 text-amber-800',    addBtn: 'text-amber-600 hover:bg-amber-100 border-amber-300',    dot: 'bg-amber-400' },
-  'amber-snack':  { header: 'bg-orange-50 border-orange-200',    badge: 'bg-orange-100 text-orange-700',  chip: 'bg-orange-50 border-orange-200 text-orange-800',  addBtn: 'text-orange-500 hover:bg-orange-100 border-orange-300', dot: 'bg-orange-300' },
-  'emerald':      { header: 'bg-emerald-50 border-emerald-200',  badge: 'bg-emerald-100 text-emerald-700',chip: 'bg-emerald-50 border-emerald-200 text-emerald-800',addBtn: 'text-emerald-600 hover:bg-emerald-100 border-emerald-300',dot: 'bg-emerald-400' },
-  'emerald-snack':{ header: 'bg-teal-50 border-teal-200',        badge: 'bg-teal-100 text-teal-700',      chip: 'bg-teal-50 border-teal-200 text-teal-800',        addBtn: 'text-teal-500 hover:bg-teal-100 border-teal-300',      dot: 'bg-teal-300' },
-  'blue':         { header: 'bg-blue-50 border-blue-200',        badge: 'bg-blue-100 text-blue-700',      chip: 'bg-blue-50 border-blue-200 text-blue-800',        addBtn: 'text-blue-600 hover:bg-blue-100 border-blue-300',      dot: 'bg-blue-400' },
-  'blue-snack':   { header: 'bg-indigo-50 border-indigo-200',    badge: 'bg-indigo-100 text-indigo-700',  chip: 'bg-indigo-50 border-indigo-200 text-indigo-800',  addBtn: 'text-indigo-500 hover:bg-indigo-100 border-indigo-300', dot: 'bg-indigo-300' },
-};
-
-function MealTypeSection({
-  label, color, items, sectionMeals, excludedIds, allMeals,
-  onAdd, onRemove, onSetAlt, mealById, isSnack,
-}: {
-  label: string; color: SectionColorKey; isSnack?: boolean;
-  items: ExclusionEntry[]; sectionMeals: Meal[]; excludedIds: string[]; allMeals: Meal[];
-  onAdd: (m: Meal) => void; onRemove: (id: string) => void;
-  onSetAlt: (mealId: string, altId: string) => void;
-  mealById: (id: string) => Meal | undefined;
+// ─── الأنظمة الغذائية ──────────────────────────────────────────────────────────
+/** خانة «النظام الغذائي الأساسي» في تبويب البيانات — اختيار نظام أو أكثر */
+function DietSystemsPicker({ diets, selected, onToggle }: {
+  diets: DietSystem[] | null;
+  selected: string[];
+  onToggle: (id: string) => void;
 }) {
-  const [picking, setPicking] = useState(false);
-  const [query, setQuery] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const availableMeals = sectionMeals.filter(m => !excludedIds.includes(m.id));
-  const filteredMeals = availableMeals.filter(m =>
-    m.name.includes(query) || (m.english_name ?? '').toLowerCase().includes(query.toLowerCase())
-  );
-
-  const openPicker = () => { setPicking(true); setQuery(''); setTimeout(() => inputRef.current?.focus(), 50); };
-  const closePicker = () => { setPicking(false); setQuery(''); };
-
-  const s = SECTION_STYLES[color];
-
+  if (diets === null) {
+    return (
+      <p className="text-xs text-slate-400">
+        غير متاح بعد — شغّل supabase/diet-systems-migration.sql في Supabase.
+      </p>
+    );
+  }
+  if (diets.length === 0) {
+    return (
+      <p className="text-xs text-slate-500">
+        لا توجد أنظمة بعد — أضفها من صفحة{' '}
+        <a href="/diets" target="_blank" rel="noopener noreferrer" className="text-green-700 hover:underline">«النظام الغذائي»</a>
+        {' '}ثم اخترها هنا.
+      </p>
+    );
+  }
   return (
-    <div className={isSnack ? 'mr-5 border-r-2 border-r-slate-200' : ''}>
-      <div className={`border rounded-xl ${s.header}`}>
-      {/* Header */}
-      <div className={`flex items-center justify-between px-4 py-2 border-b ${s.header}`}>
-        <div className="flex items-center gap-2">
-          <span className={`w-1.5 h-1.5 rounded-full ${s.dot} ${isSnack ? 'opacity-60' : ''}`} />
-          <span className={`font-semibold text-slate-700 ${isSnack ? 'text-xs' : 'text-sm'}`}>{label}</span>
-          {items.length > 0 && (
-            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${s.badge}`}>
-              {items.length} ممنوع
-            </span>
-          )}
-        </div>
-        {!picking && availableMeals.length > 0 && (
+    <div className="flex flex-wrap gap-2">
+      {diets.map(d => {
+        const on = selected.includes(d.id);
+        return (
           <button
+            key={d.id}
             type="button"
-            onClick={openPicker}
-            className={`flex items-center gap-1 px-3 py-1.5 border border-dashed rounded-lg text-xs font-medium transition-colors ${s.addBtn}`}
+            role="checkbox"
+            aria-checked={on}
+            onClick={() => onToggle(d.id)}
+            title={d.description ?? undefined}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border-2 text-sm font-semibold transition-colors ${on ? 'bg-green-600 border-green-600 text-white' : 'bg-white border-slate-200 text-slate-500 hover:border-green-300'}`}
           >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
-            </svg>
-            إضافة
+            <span className={`w-4 h-4 rounded border-2 flex items-center justify-center ${on ? 'bg-white border-white' : 'border-slate-300'}`}>
+              {on && <svg className="w-3 h-3 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+            </span>
+            {d.name}
+            <span className={`text-xs font-normal ${on ? 'text-green-100' : 'text-slate-400'}`}>({d.exclusions?.length ?? 0} مستبعد)</span>
           </button>
-        )}
-        {picking && (
-          <button type="button" onClick={closePicker} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded">
-            إغلاق
-          </button>
-        )}
-      </div>
+        );
+      })}
+    </div>
+  );
+}
 
-      {/* Selected chips */}
-      {items.length > 0 && (
-        <div className="px-4 pt-3 pb-2 flex flex-wrap gap-2">
-          {items.map(ex => {
-            const meal = mealById(ex.meal_id);
-            if (!meal) return null;
-            const candidates = allMeals.filter(m => m.type === meal.type && m.is_snack === meal.is_snack && m.id !== meal.id);
+/** في تبويب المحظورات: ما تستبعده الأنظمة المختارة فعلياً — للقراءة فقط */
+function DietAppliedPanel({ applied, mealById, dietNames }: {
+  applied: { meal_id: string; alternative_meal_id: string; dietNames: string[] }[];
+  mealById: (id: string) => Meal | undefined;
+  dietNames: string[];
+}) {
+  return (
+    <div className="border border-green-200 bg-green-50/50 rounded-xl px-4 py-3">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <span className="font-semibold text-sm text-slate-700">
+          مستبعَد بالنظام الغذائي الأساسي ({applied.length})
+          <span className="text-green-700 font-normal"> · {dietNames.join('، ')}</span>
+        </span>
+      </div>
+      {applied.length === 0 ? (
+        <p className="text-xs text-slate-400">لا شيء — كل أصناف الأنظمة المختارة محظورة أصلاً كمحظورات شخصية بالأسفل.</p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {applied.map(a => {
+            const m = mealById(a.meal_id);
+            if (!m) return null;
+            const alt = a.alternative_meal_id ? mealById(a.alternative_meal_id) : undefined;
             return (
-              <div key={ex.meal_id} className={`flex items-center gap-1.5 border rounded-lg px-2.5 py-1.5 text-xs font-medium bg-white ${s.chip}`}>
-                <button type="button" onClick={() => onRemove(ex.meal_id)}
-                  className="text-slate-300 hover:text-red-500 transition-colors leading-none font-bold">✕</button>
-                <span className="line-through opacity-50">{meal.name}</span>
-                {candidates.length > 0 && (
-                  <>
-                    <span className="text-slate-300 text-base leading-none">→</span>
-                    <select
-                      value={ex.alternative_meal_id}
-                      onChange={e => onSetAlt(ex.meal_id, e.target.value)}
-                      className="text-xs bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-600 focus:outline-none max-w-[110px]"
-                    >
-                      <option value="">بلا بديل</option>
-                      {candidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                  </>
-                )}
-              </div>
+              <span key={a.meal_id} title={a.dietNames.join('، ')}
+                className="text-xs bg-white border border-green-200 text-slate-700 px-2.5 py-1 rounded-lg">
+                <span className="line-through opacity-60">{m.name}</span>
+                {alt && <> <span className="text-slate-300">→</span> {alt.name}</>}
+              </span>
             );
           })}
         </div>
       )}
-
-      {/* Empty state */}
-      {items.length === 0 && !picking && (
-        <div className="px-4 py-3 text-center text-xs text-slate-400">
-          {availableMeals.length === 0 ? 'لا توجد أصناف في هذه الوجبة' : 'لا يوجد محظورات'}
-        </div>
-      )}
-
-      {/* Inline picker panel */}
-      {picking && (
-        <div className="border-t border-slate-200 bg-white px-4 pt-3 pb-3">
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder="ابحث عن صنف..."
-            className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300 mb-3"
-          />
-          {filteredMeals.length === 0 ? (
-            <p className="text-xs text-slate-400 text-center py-2">لا توجد نتائج</p>
-          ) : (
-            <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto">
-              {filteredMeals.map(m => (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => { onAdd(m); closePicker(); }}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors bg-white hover:bg-opacity-80 ${s.chip} hover:shadow-sm`}
-                >
-                  {m.name}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+      <p className="text-[11px] text-slate-500 mt-2">
+        يُغيَّر النظام من تبويب «البيانات» ← النظام الغذائي الأساسي، وأصنافه من صفحة «النظام الغذائي».
+        لتغيير بديل صنف لهذا الشخص وحده أضفه كمحظور شخصي بالأسفل — الشخصي يغلب.
+      </p>
     </div>
   );
 }
@@ -479,12 +429,57 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const [lowCarb, setLowCarb] = useState(beneficiary?.low_carb ?? false);
   const [isActive, setIsActive] = useState(beneficiary?.is_active ?? true);
 
+  // المحظورات **الشخصية** فقط — صفوف الأنظمة الغذائية (diet_id) تُدار من
+  // صفحة النظام وتُكتب بالمزامنة في القاعدة؛ لو دخلت هنا لحوّلها الحفظ لشخصية.
   const [exclusions, setExclusions] = useState<ExclusionEntry[]>(
-    beneficiary?.exclusions?.map(e => ({
+    beneficiary?.exclusions?.filter(e => !e.diet_id).map(e => ({
       meal_id: e.meal_id,
       alternative_meal_id: e.alternative_meal_id ?? '',
     })) ?? []
   );
+
+  // ── الأنظمة الغذائية ──
+  // null = الجداول غير موجودة (diet-systems-migration ما اتشغّل) → نخفي القسم
+  const [dietList, setDietList] = useState<DietSystem[] | null>(null);
+  const [selectedDietIds, setSelectedDietIds] = useState<string[]>(
+    () => (beneficiary?.diets ?? []).map(d => d.diet_id)
+  );
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('diet_systems')
+        .select('id, name, description, created_at, exclusions:diet_system_exclusions(meal_id, alternative_meal_id)')
+        .order('name');
+      if (!cancelled) setDietList(error ? null : ((data ?? []) as unknown as DietSystem[]));
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const toggleDiet = (id: string) =>
+    setSelectedDietIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+  /**
+   * استبعادات الأنظمة المختارة كما ستنطبق — نفس قاعدة المزامنة في القاعدة:
+   * المحظور الشخصي يغلب، وصنف في أكثر من نظام يُحسب مرة (الأولوية لمن له بديل).
+   */
+  const dietExclusions = (() => {
+    const personal = new Set(exclusions.map(e => e.meal_id));
+    const out = new Map<string, { meal_id: string; alternative_meal_id: string; dietNames: string[] }>();
+    for (const id of selectedDietIds) {
+      const d = dietList?.find(x => x.id === id);
+      for (const dx of d?.exclusions ?? []) {
+        if (personal.has(dx.meal_id)) continue;
+        const cur = out.get(dx.meal_id);
+        if (cur) {
+          cur.dietNames.push(d!.name);
+          if (!cur.alternative_meal_id && dx.alternative_meal_id) cur.alternative_meal_id = dx.alternative_meal_id;
+        } else {
+          out.set(dx.meal_id, { meal_id: dx.meal_id, alternative_meal_id: dx.alternative_meal_id ?? '', dietNames: [d!.name] });
+        }
+      }
+    }
+    return [...out.values()];
+  })();
 
   const [fixedEntries, setFixedEntries] = useState<FixedEntry[]>(
     buildFixedEntries(beneficiary?.fixed_meals, meals)
@@ -731,6 +726,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
       // البيانات المرسَلة (المحظورات والأصناف الثابتة) تتخزّن في payload وتُطبَّق عند القبول.
       const buildPayload = (): CreatePayload => ({
         beneficiary: payload,
+        // نرسلها فقط لو الجداول موجودة — الطلب الذي لا يحملها لا يمسّ الأنظمة
+        ...(dietList ? { diet_ids: selectedDietIds } : {}),
         exclusions: exclusions.map(ex => ({
           meal_id: ex.meal_id,
           alternative_meal_id: ex.alternative_meal_id || null,
@@ -792,6 +789,23 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
         await supabase.from('exclusions').insert(
           exclusions.map(ex => ({ beneficiary_id: beneficiaryId, meal_id: ex.meal_id, alternative_meal_id: ex.alternative_meal_id || null }))
         );
+
+      // الأنظمة الغذائية — بالفرق لا بالمسح، فيبقى ترتيب الإسناد (أولوية البديل)
+      if (dietList && beneficiaryId) {
+        const before = new Set((beneficiary?.diets ?? []).map(d => d.diet_id));
+        const removed = [...before].filter(id => !selectedDietIds.includes(id));
+        const added = selectedDietIds.filter(id => !before.has(id));
+        if (removed.length > 0) {
+          const { error: e } = await supabase.from('beneficiary_diets').delete()
+            .eq('beneficiary_id', beneficiaryId).in('diet_id', removed);
+          if (e) throw e;
+        }
+        if (added.length > 0) {
+          const { error: e } = await supabase.from('beneficiary_diets')
+            .insert(added.map(diet_id => ({ beneficiary_id: beneficiaryId, diet_id })));
+          if (e) throw e;
+        }
+      }
 
       await supabase.from('beneficiary_fixed_meals').delete().eq('beneficiary_id', beneficiaryId);
       const fixedRows = fixedEntries.flatMap(fe =>
@@ -885,6 +899,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
       };
 
       const newExclusions = exclusions.map(describeExclusion);
+      const dietName = (id: string) => dietList?.find(d => d.id === id)?.name ?? 'نظام محذوف';
       const newFixed = fixedEntries.map(describeFixed);
       const newOverrides = ovRows.map(r => describeOverride(r as MenuOverrideEntry));
 
@@ -914,9 +929,16 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
               ...updateDetails(previousSnapshot, payload, LOGGED_BENEFICIARY_FIELDS, {
                 ...listDiffDetails(
                   'exclusions',
-                  (beneficiary?.exclusions ?? []).map(describeExclusion),
+                  (beneficiary?.exclusions ?? []).filter(e => !e.diet_id).map(describeExclusion),
                   newExclusions,
                 ),
+                ...(dietList
+                  ? listDiffDetails(
+                      'diets',
+                      (beneficiary?.diets ?? []).map(d => dietName(d.diet_id)),
+                      selectedDietIds.map(dietName),
+                    )
+                  : {}),
                 ...listDiffDetails(
                   'fixed_meals',
                   buildFixedEntries(beneficiary?.fixed_meals, meals).map(describeFixed),
@@ -937,6 +959,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           : {
               ...valueDetails(payload, LOGGED_BENEFICIARY_FIELDS),
               ...(newExclusions.length > 0 ? { exclusions: newExclusions } : {}),
+              ...(selectedDietIds.length > 0 ? { diets: selectedDietIds.map(dietName) } : {}),
               ...(newFixed.length > 0 ? { fixed_meals: newFixed } : {}),
               ...(newOverrides.length > 0 ? { menu_overrides: newOverrides } : {}),
               entity_type: entityType,
@@ -984,21 +1007,11 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
 
   const tabLabels: Record<Tab, string> = {
     info: 'البيانات',
-    exclusions: `المحظورات${exclusions.length || slotExclusionCount
-      ? ` (${exclusions.length}${slotExclusionCount ? ` + ${slotExclusionCount}` : ''})` : ''}`,
+    exclusions: `المحظورات${exclusions.length + dietExclusions.length || slotExclusionCount
+      ? ` (${exclusions.length + dietExclusions.length}${slotExclusionCount ? ` + ${slotExclusionCount}` : ''})` : ''}`,
     fixed: `الثابتة الأسبوعية${totalFixed || slotAddCount
       ? ` (${totalFixed}${slotAddCount ? ` + ${slotAddCount}` : ''})` : ''}`,
     menu: 'المنيو المخصّص',
-  };
-
-  // Group exclusions by section
-  const exclBySection = {
-    breakfast:       exclusions.filter(ex => mealById(ex.meal_id)?.type === 'breakfast' && !mealById(ex.meal_id)?.is_snack),
-    breakfastSnack:  exclusions.filter(ex => mealById(ex.meal_id)?.type === 'breakfast' &&  mealById(ex.meal_id)?.is_snack),
-    lunch:           exclusions.filter(ex => mealById(ex.meal_id)?.type === 'lunch'     && !mealById(ex.meal_id)?.is_snack),
-    lunchSnack:      exclusions.filter(ex => mealById(ex.meal_id)?.type === 'lunch'     &&  mealById(ex.meal_id)?.is_snack),
-    dinner:          exclusions.filter(ex => mealById(ex.meal_id)?.type === 'dinner'    && !mealById(ex.meal_id)?.is_snack),
-    dinnerSnack:     exclusions.filter(ex => mealById(ex.meal_id)?.type === 'dinner'    &&  mealById(ex.meal_id)?.is_snack),
   };
 
   return (
@@ -1069,6 +1082,20 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                 <div><label className="label">النظام الغذائي</label>
                   <DietTypeSelect value={dietType} onChange={setDietType} /></div>
               </div>
+              <div className="border border-green-200 rounded-xl p-4 bg-green-50/40">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <label className="label mb-0">النظام الغذائي الأساسي</label>
+                  {selectedDietIds.length > 0 && (
+                    <span className="text-xs text-green-700">
+                      يستبعد {dietExclusions.length} صنف — التفاصيل في تبويب المحظورات
+                    </span>
+                  )}
+                </div>
+                <DietSystemsPicker diets={dietList} selected={selectedDietIds} onToggle={toggleDiet} />
+                <p className="text-[11px] text-slate-500 mt-2">
+                  اختر نظاماً أو أكثر — استبعادات النظام وبدائله تنطبق على منيو هذا الشخص وكل تقاريره تلقائياً.
+                </p>
+              </div>
               <div><label className="label">ملاحظات</label>
                 <textarea value={notes} onChange={e => setNotes(e.target.value)} className="input-field h-20 resize-none" placeholder="أي ملاحظات إضافية..." /></div>
 
@@ -1099,6 +1126,14 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           {/* ── Tab: Exclusions ── */}
           {activeTab === 'exclusions' && (
             <div className="p-5 space-y-3">
+              {dietList && selectedDietIds.length > 0 && (
+                <DietAppliedPanel
+                  applied={dietExclusions}
+                  mealById={mealById}
+                  dietNames={selectedDietIds.map(id => dietList.find(d => d.id === id)?.name ?? '').filter(Boolean)}
+                />
+              )}
+
               {/* قرارات أيام محددة — قادمة من تبويب المنيو المخصّص */}
               <SlotDecisionsPanel
                 groups={slotExclusionGroups}
@@ -1125,85 +1160,12 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                 </div>
               )}
 
-              {/* الفطور */}
-              <MealTypeSection
-                label="الفطور"
-                color="amber"
-                items={exclBySection.breakfast}
-                sectionMeals={meals.filter(m => m.type === 'breakfast' && !m.is_snack)}
-                excludedIds={excludedMealIds}
-                allMeals={meals}
+              <ExclusionSectionsEditor
+                meals={meals}
+                items={exclusions}
                 onAdd={addExclusion}
                 onRemove={removeExclusion}
                 onSetAlt={setAlt}
-                mealById={mealById}
-              />
-              <MealTypeSection
-                label="سناكات الفطور"
-                color="amber-snack"
-                isSnack
-                items={exclBySection.breakfastSnack}
-                sectionMeals={meals.filter(m => m.type === 'breakfast' && m.is_snack)}
-                excludedIds={excludedMealIds}
-                allMeals={meals}
-                onAdd={addExclusion}
-                onRemove={removeExclusion}
-                onSetAlt={setAlt}
-                mealById={mealById}
-              />
-
-              {/* الغداء */}
-              <MealTypeSection
-                label="الغداء"
-                color="emerald"
-                items={exclBySection.lunch}
-                sectionMeals={meals.filter(m => m.type === 'lunch' && !m.is_snack)}
-                excludedIds={excludedMealIds}
-                allMeals={meals}
-                onAdd={addExclusion}
-                onRemove={removeExclusion}
-                onSetAlt={setAlt}
-                mealById={mealById}
-              />
-              <MealTypeSection
-                label="سناكات الغداء"
-                color="emerald-snack"
-                isSnack
-                items={exclBySection.lunchSnack}
-                sectionMeals={meals.filter(m => m.type === 'lunch' && m.is_snack)}
-                excludedIds={excludedMealIds}
-                allMeals={meals}
-                onAdd={addExclusion}
-                onRemove={removeExclusion}
-                onSetAlt={setAlt}
-                mealById={mealById}
-              />
-
-              {/* العشاء */}
-              <MealTypeSection
-                label="العشاء"
-                color="blue"
-                items={exclBySection.dinner}
-                sectionMeals={meals.filter(m => m.type === 'dinner' && !m.is_snack)}
-                excludedIds={excludedMealIds}
-                allMeals={meals}
-                onAdd={addExclusion}
-                onRemove={removeExclusion}
-                onSetAlt={setAlt}
-                mealById={mealById}
-              />
-              <MealTypeSection
-                label="سناكات العشاء"
-                color="blue-snack"
-                isSnack
-                items={exclBySection.dinnerSnack}
-                sectionMeals={meals.filter(m => m.type === 'dinner' && m.is_snack)}
-                excludedIds={excludedMealIds}
-                allMeals={meals}
-                onAdd={addExclusion}
-                onRemove={removeExclusion}
-                onSetAlt={setAlt}
-                mealById={mealById}
               />
             </div>
           )}
@@ -1406,7 +1368,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
               entityType={entityType}
               meals={meals}
               beneficiaryName={name}
-              exclusions={exclusions}
+              exclusions={[...exclusions, ...dietExclusions.map(({ meal_id, alternative_meal_id }) => ({ meal_id, alternative_meal_id }))]}
               fixed={fixedEntries}
               overrides={overrides}
               overridesReady={overridesReady}

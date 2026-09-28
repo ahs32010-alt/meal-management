@@ -65,4 +65,28 @@ describe('computeFixedExtras', () => {
     });
     expect(r.rows.map(x => x.meal.id)).toEqual(['milk']);
   });
+
+  it('يحسب السعر: الكمية × سعر الحبة، والصنف بلا سعر لا يدخل المجموع', () => {
+    const r = computeFixedExtras({
+      ...base, from: '2026-09-26', to: '2026-10-03', // سبتان
+      beneficiaries: [
+        ben('a', [
+          { day_of_week: 6, meal_type: 'lunch', meal_id: 'dates', quantity: 3 },
+          { day_of_week: 6, meal_type: 'lunch', meal_id: 'milk', quantity: 1 },
+        ]),
+        ben('b', [{ day_of_week: 6, meal_type: 'lunch', meal_id: 'dates', quantity: 1 }]),
+      ],
+      prices: { dates: 1.1 },
+    });
+    const dates = r.rows.find(x => x.meal.id === 'dates')!;
+    expect(dates.total).toBe(8);
+    expect(dates.unitPrice).toBe(1.1);
+    expect(dates.totalPrice).toBe(8.8);
+    const milk = r.rows.find(x => x.meal.id === 'milk')!;
+    expect(milk.unitPrice).toBeNull();
+    expect(milk.totalPrice).toBe(0);
+    expect(r.grandTotalPrice).toBe(8.8);
+    expect(r.unpricedCount).toBe(1);
+    expect(r.byBeneficiary.find(b => b.id === 'a')!.totalPrice).toBe(6.6);
+  });
 });
