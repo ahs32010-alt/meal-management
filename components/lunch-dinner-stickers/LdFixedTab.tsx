@@ -11,10 +11,11 @@ import StickerCard from './ld-sticker-card';
 import { fetchStickerBeneficiaries } from './ld-fetch';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import {
-  ColorFilterControl, DietColorsPanel, DietGroupHeader, HeaderControls, SizeFields, SortByDietToggle,
+  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, HeaderControls, HiddenColorsControl,
+  SizeFields, SortByDietToggle, customLdFilterSuffix, matchesCustomLdFilter, type CustomLdFilter,
   colorFilterSuffix, matchesColorFilter, type ColorFilter, type LdSettings,
 } from './ld-settings';
-import { effectiveDietOrder, sortByDietOrder } from './ld-diet-order';
+import { colorsInUse, effectiveDietOrder, sortByDietOrder, stickerColorKey } from './ld-diet-order';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
 export default function LdFixedTab({ settings }: { settings: LdSettings }) {
@@ -28,8 +29,9 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
   const [sizeHeight, setSizeHeight] = useState('10');
   const [colorFilter, setColorFilter] = useState<ColorFilter>('all');
   const [sortByDiet, setSortByDiet] = useState(true);
+  const [customLdFilter, setCustomLdFilter] = useState<CustomLdFilter>('all');
 
-  const { headerUrl, dietColors, dietOrder } = settings;
+  const { headerUrl, dietColors, dietOrder, hiddenColors } = settings;
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
@@ -58,11 +60,25 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
   const dietOf = (b: Beneficiary) => b.diet_type?.trim() ?? '';
   // القائمة المرئية للعرض والتصدير — حسب فلتر اللون (الكل/البيضاء/الملوّنة)،
   // ثم مرتّبة حسب ترتيب الأنظمة الغذائية حتى يطلع الـPDF/Word مفروزاً
-  const visibleBeneficiaries = useMemo(() => {
-    const filtered = beneficiaries.filter(b => matchesColorFilter(colorFilter, isColored(b)));
-    return sortByDiet ? sortByDietOrder(filtered, dietOf, effectiveDietOrder(dietTypes, dietOrder)) : filtered;
+  // فلتر الأبيض/الملوّن أولاً — عليه تُبنى شرائح «إخفاء لون» بأعدادها
+  const colorFiltered = useMemo(
+    () => beneficiaries.filter(b =>
+      matchesColorFilter(colorFilter, isColored(b)) &&
+      matchesCustomLdFilter(customLdFilter, b.custom_ld_meals === true)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beneficiaries, colorFilter, dietColors, sortByDiet, dietTypes, dietOrder]);
+    [beneficiaries, colorFilter, dietColors, customLdFilter],
+  );
+  const customLdCount = useMemo(() => beneficiaries.filter(b => b.custom_ld_meals === true).length, [beneficiaries]);
+  const colorChips = useMemo(() => colorsInUse(colorFiltered, dietOf, dietColors), [colorFiltered, dietColors]);
+  const dietCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    beneficiaries.forEach(b => { const d = dietOf(b); if (d) m.set(d, (m.get(d) ?? 0) + 1); });
+    return m;
+  }, [beneficiaries]);
+  const visibleBeneficiaries = useMemo(() => {
+    const filtered = colorFiltered.filter(b => !hiddenColors.includes(stickerColorKey(dietOf(b), dietColors)));
+    return sortByDiet ? sortByDietOrder(filtered, dietOf, effectiveDietOrder(dietTypes, dietOrder)) : filtered;
+  }, [colorFiltered, hiddenColors, dietColors, sortByDiet, dietTypes, dietOrder]);
   const groupCounts = useMemo(() => {
     const m = new Map<string, number>();
     visibleBeneficiaries.forEach(b => m.set(dietOf(b), (m.get(dietOf(b)) ?? 0) + 1));
@@ -89,7 +105,7 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
       const { exportLunchDinnerStickers } = await import('./ld-word-export');
       await exportLunchDinnerStickers(
         visibleBeneficiaries, headerUrl, w, h, dietColors, undefined,
-        `ستيكرات-الغداء-والعشاء${colorFilterSuffix(colorFilter)}.docx`,
+        `ستيكرات-الغداء-والعشاء${colorFilterSuffix(colorFilter)}${customLdFilterSuffix(customLdFilter)}.docx`,
       );
     } catch (e) {
       alert(`تعذّر التصدير: ${e instanceof Error ? e.message : 'خطأ غير معروف'}`);
@@ -111,7 +127,7 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
       const { exportLunchDinnerStickersPdf } = await import('./ld-pdf-export');
       const res = await exportLunchDinnerStickersPdf(
         nodes, w, h, (done, total) => setProgress({ done, total }),
-        `ستيكرات-الغداء-والعشاء${colorFilterSuffix(colorFilter)}.pdf`,
+        `ستيكرات-الغداء-والعشاء${colorFilterSuffix(colorFilter)}${customLdFilterSuffix(customLdFilter)}.pdf`,
       );
       if (res.failed > 0) {
         alert(`تم التصدير: ${res.captured} ستيكر. تعذّر التقاط ${res.failed}.`);
@@ -131,11 +147,13 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <p className="text-slate-500 text-sm">
             ستيكر ثابت لكل مستفيد — {visibleBeneficiaries.length}
-            {colorFilter === 'all' ? ' مستفيد' : ` ظاهر من ${beneficiaries.length}`}
+            {visibleBeneficiaries.length === beneficiaries.length ? ' مستفيد' : ` ظاهر من ${beneficiaries.length}`}
           </p>
           <div className="flex items-center gap-2 flex-wrap">
             <ColorFilterControl value={colorFilter} onChange={setColorFilter}
               counts={{ white: beneficiaries.length - coloredCount, colored: coloredCount }} />
+            <CustomLdFilterControl value={customLdFilter} onChange={setCustomLdFilter}
+              counts={{ custom: customLdCount, other: beneficiaries.length - customLdCount }} />
             <SortByDietToggle checked={sortByDiet} onChange={setSortByDiet} />
             <HeaderControls settings={settings} />
           </div>
@@ -163,7 +181,8 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
         </div>
 
         {/* ألوان الأنظمة الغذائية — قسم قابل للطيّ */}
-        <DietColorsPanel dietTypes={dietTypes} settings={settings} />
+        <HiddenColorsControl colors={colorChips} settings={settings} />
+        <DietColorsPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />
       </div>
 
       {error && (
@@ -191,9 +210,13 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
                   <DietGroupHeader diet={diet} color={dietColors[diet]} count={groupCounts.get(diet) ?? 0}
                     index={[...groupCounts.keys()].indexOf(diet) + 1} />
                 )}
-                <StickerCard ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
-                  bgColor={diet ? dietColors[diet] : undefined}
-                  innerRef={el => setNode(ben.id, el)} />
+                {/* الشارة خارج عقدة الستيكر (innerRef) — لا تدخل الـPDF */}
+                <div className="relative">
+                  {ben.custom_ld_meals && <CustomLdBadge />}
+                  <StickerCard ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
+                    bgColor={diet ? dietColors[diet] : undefined}
+                    innerRef={el => setNode(ben.id, el)} />
+                </div>
               </Fragment>
             );
           })}

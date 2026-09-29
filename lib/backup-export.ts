@@ -25,6 +25,7 @@ interface BeneficiaryRow {
   // حقول كانت غائبة عن ورقة النسخة رغم أن الصفحة تحرّرها
   is_active?: boolean | null;
   no_fish?: boolean | null; no_pasta_sandwich?: boolean | null; low_carb?: boolean | null;
+  custom_ld_meals?: boolean | null;
   entity_type?: EntityType; created_at?: string;
 }
 

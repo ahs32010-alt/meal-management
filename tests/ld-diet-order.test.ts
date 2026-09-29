@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { effectiveDietOrder, moveDiet, sortByDietOrder } from '@/components/lunch-dinner-stickers/ld-diet-order';
+import { colorsInUse, effectiveDietOrder, moveDiet, moveDietTo, sortByDietOrder, stickerColorKey } from '@/components/lunch-dinner-stickers/ld-diet-order';
 
 describe('effectiveDietOrder', () => {
   it('puts saved diets first and appends new ones in incoming order', () => {
@@ -29,5 +29,31 @@ describe('sortByDietOrder', () => {
   it('groups by order, keeps original order within a group, no-diet last', () => {
     const out = sortByDietOrder(rows, r => r.d, ['أ', 'ب']).map(r => r.n);
     expect(out).toEqual([3, 5, 1, 4, 6, 2]);
+  });
+});
+
+describe('moveDietTo', () => {
+  it('moves a diet to an exact position and keeps absent saved diets at the end', () => {
+    expect(moveDietTo(['أ', 'ب', 'ج'], ['ز', 'أ', 'ب', 'ج'], 'ج', 0)).toEqual(['ج', 'أ', 'ب', 'ز']);
+  });
+  it('clamps the index and is a no-op when already there', () => {
+    expect(moveDietTo(['أ', 'ب'], [], 'أ', 99)).toEqual(['ب', 'أ']);
+    const saved = ['أ', 'ب'];
+    expect(moveDietTo(['أ', 'ب'], saved, 'أ', 0)).toBe(saved);
+  });
+});
+
+describe('colorsInUse', () => {
+  it('groups stickers by colour (case-insensitive) with white first', () => {
+    const items = ['سكري', 'حمية', '', 'سكري', 'قلب'];
+    const colors = { 'سكري': '#FF0000', 'حمية': '#ff0000', 'قلب': '#00B050' };
+    expect(colorsInUse(items, d => d, colors)).toEqual([
+      { key: '', count: 1, diets: [] },
+      { key: '#ff0000', count: 3, diets: ['سكري', 'حمية'] },
+      { key: '#00b050', count: 1, diets: ['قلب'] },
+    ]);
+  });
+  it('a diet without a colour counts as white', () => {
+    expect(stickerColorKey('عادي', {})).toBe('');
   });
 });

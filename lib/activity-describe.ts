@@ -231,6 +231,7 @@ export const DETAIL_LABELS: Record<string, string> = {
   no_fish: 'بدون سمك',
   no_pasta_sandwich: 'بدون معكرونة/ساندويتش',
   low_carb: 'قليل الكربوهيدرات',
+  custom_ld_meals: 'وجبات غداء وعشاء مخصصة',
   is_active: 'نشط',
   is_alternative: 'صنف بديل',
   quantity: 'الكمية',

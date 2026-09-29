@@ -23,10 +23,11 @@ import { fetchStickerBeneficiaries } from './ld-fetch';
 import { splitDetailByCategory } from './ld-split';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import {
-  ColorFilterControl, DietColorsPanel, DietGroupHeader, HeaderControls, SizeFields, SortByDietToggle,
+  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, HeaderControls, HiddenColorsControl,
+  SizeFields, SortByDietToggle, customLdFilterSuffix, matchesCustomLdFilter, type CustomLdFilter,
   colorFilterSuffix, matchesColorFilter, type ColorFilter, type LdSettings,
 } from './ld-settings';
-import { effectiveDietOrder, sortByDietOrder } from './ld-diet-order';
+import { colorsInUse, effectiveDietOrder, sortByDietOrder, stickerColorKey } from './ld-diet-order';
 import type { LdMealCustomization } from './ld-types';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
@@ -58,11 +59,12 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   const [onlyWithCustom, setOnlyWithCustom] = useState(false);
   const [colorFilter, setColorFilter] = useState<ColorFilter>('all');
   const [sortByDiet, setSortByDiet] = useState(true);
+  const [customLdFilter, setCustomLdFilter] = useState<CustomLdFilter>('all');
   const [exporting, setExporting] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
-  const { headerUrl, dietColors, dietOrder } = settings;
+  const { headerUrl, dietColors, dietOrder, hiddenColors } = settings;
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
@@ -190,12 +192,26 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   }, [rows]);
 
   // المرئي = المُصدَّر: فلتر اللون ثم الترتيب حسب الأنظمة الغذائية
+  // فلتر الأبيض/الملوّن أولاً — عليه تُبنى شرائح «إخفاء لون» بأعدادها
+  const colorFiltered = useMemo(
+    () => customFiltered.filter(r =>
+      matchesColorFilter(colorFilter, isColored(r.ben)) &&
+      matchesCustomLdFilter(customLdFilter, r.ben.custom_ld_meals === true)),
+    [customFiltered, colorFilter, isColored, customLdFilter],
+  );
+  const customLdCount = useMemo(() => customFiltered.filter(r => r.ben.custom_ld_meals === true).length, [customFiltered]);
+  const colorChips = useMemo(() => colorsInUse(colorFiltered, dietOfRow, dietColors), [colorFiltered, dietColors]);
+  const dietCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    customFiltered.forEach(r => { const d = dietOfRow(r); if (d) m.set(d, (m.get(d) ?? 0) + 1); });
+    return m;
+  }, [customFiltered]);
   const visibleRows = useMemo(() => {
-    const filtered = customFiltered.filter(r => matchesColorFilter(colorFilter, isColored(r.ben)));
+    const filtered = colorFiltered.filter(r => !hiddenColors.includes(stickerColorKey(dietOfRow(r), dietColors)));
     return sortByDiet
       ? sortByDietOrder(filtered, dietOfRow, effectiveDietOrder(dietTypes, dietOrder))
       : filtered;
-  }, [customFiltered, colorFilter, isColored, sortByDiet, dietTypes, dietOrder]);
+  }, [colorFiltered, hiddenColors, dietColors, sortByDiet, dietTypes, dietOrder]);
   const groupCounts = useMemo(() => {
     const m = new Map<string, number>();
     visibleRows.forEach(r => m.set(dietOfRow(r), (m.get(dietOfRow(r)) ?? 0) + 1));
@@ -217,7 +233,7 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
       await exportLunchDinnerStickers(
         visibleRows.map(r => r.ben), headerUrl, w, h, dietColors,
         visibleRows.map(r => r.custom),
-        `ستيكرات-${report ? `${mealAr}-${report.order.date}` : 'الغداء-والعشاء'}${colorFilterSuffix(colorFilter)}.docx`,
+        `ستيكرات-${report ? `${mealAr}-${report.order.date}` : 'الغداء-والعشاء'}${colorFilterSuffix(colorFilter)}${customLdFilterSuffix(customLdFilter)}.docx`,
       );
     } catch (e) {
       alert(`تعذّر التصدير: ${e instanceof Error ? e.message : 'خطأ غير معروف'}`);
@@ -238,7 +254,7 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
       const { exportLunchDinnerStickersPdf } = await import('./ld-pdf-export');
       const res = await exportLunchDinnerStickersPdf(
         nodes, w, h, (done, total) => setProgress({ done, total }),
-        `ستيكرات-${report ? `${mealAr}-${report.order.date}` : 'الغداء-والعشاء'}${colorFilterSuffix(colorFilter)}.pdf`,
+        `ستيكرات-${report ? `${mealAr}-${report.order.date}` : 'الغداء-والعشاء'}${colorFilterSuffix(colorFilter)}${customLdFilterSuffix(customLdFilter)}.pdf`,
       );
       if (res.failed > 0) alert(`تم التصدير: ${res.captured} ستيكر. تعذّر التقاط ${res.failed}.`);
     } catch (e) {
@@ -297,6 +313,8 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
                 </label>
                 <ColorFilterControl value={colorFilter} onChange={setColorFilter}
                   counts={{ white: customFiltered.length - coloredCount, colored: coloredCount }} />
+                <CustomLdFilterControl value={customLdFilter} onChange={setCustomLdFilter}
+                  counts={{ custom: customLdCount, other: customFiltered.length - customLdCount }} />
                 <SortByDietToggle checked={sortByDiet} onChange={setSortByDiet} />
                 <HeaderControls settings={settings} />
               </div>
@@ -322,7 +340,8 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
               </p>
             </div>
 
-            <DietColorsPanel dietTypes={dietTypes} settings={settings} />
+            <HiddenColorsControl colors={colorChips} settings={settings} />
+            <DietColorsPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />
           </>
         )}
       </div>
@@ -355,10 +374,14 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
                   <DietGroupHeader diet={diet} color={dietColors[diet]} count={groupCounts.get(diet) ?? 0}
                     index={[...groupCounts.keys()].indexOf(diet) + 1} />
                 )}
-                <StickerCard ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
-                  bgColor={diet ? dietColors[diet] : undefined}
-                  custom={custom}
-                  innerRef={el => setNode(key, el)} />
+                {/* الشارة خارج عقدة الستيكر (innerRef) — لا تدخل الـPDF */}
+                <div className="relative">
+                  {ben.custom_ld_meals && <CustomLdBadge />}
+                  <StickerCard ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
+                    bgColor={diet ? dietColors[diet] : undefined}
+                    custom={custom}
+                    innerRef={el => setNode(key, el)} />
+                </div>
               </Fragment>
             );
           })}

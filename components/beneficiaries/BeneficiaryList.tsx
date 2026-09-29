@@ -12,6 +12,7 @@ import {
   EXCLUSION_COLUMNS,
   FIXED_COLUMNS,
   STICKER_FLAG_COLUMNS,
+  COL_CUSTOM_LD,
   buildBeneficiaryRow,
   parseFixedToken,
   parseYesNo,
@@ -153,8 +154,11 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       // الأنظمة الغذائية (diet-systems-migration) — diet_id يفصل المحظور الشخصي
       // عن المشتق من نظام، فلا يحوّل حفظُ المستفيد محظوراتِ النظام إلى شخصية.
       let withDiets = true;
+      // علامة «وجبات غداء وعشاء مخصصة» (custom-ld-meals-migration) — تُسقط وحدها لو غابت
+      let withCustomLd = true;
       const fetchBens = (withFixedCategory: boolean, withEntityType: boolean, withFlags: boolean) => {
-        const flagCols = withFlags ? ', no_fish, no_pasta_sandwich, low_carb, is_active' : '';
+        const flagCols = (withFlags ? ', no_fish, no_pasta_sandwich, low_carb, is_active' : '') +
+          (withFlags && withCustomLd ? ', custom_ld_meals' : '');
         const fixedCols =
           `id, beneficiary_id, day_of_week, meal_type, meal_id, quantity` +
           `${withFixedCategory ? ', category, suppress_if_meal_ids' : ''}${withFixedAlt ? ', is_alternative' : ''}`;
@@ -192,6 +196,10 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         let res = await fetchBens(true, true, true);
         if (res.error && /diet_id|beneficiary_diets/i.test(res.error.message)) {
           withDiets = false;
+          res = await fetchBens(true, true, true);
+        }
+        if (res.error && /custom_ld_meals/i.test(res.error.message)) {
+          withCustomLd = false;
           res = await fetchBens(true, true, true);
         }
         // عمود is_alternative غير موجود (الترقية ما اتشغّلت) → نسقطه وحده
@@ -767,6 +775,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
             // مفعّل + خيارات الستيكر — أعمدة اختيارية، غيابها يعني مفعّل/لا
             'نعم',
             ...STICKER_FLAG_COLUMNS.map(() => 'لا'),
+            'لا',
           ]}
           onClose={() => setImportOpen(false)}
           onDone={() => { setImportOpen(false); fetchData(); }}
@@ -861,6 +870,8 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                   ...Object.fromEntries(
                     STICKER_FLAG_COLUMNS.map(f => [f.key, parseYesNo(row[f.col], false)]),
                   ),
+                  // يُكتب فقط لو العمود في الملف — الملف القديم لا يمسح العلامة في وضع التحديث
+                  ...(COL_CUSTOM_LD in row ? { custom_ld_meals: parseYesNo(row[COL_CUSTOM_LD], false) } : {}),
                 },
                 exclCols:  EXCL_COLS.map(c => ({ type: c.type, isSnack: c.isSnack, raw: row[c.col]?.toString().trim() || '' })),
                 fixedCols: FIXED_COLS.map(c => ({ type: c.type, isSnack: c.isSnack, raw: row[c.col]?.toString().trim() || '' })),
@@ -868,6 +879,15 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
             }
 
             if (parsed.length === 0) return { imported: 0, errors };
+
+            // عمود custom_ld_meals قبل ترقيته غير موجود — الملفات المصدَّرة الآن
+            // تحمله دائماً، فنسقطه من الصفوف بدل ما يفشل الاستيراد كله
+            if (parsed.some(r => 'custom_ld_meals' in r.payload)) {
+              const probe = await supabase.from('beneficiaries').select('custom_ld_meals').limit(1);
+              if (probe.error && /custom_ld_meals/i.test(probe.error.message)) {
+                for (const r of parsed) delete r.payload.custom_ld_meals;
+              }
+            }
 
             // ③ كتابة المستفيدين
             const CHUNK = 50;

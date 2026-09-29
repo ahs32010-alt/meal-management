@@ -10,7 +10,7 @@ import { needsApproval } from '@/lib/permissions';
 import { enqueueCreate, enqueueUpdate, type CreatePayload } from '@/lib/pending-actions';
 import type { Beneficiary, Meal, MealType, ItemCategory, EntityType, DietSystem } from '@/lib/types';
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS, CATEGORY_LABELS } from '@/lib/types';
-import { STICKER_FLAGS } from '@/lib/sticker-flags';
+import { STICKER_FLAGS, CUSTOM_LD_MEALS_LABEL } from '@/lib/sticker-flags';
 import DietTypeSelect from '@/components/shared/DietTypeSelect';
 import ExclusionSectionsEditor from '@/components/shared/ExclusionSectionsEditor';
 import { WEEK_TITLES, type WeekNumber } from '@/lib/menu-utils';
@@ -135,7 +135,7 @@ const slotLabel = (ov: MenuOverrideEntry) =>
  */
 const LOGGED_BENEFICIARY_FIELDS = [
   'name', 'english_name', 'code', 'category', 'villa', 'diet_type', 'notes',
-  'no_fish', 'no_pasta_sandwich', 'low_carb', 'is_active',
+  'no_fish', 'no_pasta_sandwich', 'low_carb', 'custom_ld_meals', 'is_active',
 ];
 
 const OVERRIDE_ACTION_LABELS: Record<MenuOverrideEntry['action'], string> = {
@@ -427,6 +427,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const [noFish, setNoFish] = useState(beneficiary?.no_fish ?? false);
   const [noPastaSandwich, setNoPastaSandwich] = useState(beneficiary?.no_pasta_sandwich ?? false);
   const [lowCarb, setLowCarb] = useState(beneficiary?.low_carb ?? false);
+  const [customLdMeals, setCustomLdMeals] = useState(beneficiary?.custom_ld_meals ?? false);
   const [isActive, setIsActive] = useState(beneficiary?.is_active ?? true);
 
   // المحظورات **الشخصية** فقط — صفوف الأنظمة الغذائية (diet_id) تُدار من
@@ -686,6 +687,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
       villa: villa.trim() || null, diet_type: dietType.trim() || null,
       notes: notes.trim() || null,
       no_fish: noFish, no_pasta_sandwich: noPastaSandwich, low_carb: lowCarb,
+      custom_ld_meals: customLdMeals,
       is_active: isActive,
     };
     // فقط نضيف entity_type عند الإنشاء — التعديل ما يغيّر النوع.
@@ -774,13 +776,30 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
         return;
       }
 
+      // عمود custom_ld_meals اختياري قبل custom-ld-meals-migration — لو غاب
+      // نحفظ بقية البيانات وننبّه بدل ما يفشل الحفظ كله
+      const missingCustomLd = (msg: string) => /custom_ld_meals/i.test(msg);
+      const warnCustomLd = () => alert(
+        'تم الحفظ، لكن علامة «' + CUSTOM_LD_MEALS_LABEL + '» لم تُحفظ.\n\n' +
+        'الحل: شغّل supabase/custom-ld-meals-migration.sql في Supabase SQL Editor.'
+      );
       let beneficiaryId = beneficiary?.id;
       if (beneficiary) {
-        const { error } = await supabase.from('beneficiaries').update(payload).eq('id', beneficiary.id);
+        let { error } = await supabase.from('beneficiaries').update(payload).eq('id', beneficiary.id);
+        if (error && missingCustomLd(error.message)) {
+          delete payload.custom_ld_meals;
+          ({ error } = await supabase.from('beneficiaries').update(payload).eq('id', beneficiary.id));
+          if (!error && customLdMeals) warnCustomLd();
+        }
         if (error) { setError(friendlyError(error.message)); setSaving(false); return; }
       } else {
-        const { data, error } = await supabase.from('beneficiaries').insert(payload).select('id').single();
-        if (error) { setError(friendlyError(error.message)); setSaving(false); return; }
+        let { data, error } = await supabase.from('beneficiaries').insert(payload).select('id').single();
+        if (error && missingCustomLd(error.message)) {
+          delete payload.custom_ld_meals;
+          ({ data, error } = await supabase.from('beneficiaries').insert(payload).select('id').single());
+          if (!error && customLdMeals) warnCustomLd();
+        }
+        if (error || !data) { setError(friendlyError(error?.message ?? 'تعذّر الحفظ')); setSaving(false); return; }
         beneficiaryId = data.id;
       }
 
@@ -915,6 +934,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
             no_fish: beneficiary.no_fish,
             no_pasta_sandwich: beneficiary.no_pasta_sandwich,
             low_carb: beneficiary.low_carb,
+            custom_ld_meals: beneficiary.custom_ld_meals,
             is_active: beneficiary.is_active,
           }
         : null;
@@ -1120,6 +1140,18 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                   })}
                 </div>
               </div>
+
+              {/* علامة فرز داخلية — لا تُطبع على الستيكر */}
+              <label className={`flex items-start gap-3 cursor-pointer select-none border rounded-xl p-4 transition-colors ${customLdMeals ? 'border-violet-300 bg-violet-50' : 'border-slate-200 bg-slate-50/50 hover:border-violet-200'}`}>
+                <input type="checkbox" checked={customLdMeals} onChange={e => setCustomLdMeals(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500" />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-700">{CUSTOM_LD_MEALS_LABEL}</span>
+                  <span className="block text-[11px] text-slate-500 mt-0.5">
+                    لتمييز هذه الفئة وفرزها في صفحة ستيكرات الغداء والعشاء — لا تظهر على الستيكر ولا في ملفاته.
+                  </span>
+                </span>
+              </label>
             </div>
           )}
 

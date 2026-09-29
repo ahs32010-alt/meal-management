@@ -44,3 +44,48 @@ export function sortByDietOrder<T>(items: T[], getDiet: (item: T) => string, ord
     .sort((a, b) => (a.r === b.r ? a.i - b.i : a.r - b.r))
     .map(x => x.item);
 }
+
+/**
+ * نقل نظام إلى موضع محدد (سحب وإفلات، أو «للأعلى/للأسفل» مباشرة) — مع
+ * الإبقاء على الأنظمة المحفوظة غير الموجودة حالياً في آخر القائمة.
+ */
+export function moveDietTo(dietTypes: string[], saved: string[], diet: string, toIndex: number): string[] {
+  const order = effectiveDietOrder(dietTypes, saved);
+  const i = order.indexOf(diet);
+  if (i < 0) return saved;
+  const j = Math.max(0, Math.min(order.length - 1, toIndex));
+  if (i === j) return saved;
+  order.splice(i, 1);
+  order.splice(j, 0, diet);
+  const inOrder = new Set(order);
+  return [...order, ...saved.filter(d => !inOrder.has(d))];
+}
+
+/** مفتاح لون الستيكر: لون نظامه الغذائي (بحروف صغيرة)، أو NO_DIET للأبيض */
+export function stickerColorKey(diet: string, dietColors: Record<string, string>): string {
+  const c = diet ? dietColors[diet] : undefined;
+  return c ? c.toLowerCase() : NO_DIET;
+}
+
+/**
+ * الألوان المستخدمة فعلاً مع عدد ستيكراتها والأنظمة التي تحملها — لقائمة
+ * «إخفاء لون». الأبيض (بلا لون) مفتاحه NO_DIET ويأتي أولاً.
+ */
+export function colorsInUse<T>(
+  items: T[],
+  getDiet: (item: T) => string,
+  dietColors: Record<string, string>,
+): { key: string; count: number; diets: string[] }[] {
+  const map = new Map<string, { count: number; diets: Set<string> }>();
+  for (const it of items) {
+    const diet = getDiet(it);
+    const key = stickerColorKey(diet, dietColors);
+    const e = map.get(key) ?? { count: 0, diets: new Set<string>() };
+    e.count++;
+    if (diet) e.diets.add(diet);
+    map.set(key, e);
+  }
+  return [...map.entries()]
+    .map(([key, e]) => ({ key, count: e.count, diets: [...e.diets] }))
+    .sort((a, b) => (a.key === NO_DIET ? -1 : b.key === NO_DIET ? 1 : b.count - a.count));
+}

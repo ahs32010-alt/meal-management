@@ -22,6 +22,9 @@ import { ALT_MARK, ALT_MARK_RE, CAT_AR, CAT_FROM_AR, CATEGORY_MARK_RE, DAY_FROM_
 
 export const COL_ACTIVE = 'مفعّل';
 
+/** «وجبات غداء وعشاء مخصصة» — علامة فرز لا تُطبع على الستيكر؛ عمود اختياري */
+export const COL_CUSTOM_LD = 'وجبات غداء وعشاء مخصصة';
+
 /** عمود لكل خيار ستيكر، بنفس تسميته في واجهة تخصيص المستفيد */
 export const STICKER_FLAG_COLUMNS = STICKER_FLAGS.map(f => ({ key: f.key, col: f.label }));
 
@@ -49,6 +52,7 @@ export const BENEFICIARY_HEADERS: string[] = [
   'ملاحظات',
   COL_ACTIVE,
   ...STICKER_FLAG_COLUMNS.map(c => c.col),
+  COL_CUSTOM_LD,
 ];
 
 // ─── نعم/لا ─────────────────────────────────────────────────────────────────
@@ -103,6 +107,7 @@ export interface SheetBeneficiary {
   no_fish?: boolean | null;
   no_pasta_sandwich?: boolean | null;
   low_carb?: boolean | null;
+  custom_ld_meals?: boolean | null;
 }
 
 function buildExclusionCell(
@@ -185,6 +190,7 @@ export function buildBeneficiaryRow(
   // `is_active` غير محدّد = مفعّل (الترقية ما اتشغّلت) — نفس ما تفترضه كل الصفحات
   row[COL_ACTIVE] = formatYesNo(ben.is_active !== false);
   for (const f of STICKER_FLAG_COLUMNS) row[f.col] = formatYesNo(ben[f.key] === true);
+  row[COL_CUSTOM_LD] = formatYesNo(ben.custom_ld_meals === true);
   return row;
 }
 
@@ -292,6 +298,9 @@ export function verifyBeneficiaryRoundTrip(
       if (parseYesNo(row[f.col], false) !== (ben[f.key] === true)) {
         issues.push(`${who}: الخيار «${f.col}» لا يعبر الملف`);
       }
+    }
+    if (parseYesNo(row[COL_CUSTOM_LD], false) !== (ben.custom_ld_meals === true)) {
+      issues.push(`${who}: العلامة «${COL_CUSTOM_LD}» لا تعبر الملف`);
     }
 
     // ② المحظورات — نقارن المجموعات لا الترتيب

@@ -74,6 +74,11 @@ export interface Beneficiary {
   no_fish?: boolean;
   no_pasta_sandwich?: boolean;
   low_carb?: boolean;
+  /**
+   * «وجبات غداء وعشاء مخصصة» — علامة للفرز والتمييز في صفحة ستيكرات الغداء
+   * والعشاء فقط، **لا تُطبع على الستيكر** (custom-ld-meals-migration).
+   */
+  custom_ld_meals?: boolean;
   // التعطيل المؤقت — عند false لا يُحتسب في الأوامر/الستيكرات/التقارير
   is_active?: boolean;
   created_at: string;

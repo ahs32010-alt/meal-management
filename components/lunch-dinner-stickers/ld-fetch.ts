@@ -29,7 +29,9 @@ export async function fetchStickerBeneficiaries(
     });
 
   // تدرّج: مع الأعمدة الجديدة → بدونها (الـmigration ما اشتغل) → بدون entity_type
-  let res = await attempt(`${COLS}, ${FLAG_COLS}, is_active, entity_type`, entityFilter);
+  // custom_ld_meals (علامة فرز «وجبات غداء وعشاء مخصصة») اختياري قبل ترقيته
+  let res = await attempt(`${COLS}, ${FLAG_COLS}, custom_ld_meals, is_active, entity_type`, entityFilter);
+  if (res.error) res = await attempt(`${COLS}, ${FLAG_COLS}, is_active, entity_type`, entityFilter);
   if (res.error) res = await attempt(`${COLS}, is_active, entity_type`, entityFilter);
   if (res.error) res = await attempt(`${COLS}, entity_type`, entityFilter);
   if (res.error) res = await attempt(COLS, false);
