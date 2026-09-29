@@ -10,7 +10,7 @@
  *   • جدول المستفيدين → رموز الخيارات (لا يفضل السمك…) التي لا يحملها التقرير
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Fragment, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { fetchAllRows } from '@/lib/fetch-all';
 import type { Beneficiary, DailyOrder, MealType, ReportData } from '@/lib/types';
@@ -22,7 +22,11 @@ import StickerCard from './ld-sticker-card';
 import { fetchStickerBeneficiaries } from './ld-fetch';
 import { splitDetailByCategory } from './ld-split';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
-import { DietColorsPanel, HeaderControls, SizeFields, type LdSettings } from './ld-settings';
+import {
+  ColorFilterControl, DietColorsPanel, DietGroupHeader, HeaderControls, SizeFields, SortByDietToggle,
+  colorFilterSuffix, matchesColorFilter, type ColorFilter, type LdSettings,
+} from './ld-settings';
+import { effectiveDietOrder, sortByDietOrder } from './ld-diet-order';
 import type { LdMealCustomization } from './ld-types';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
@@ -37,6 +41,8 @@ interface StickerRow {
   hasCustom: boolean;
 }
 
+const dietOfRow = (r: StickerRow) => r.ben.diet_type?.trim() ?? '';
+
 export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   const [orders, setOrders] = useState<DailyOrder[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
@@ -50,12 +56,13 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   const [sizeWidth, setSizeWidth] = useState('10');
   const [sizeHeight, setSizeHeight] = useState('10');
   const [onlyWithCustom, setOnlyWithCustom] = useState(false);
-  const [hideColored, setHideColored] = useState(false);
+  const [colorFilter, setColorFilter] = useState<ColorFilter>('all');
+  const [sortByDiet, setSortByDiet] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
-  const { headerUrl, dietColors } = settings;
+  const { headerUrl, dietColors, dietOrder } = settings;
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
@@ -167,18 +174,33 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
     [dietColors],
   );
 
-  const visibleRows = useMemo(
-    () => rows
-      .filter(r => (onlyWithCustom ? r.hasCustom : true))
-      .filter(r => (hideColored ? !isColored(r.ben) : true)),
-    [rows, onlyWithCustom, hideColored, isColored],
+  // فلتر «من عنده تخصيصات» أولاً، ثم عدّادات اللون عليه حتى تطابق ما سيظهر
+  const customFiltered = useMemo(
+    () => rows.filter(r => (onlyWithCustom ? r.hasCustom : true)),
+    [rows, onlyWithCustom],
   );
-
+  const coloredCount = useMemo(
+    () => customFiltered.filter(r => isColored(r.ben)).length,
+    [customFiltered, isColored],
+  );
   const dietTypes = useMemo(() => {
     const set = new Set<string>();
     rows.forEach(r => { const d = r.ben.diet_type?.trim(); if (d) set.add(d); });
     return [...set].sort((a, b) => a.localeCompare(b, 'ar'));
   }, [rows]);
+
+  // المرئي = المُصدَّر: فلتر اللون ثم الترتيب حسب الأنظمة الغذائية
+  const visibleRows = useMemo(() => {
+    const filtered = customFiltered.filter(r => matchesColorFilter(colorFilter, isColored(r.ben)));
+    return sortByDiet
+      ? sortByDietOrder(filtered, dietOfRow, effectiveDietOrder(dietTypes, dietOrder))
+      : filtered;
+  }, [customFiltered, colorFilter, isColored, sortByDiet, dietTypes, dietOrder]);
+  const groupCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    visibleRows.forEach(r => m.set(dietOfRow(r), (m.get(dietOfRow(r)) ?? 0) + 1));
+    return m;
+  }, [visibleRows]);
 
   const withCustomCount = rows.filter(r => r.hasCustom).length;
   // كم ستيكر زاد بسبب الفصل بالتصنيف (مستفيد له حار وبارد = ستيكران)
@@ -195,7 +217,7 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
       await exportLunchDinnerStickers(
         visibleRows.map(r => r.ben), headerUrl, w, h, dietColors,
         visibleRows.map(r => r.custom),
-        report ? `ستيكرات-${mealAr}-${report.order.date}.docx` : undefined,
+        `ستيكرات-${report ? `${mealAr}-${report.order.date}` : 'الغداء-والعشاء'}${colorFilterSuffix(colorFilter)}.docx`,
       );
     } catch (e) {
       alert(`تعذّر التصدير: ${e instanceof Error ? e.message : 'خطأ غير معروف'}`);
@@ -216,7 +238,7 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
       const { exportLunchDinnerStickersPdf } = await import('./ld-pdf-export');
       const res = await exportLunchDinnerStickersPdf(
         nodes, w, h, (done, total) => setProgress({ done, total }),
-        report ? `ستيكرات-${mealAr}-${report.order.date}.pdf` : undefined,
+        `ستيكرات-${report ? `${mealAr}-${report.order.date}` : 'الغداء-والعشاء'}${colorFilterSuffix(colorFilter)}.pdf`,
       );
       if (res.failed > 0) alert(`تم التصدير: ${res.captured} ستيكر. تعذّر التقاط ${res.failed}.`);
     } catch (e) {
@@ -273,14 +295,9 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
                     className="w-4 h-4 accent-emerald-600 cursor-pointer" />
                   <span className="text-sm text-slate-700 font-medium">من عنده تخصيصات فقط</span>
                 </label>
-                <button
-                  onClick={() => setHideColored(v => !v)}
-                  className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${
-                    hideColored ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  {hideColored ? 'إظهار الكل' : 'إخفاء الملوّنة'}
-                </button>
+                <ColorFilterControl value={colorFilter} onChange={setColorFilter}
+                  counts={{ white: customFiltered.length - coloredCount, colored: coloredCount }} />
+                <SortByDietToggle checked={sortByDiet} onChange={setSortByDiet} />
                 <HeaderControls settings={settings} />
               </div>
             </div>
@@ -322,16 +339,29 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
         <div className="py-16 text-center text-slate-400 text-sm no-print">اختر أمر تشغيل لعرض ستيكرات اليوم.</div>
       ) : report && visibleRows.length === 0 ? (
         <div className="py-16 text-center text-slate-400 text-sm">
-          {onlyWithCustom ? 'لا يوجد مستفيدون بتخصيصات في هذا الأمر.' : 'لا توجد ستيكرات للعرض.'}
+          {colorFilter === 'colored' ? 'لا توجد ستيكرات ملوّنة في هذا الأمر.'
+            : colorFilter === 'white' ? 'لا توجد ستيكرات بيضاء في هذا الأمر.'
+            : onlyWithCustom ? 'لا يوجد مستفيدون بتخصيصات في هذا الأمر.' : 'لا توجد ستيكرات للعرض.'}
         </div>
       ) : (
         <div className="flex flex-wrap gap-4 justify-center md:justify-start">
-          {visibleRows.map(({ key, ben, custom }) => (
-            <StickerCard key={key} ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
-              bgColor={ben.diet_type?.trim() ? dietColors[ben.diet_type.trim()] : undefined}
-              custom={custom}
-              innerRef={el => setNode(key, el)} />
-          ))}
+          {visibleRows.map((row, i) => {
+            const { key, ben, custom } = row;
+            const diet = dietOfRow(row);
+            const newGroup = sortByDiet && (i === 0 || dietOfRow(visibleRows[i - 1]) !== diet);
+            return (
+              <Fragment key={key}>
+                {newGroup && (
+                  <DietGroupHeader diet={diet} color={dietColors[diet]} count={groupCounts.get(diet) ?? 0}
+                    index={[...groupCounts.keys()].indexOf(diet) + 1} />
+                )}
+                <StickerCard ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
+                  bgColor={diet ? dietColors[diet] : undefined}
+                  custom={custom}
+                  innerRef={el => setNode(key, el)} />
+              </Fragment>
+            );
+          })}
         </div>
       )}
     </div>

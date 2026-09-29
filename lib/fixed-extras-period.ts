@@ -55,11 +55,24 @@ export interface FixedExtrasRow {
   manual: number;
 }
 
-/** صنف يضيفه المستخدم يدوياً للحصر — يُجمع مع المحسوب من المستفيدين */
+/**
+ * صنف يضيفه المستخدم يدوياً للحصر — يُجمع مع المحسوب من المستفيدين.
+ * العدد **يومي**: يُحسب مرة لكل يوم من أيام الحصر داخل [start_date, end_date].
+ */
 export interface ManualExtra {
+  id?: string;
   meal_id: string;
   meal_type: MealType;
   quantity: number;
+  /** YYYY-MM-DD */
+  start_date: string;
+  /** YYYY-MM-DD، أو null = مستمر */
+  end_date: string | null;
+}
+
+/** كم يوماً من أيام الحصر يقع داخل فترة الصنف اليدوي */
+export function manualActiveDays(x: Pick<ManualExtra, 'start_date' | 'end_date'>, dates: string[]): number {
+  return dates.filter(d => d >= x.start_date && (!x.end_date || d <= x.end_date)).length;
 }
 
 export interface FixedExtrasReport {
@@ -202,9 +215,11 @@ export function computeFixedExtras(params: {
     }
   }
 
-  // الإضافات اليدوية — فقط للوجبات المختارة في الحصر
+  // الإضافات اليدوية — للوجبات المختارة فقط، العدد اليومي × أيام فترتها داخل الحصر
   for (const x of params.manual ?? []) {
-    if (mealTypes.includes(x.meal_type)) add(null, x.meal_id, x.meal_type, Math.floor(x.quantity));
+    if (!mealTypes.includes(x.meal_type)) continue;
+    const days = manualActiveDays(x, dates);
+    if (days > 0) add(null, x.meal_id, x.meal_type, Math.floor(x.quantity) * days);
   }
 
   const benById = new Map(bens.map(b => [b.id, b]));

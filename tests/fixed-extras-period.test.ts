@@ -96,9 +96,9 @@ describe('computeFixedExtras', () => {
       beneficiaries: [ben('a', [{ day_of_week: 6, meal_type: 'lunch', meal_id: 'dates', quantity: 2 }])],
       prices: { dates: 2, soup: 5 },
       manual: [
-        { meal_id: 'dates', meal_type: 'lunch', quantity: 10 },  // يُجمع مع صنف موجود
-        { meal_id: 'soup', meal_type: 'dinner', quantity: 3 },   // صنف جديد كلياً
-        { meal_id: 'milk', meal_type: 'breakfast', quantity: 4 }, // وجبة غير مختارة → لا يُحسب
+        { meal_id: 'dates', meal_type: 'lunch', quantity: 10, start_date: '2026-01-01', end_date: null },  // يُجمع مع صنف موجود
+        { meal_id: 'soup', meal_type: 'dinner', quantity: 3, start_date: '2026-01-01', end_date: null },   // صنف جديد كلياً
+        { meal_id: 'milk', meal_type: 'breakfast', quantity: 4, start_date: '2026-01-01', end_date: null }, // وجبة غير مختارة → لا يُحسب
       ],
     });
     const dates = r.rows.find(x => x.meal.id === 'dates')!;
@@ -113,5 +113,17 @@ describe('computeFixedExtras', () => {
     expect(r.grandTotal).toBe(15);
     expect(r.grandTotalPrice).toBe(39);
     expect(r.byBeneficiary.map(b => [b.id, b.total])).toEqual([['a', 2]]);
+  });
+
+  it('الإضافة اليدوية عدد يومي × أيام فترتها داخل الحصر فقط', () => {
+    const r = computeFixedExtras({
+      ...base, from: '2026-09-01', to: '2026-09-30', beneficiaries: [],
+      manual: [
+        { meal_id: 'dates', meal_type: 'lunch', quantity: 5, start_date: '2026-09-10', end_date: null },         // 21 يوم
+        { meal_id: 'soup', meal_type: 'lunch', quantity: 2, start_date: '2026-08-25', end_date: '2026-09-03' },  // 3 أيام
+        { meal_id: 'milk', meal_type: 'lunch', quantity: 9, start_date: '2026-10-01', end_date: null },          // خارج الفترة
+      ],
+    });
+    expect(Object.fromEntries(r.rows.map(x => [x.meal.id, x.total]))).toEqual({ dates: 105, soup: 6 });
   });
 });

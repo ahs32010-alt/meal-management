@@ -9,9 +9,11 @@ import { formatNow, todayISO } from '@/lib/date-utils';
 const dmy = (iso: string) => iso.split('-').reverse().join('/');
 import type { FixedExtrasReport, ManualExtra } from '@/lib/fixed-extras-period';
 import ManualExtrasEditor from '@/components/reports/ManualExtrasEditor';
+import { supabase } from '@/lib/supabase-client';
 
-// مسودة الأصناف اليدوية تبقى في متصفح المستخدم بين الزيارات — راحة فقط
+// احتياط فقط: لو جدول fixed_extras_manual غير موجود بعد نحفظ في المتصفح
 const MANUAL_KEY = 'fixed-extras:manual';
+const MANUAL_COLS = 'id, meal_id, meal_type, quantity, start_date, end_date';
 import FixedExtrasPdf from '@/components/reports/FixedExtrasPdf';
 import { formatMoney } from '@/lib/costs';
 
@@ -39,18 +41,77 @@ export default function FixedExtrasView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showBens, setShowBens] = useState(false);
+  /**
+   * الأصناف اليدوية محفوظة في القاعدة (fixed_extras_manual) — ثابتة لكل
+   * المستخدمين حتى تُعدَّل أو تُحذف. كل تعديل يُكتب فوراً.
+   */
   const [manual, setManual] = useState<ManualExtra[]>([]);
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(MANUAL_KEY);
-      if (raw) setManual(JSON.parse(raw) as ManualExtra[]);
-    } catch { /* تخزين غير متاح — نبدأ فاضي */ }
+  const [manualDbMissing, setManualDbMissing] = useState(false);
+  const [manualError, setManualError] = useState('');
+
+  const loadManual = useCallback(async () => {
+    const { data, error: e } = await supabase
+      .from('fixed_extras_manual')
+      .select(MANUAL_COLS)
+      .order('start_date')
+      .order('created_at');
+    if (e) {
+      setManualDbMissing(true);
+      try {
+        const raw = localStorage.getItem(MANUAL_KEY);
+        const parsed = raw ? (JSON.parse(raw) as ManualExtra[]) : [];
+        // مسودات قديمة بلا فترة أو معرّف — نكمّلها
+        setManual(parsed.map(x => ({
+          ...x,
+          id: x.id ?? crypto.randomUUID(),
+          start_date: x.start_date ?? todayISO(),
+          end_date: x.end_date ?? null,
+        })));
+      } catch { /* تخزين غير متاح */ }
+      return;
+    }
+    setManualDbMissing(false);
+    setManual((data ?? []) as ManualExtra[]);
   }, []);
-  const updateManual = (items: ManualExtra[]) => {
-    setManual(items);
-    try { localStorage.setItem(MANUAL_KEY, JSON.stringify(items)); } catch { /* تجاهل */ }
+  useEffect(() => { void loadManual(); }, [loadManual]);
+
+  // كل تعديل يُكتب فوراً؛ عند الفشل نعيد القراءة فلا تُعرض حالة غير محفوظة
+  const persist = async (next: ManualExtra[], write: () => PromiseLike<{ error: { message: string } | null }>) => {
+    setManual(next);
+    setManualError('');
+    if (manualDbMissing) {
+      try { localStorage.setItem(MANUAL_KEY, JSON.stringify(next)); } catch { /* تجاهل */ }
+      return;
+    }
+    const { error: e } = await write();
+    if (e) {
+      setManualError(`تعذّر حفظ التعديل: ${e.message}`);
+      void loadManual();
+    }
   };
+
+  const manualAdd = async (x: ManualExtra) => {
+    if (manualDbMissing) {
+      void persist([...manual, { ...x, id: crypto.randomUUID() }], async () => ({ error: null }));
+      return;
+    }
+    setManualError('');
+    const { data, error: e } = await supabase.from('fixed_extras_manual').insert(x).select(MANUAL_COLS).single();
+    if (e) { setManualError(`تعذّر حفظ الصنف: ${e.message}`); return; }
+    setManual(prev => [...prev, data as ManualExtra]);
+  };
+  const manualUpdate = (id: string, patch: Partial<ManualExtra>) =>
+    void persist(
+      manual.map(x => x.id === id ? { ...x, ...patch } : x),
+      () => supabase.from('fixed_extras_manual').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', id),
+    );
+  const manualRemove = (id: string) =>
+    void persist(manual.filter(x => x.id !== id), () => supabase.from('fixed_extras_manual').delete().eq('id', id));
+  const manualClear = () =>
+    void persist([], () => supabase.from('fixed_extras_manual').delete().in('id', manual.map(x => x.id!).filter(Boolean)));
+
   const [exporting, setExporting] = useState(false);
+
   // الـPDF نسخة مصمَّمة لورق A4 (FixedExtrasPdf) لا لقطة من الشاشة
   const exportPdf = () => { if (report) { setError(''); setExporting(true); } };
   const onPdfDone = useCallback((err?: string) => {
@@ -74,7 +135,7 @@ export default function FixedExtrasView() {
         body: JSON.stringify({
           from, to,
           meal_types: MEAL_TYPES.filter(t => mealTypes.has(t)),
-          manual,
+          manual: manual.map(({ meal_id, meal_type, quantity, start_date, end_date }) => ({ meal_id, meal_type, quantity, start_date, end_date })),
           ...(entityType ? { entity_type: entityType } : {}),
         }),
       });
@@ -149,8 +210,16 @@ export default function FixedExtrasView() {
         </div>
         <ManualExtrasEditor
           items={manual}
-          onChange={updateManual}
+          reportFrom={from}
+          reportTo={to}
+          onAdd={x => { void manualAdd(x); }}
+          onUpdate={manualUpdate}
+          onRemove={manualRemove}
+          onClear={manualClear}
           mealTypes={MEAL_TYPES.filter(t => mealTypes.has(t))}
+          notice={manualError || (manualDbMissing
+            ? 'محفوظة في هذا المتصفح فقط — لتصير ثابتة لكل المستخدمين شغّل supabase/fixed-extras-manual-migration.sql في Supabase.'
+            : '')}
         />
         <div className="flex items-center justify-between gap-3 pt-1">
           <p className="text-xs text-slate-400">

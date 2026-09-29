@@ -5,12 +5,16 @@
  * (كان هو محتوى صفحة ستيكرات الغداء والعشاء كلها قبل إضافة تبويب «حسب الوجبة»).
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Fragment, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Beneficiary } from '@/lib/types';
 import StickerCard from './ld-sticker-card';
 import { fetchStickerBeneficiaries } from './ld-fetch';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
-import { DietColorsPanel, HeaderControls, SizeFields, type LdSettings } from './ld-settings';
+import {
+  ColorFilterControl, DietColorsPanel, DietGroupHeader, HeaderControls, SizeFields, SortByDietToggle,
+  colorFilterSuffix, matchesColorFilter, type ColorFilter, type LdSettings,
+} from './ld-settings';
+import { effectiveDietOrder, sortByDietOrder } from './ld-diet-order';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
 export default function LdFixedTab({ settings }: { settings: LdSettings }) {
@@ -22,9 +26,10 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [sizeWidth, setSizeWidth] = useState('10');
   const [sizeHeight, setSizeHeight] = useState('10');
-  const [hideColored, setHideColored] = useState(false);
+  const [colorFilter, setColorFilter] = useState<ColorFilter>('all');
+  const [sortByDiet, setSortByDiet] = useState(true);
 
-  const { headerUrl, dietColors } = settings;
+  const { headerUrl, dietColors, dietOrder } = settings;
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
@@ -45,12 +50,24 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
 
   // هل الستيكر ملوّن (نظامه الغذائي له لون)؟
   const isColored = (b: Beneficiary) => !!(b.diet_type?.trim() && dietColors[b.diet_type.trim()]);
-  // القائمة المرئية للعرض والتصدير — عند تفعيل الإخفاء نستبعد الملوّنة
-  const visibleBeneficiaries = useMemo(
-    () => (hideColored ? beneficiaries.filter(b => !isColored(b)) : beneficiaries),
+  const coloredCount = useMemo(
+    () => beneficiaries.filter(isColored).length,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [beneficiaries, hideColored, dietColors],
+    [beneficiaries, dietColors],
   );
+  const dietOf = (b: Beneficiary) => b.diet_type?.trim() ?? '';
+  // القائمة المرئية للعرض والتصدير — حسب فلتر اللون (الكل/البيضاء/الملوّنة)،
+  // ثم مرتّبة حسب ترتيب الأنظمة الغذائية حتى يطلع الـPDF/Word مفروزاً
+  const visibleBeneficiaries = useMemo(() => {
+    const filtered = beneficiaries.filter(b => matchesColorFilter(colorFilter, isColored(b)));
+    return sortByDiet ? sortByDietOrder(filtered, dietOf, effectiveDietOrder(dietTypes, dietOrder)) : filtered;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [beneficiaries, colorFilter, dietColors, sortByDiet, dietTypes, dietOrder]);
+  const groupCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    visibleBeneficiaries.forEach(b => m.set(dietOf(b), (m.get(dietOf(b)) ?? 0) + 1));
+    return m;
+  }, [visibleBeneficiaries]);
 
   const loadBeneficiaries = useCallback(async () => {
     // آخر لقطة تُرسم فوراً، والطلب يستبدلها بمجرّد وصوله
@@ -70,7 +87,10 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
     setExporting(true);
     try {
       const { exportLunchDinnerStickers } = await import('./ld-word-export');
-      await exportLunchDinnerStickers(visibleBeneficiaries, headerUrl, w, h, dietColors);
+      await exportLunchDinnerStickers(
+        visibleBeneficiaries, headerUrl, w, h, dietColors, undefined,
+        `ستيكرات-الغداء-والعشاء${colorFilterSuffix(colorFilter)}.docx`,
+      );
     } catch (e) {
       alert(`تعذّر التصدير: ${e instanceof Error ? e.message : 'خطأ غير معروف'}`);
     } finally {
@@ -89,7 +109,10 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
         .filter((el): el is HTMLDivElement => !!el);
       if (!nodes.length) { alert('لا توجد ستيكرات للتصدير — انتظر تحميل الصفحة كاملة ثم أعد المحاولة'); return; }
       const { exportLunchDinnerStickersPdf } = await import('./ld-pdf-export');
-      const res = await exportLunchDinnerStickersPdf(nodes, w, h, (done, total) => setProgress({ done, total }));
+      const res = await exportLunchDinnerStickersPdf(
+        nodes, w, h, (done, total) => setProgress({ done, total }),
+        `ستيكرات-الغداء-والعشاء${colorFilterSuffix(colorFilter)}.pdf`,
+      );
       if (res.failed > 0) {
         alert(`تم التصدير: ${res.captured} ستيكر. تعذّر التقاط ${res.failed}.`);
       }
@@ -108,24 +131,12 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <p className="text-slate-500 text-sm">
             ستيكر ثابت لكل مستفيد — {visibleBeneficiaries.length}
-            {hideColored && beneficiaries.length !== visibleBeneficiaries.length
-              ? ` ظاهر (مخفي ${beneficiaries.length - visibleBeneficiaries.length} ملوّن)`
-              : ' مستفيد'}
+            {colorFilter === 'all' ? ' مستفيد' : ` ظاهر من ${beneficiaries.length}`}
           </p>
           <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={() => setHideColored(v => !v)}
-              className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${
-                hideColored ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                {hideColored
-                  ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                  : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.542 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />}
-              </svg>
-              {hideColored ? 'إظهار الكل' : 'إخفاء الستيكرات الملوّنة'}
-            </button>
+            <ColorFilterControl value={colorFilter} onChange={setColorFilter}
+              counts={{ white: beneficiaries.length - coloredCount, colored: coloredCount }} />
+            <SortByDietToggle checked={sortByDiet} onChange={setSortByDiet} />
             <HeaderControls settings={settings} />
           </div>
         </div>
@@ -166,14 +177,26 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
       ) : beneficiaries.length === 0 ? (
         <div className="py-16 text-center text-slate-400 text-sm">لا يوجد مستفيدون.</div>
       ) : visibleBeneficiaries.length === 0 ? (
-        <div className="py-16 text-center text-slate-400 text-sm">كل الستيكرات ملوّنة ومخفيّة. اضغط «إظهار الكل».</div>
+        <div className="py-16 text-center text-slate-400 text-sm">
+          {colorFilter === 'colored' ? 'لا توجد ستيكرات ملوّنة — حدّد ألوان الأنظمة الغذائية أولاً.' : 'لا توجد ستيكرات بيضاء.'}
+        </div>
       ) : (
         <div className="flex flex-wrap gap-4 justify-center md:justify-start">
-          {visibleBeneficiaries.map(ben => (
-            <StickerCard key={ben.id} ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
-              bgColor={ben.diet_type?.trim() ? dietColors[ben.diet_type.trim()] : undefined}
-              innerRef={el => setNode(ben.id, el)} />
-          ))}
+          {visibleBeneficiaries.map((ben, i) => {
+            const diet = dietOf(ben);
+            const newGroup = sortByDiet && (i === 0 || dietOf(visibleBeneficiaries[i - 1]) !== diet);
+            return (
+              <Fragment key={ben.id}>
+                {newGroup && (
+                  <DietGroupHeader diet={diet} color={dietColors[diet]} count={groupCounts.get(diet) ?? 0}
+                    index={[...groupCounts.keys()].indexOf(diet) + 1} />
+                )}
+                <StickerCard ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
+                  bgColor={diet ? dietColors[diet] : undefined}
+                  innerRef={el => setNode(ben.id, el)} />
+              </Fragment>
+            );
+          })}
         </div>
       )}
     </div>

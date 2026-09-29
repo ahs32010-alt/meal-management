@@ -266,6 +266,7 @@ as $$
     'beneficiary_diets',
     'exclusions',
     'beneficiary_fixed_meals',
+    'fixed_extras_manual',
     'menu_items',
     'order_items',
     'sticker_splits',

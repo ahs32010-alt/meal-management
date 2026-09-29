@@ -50,17 +50,20 @@ export async function POST(request: Request) {
     : body.entity_type === 'beneficiary' ? 'beneficiary' as const
     : undefined;
 
-  // الأصناف المضافة يدوياً: [{ meal_id, meal_type, quantity }]
+  // الأصناف المضافة يدوياً: [{ meal_id, meal_type, quantity, start_date, end_date|null }]
   const UUID = /^[0-9a-f-]{36}$/i;
   const manual: ManualExtra[] = (Array.isArray(body.manual) ? body.manual : [])
     .slice(0, 500)
     .flatMap((x: unknown) => {
-      const r = x as { meal_id?: unknown; meal_type?: unknown; quantity?: unknown };
+      const r = x as { meal_id?: unknown; meal_type?: unknown; quantity?: unknown; start_date?: unknown; end_date?: unknown };
       const qty = Number(r.quantity);
       if (typeof r.meal_id !== 'string' || !UUID.test(r.meal_id)) return [];
       if (!MEAL_TYPES.includes(r.meal_type as MealType)) return [];
       if (!Number.isInteger(qty) || qty <= 0 || qty > 1_000_000) return [];
-      return [{ meal_id: r.meal_id, meal_type: r.meal_type as MealType, quantity: qty }];
+      if (typeof r.start_date !== 'string' || !ISO_DATE.test(r.start_date)) return [];
+      const end = typeof r.end_date === 'string' && ISO_DATE.test(r.end_date) ? r.end_date : null;
+      if (end && end < r.start_date) return [];
+      return [{ meal_id: r.meal_id, meal_type: r.meal_type as MealType, quantity: qty, start_date: r.start_date, end_date: end }];
     });
 
   try {
