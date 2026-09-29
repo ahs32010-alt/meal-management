@@ -70,9 +70,14 @@ export interface LdSettings {
   removeHeader: () => void;
   dietColors: Record<string, string>;
   setDietColor: (diet: string, color: string | null) => void;
-  /** ترتيب الأنظمة الغذائية المحفوظ (محلياً على هذا الجهاز) */
+  /** ترتيب الأنظمة الغذائية — مشترك لكل المستخدمين (sticker_settings) */
   dietOrder: string[];
   setDietOrder: (order: string[]) => void;
+  /** إظهار قسم «ترتيب الأنظمة الغذائية» في صفحة الستيكرات (يُضبط من الإعدادات) */
+  showDietOrder: boolean;
+  setShowDietOrder: (v: boolean) => void;
+  /** false = جدول sticker_settings غير موجود بعد — الترتيب محلي على هذا الجهاز */
+  sharedSettings: boolean;
   /** ألوان مخفية من المعاينة والتصدير (مفتاح اللون بحروف صغيرة، '' = الأبيض) */
   hiddenColors: string[];
   toggleHiddenColor: (key: string) => void;
@@ -85,6 +90,8 @@ export function useLdStickerSettings(): LdSettings {
   const [dietColors, setDietColors] = useState<Record<string, string>>({});
   const [dietOrder, setDietOrderState] = useState<string[]>([]);
   const [hiddenColors, setHiddenColorsState] = useState<string[]>([]);
+  const [showDietOrder, setShowDietOrderState] = useState(true);
+  const [sharedSettings, setSharedSettings] = useState(true);
 
   useEffect(() => {
     // كاش محلي فوري
@@ -98,6 +105,23 @@ export function useLdStickerSettings(): LdSettings {
       const hidden = localStorage.getItem(HIDDEN_COLORS_KEY);
       if (hidden) setHiddenColorsState(JSON.parse(hidden) as string[]);
     } catch {}
+    // الترتيب وإظهاره: مشتركان في sticker_settings (لو الترقية اتشغّلت)
+    (async () => {
+      const { data, error } = await supabase
+        .from('sticker_settings').select('diet_order, show_diet_order').eq('id', 1).maybeSingle();
+      if (error) { setSharedSettings(false); return; }
+      const row = data as { diet_order: string[] | null; show_diet_order: boolean } | null;
+      if (row) {
+        setShowDietOrderState(row.show_diet_order !== false);
+        // أول مرة: ترتيب محفوظ في هذا المتصفح والقاعدة فاضية → ننقله للقاعدة
+        const local = (() => { try { return JSON.parse(localStorage.getItem(DIET_ORDER_KEY) ?? '[]') as string[]; } catch { return []; } })();
+        if ((row.diet_order ?? []).length === 0 && local.length > 0) {
+          void supabase.from('sticker_settings').upsert({ id: 1, diet_order: local, updated_at: new Date().toISOString() });
+        } else {
+          setDietOrderState(row.diet_order ?? []);
+        }
+      }
+    })();
     // المصدر الرئيسي: قاعدة البيانات (لو الجدول موجود)
     (async () => {
       const { data, error } = await supabase.from('lunch_dinner_diet_colors').select('diet_type, color');
@@ -133,6 +157,14 @@ export function useLdStickerSettings(): LdSettings {
   const setDietOrder = useCallback((order: string[]) => {
     setDietOrderState(order);
     try { localStorage.setItem(DIET_ORDER_KEY, JSON.stringify(order)); } catch {}
+    void supabase.from('sticker_settings')
+      .upsert({ id: 1, diet_order: order, updated_at: new Date().toISOString() });
+  }, []);
+
+  const setShowDietOrder = useCallback((v: boolean) => {
+    setShowDietOrderState(v);
+    void supabase.from('sticker_settings')
+      .upsert({ id: 1, show_diet_order: v, updated_at: new Date().toISOString() });
   }, []);
 
   const saveHidden = (next: string[]) => {
@@ -169,6 +201,7 @@ export function useLdStickerSettings(): LdSettings {
   return {
     headerUrl, uploading, uploadHeader, removeHeader, dietColors, setDietColor, dietOrder, setDietOrder,
     hiddenColors, toggleHiddenColor, showAllColors,
+    showDietOrder, setShowDietOrder, sharedSettings,
   };
 }
 
@@ -199,118 +232,171 @@ export function HeaderControls({ settings }: { settings: LdSettings }) {
   );
 }
 
-// ── لوحة ألوان وترتيب الأنظمة الغذائية (قابلة للطيّ) ────────────────────────
-/**
- * الترتيب بالسحب والإفلات (من المقبض ⋮⋮) أو بأزرار سريعة: ⤒ للأعلى، ↑ ↓ خطوة،
- * ⤓ للأسفل. بجانب كل نظام عدد ستيكراته، وزر عين لإخفاء لونه.
- */
-export function DietColorsPanel({ dietTypes, settings, counts }: {
-  dietTypes: string[];
-  settings: LdSettings;
-  /** عدد الستيكرات لكل نظام (قبل إخفاء الألوان) */
-  counts?: Map<string, number>;
+// ── غلاف قسم قابل للطيّ ────────────────────────────────────────────────────────
+function Collapsible({ title, icon, hint, defaultOpen = false, children }: {
+  title: string; icon: React.ReactNode; hint: string; defaultOpen?: boolean; children: React.ReactNode;
 }) {
-  const { dietColors, setDietColor, dietOrder, setDietOrder, hiddenColors, toggleHiddenColor } = settings;
-  const ordered = effectiveDietOrder(dietTypes, dietOrder);
-  const move = (diet: string, delta: -1 | 1) => setDietOrder(moveDiet(dietTypes, dietOrder, diet, delta));
-  const moveTo = (diet: string, idx: number) => setDietOrder(moveDietTo(dietTypes, dietOrder, diet, idx));
-  const [open, setOpen] = useState(false);
-  const [openColorFor, setOpenColorFor] = useState<string | null>(null);
-  const [dragging, setDragging] = useState<string | null>(null);
-  const [dropAt, setDropAt] = useState<number | null>(null);
-
-  if (dietTypes.length === 0) return null;
-
-  const iconBtn = 'p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-25 disabled:pointer-events-none';
-
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="card overflow-hidden max-w-2xl">
+    <div className="card overflow-hidden">
       <button
         type="button"
         onClick={() => setOpen(v => !v)}
         className="w-full flex items-center justify-between gap-2 px-4 py-3 hover:bg-slate-50 transition-colors"
       >
-        <span className="flex items-center gap-2 font-bold text-slate-800 text-sm">
-          <svg className="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343" />
-          </svg>
-          ألوان وترتيب الأنظمة الغذائية
-        </span>
+        <span className="flex items-center gap-2 font-bold text-slate-800 text-sm">{icon}{title}</span>
         <span className="flex items-center gap-2">
-          <span className="text-[11px] text-slate-400">{open ? 'تُحفظ تلقائياً' : `${dietTypes.length} نظام`}</span>
+          <span className="text-[11px] text-slate-400">{open ? 'تُحفظ تلقائياً' : hint}</span>
           <svg className={`w-4 h-4 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
           </svg>
         </span>
       </button>
+      {open && <div className="px-4 pb-3 border-t border-slate-100">{children}</div>}
+    </div>
+  );
+}
 
-      {open && (
-        <div className="px-4 pb-3 border-t border-slate-100">
-          <div className="flex items-center justify-between gap-2 py-2">
-            <p className="text-[11px] text-slate-500">
-              اسحب النظام من <b>⋮⋮</b> لمكانه، أو استخدم الأزرار. الستيكرات تظهر وتُصدَّر بهذا الترتيب، ومن ليس له نظام في الآخر.
-            </p>
-            {dietOrder.length > 0 && (
-              <button type="button" onClick={() => setDietOrder([])}
-                className="text-[11px] text-slate-400 hover:text-slate-700 underline whitespace-nowrap">
-                ترتيب أبجدي
-              </button>
-            )}
-          </div>
-          <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg">
-          {ordered.map((diet, idx) => {
-            const selected = dietColors[diet];
-            const pickerOpen = openColorFor === diet;
-            const colorKey = selected ? selected.toLowerCase() : NO_DIET;
-            const hidden = hiddenColors.includes(colorKey);
-            const count = counts?.get(diet);
-            return (
-              <div
-                key={diet}
-                draggable
-                onDragStart={e => { setDragging(diet); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', diet); }}
-                onDragEnd={() => { setDragging(null); setDropAt(null); }}
-                onDragOver={e => { if (dragging) { e.preventDefault(); setDropAt(idx); } }}
-                onDrop={e => { e.preventDefault(); if (dragging) moveTo(dragging, idx); setDragging(null); setDropAt(null); }}
-                className={`flex items-center gap-2 px-2 py-1.5 transition-colors ${
-                  dragging === diet ? 'opacity-40' : ''
-                } ${dropAt === idx && dragging && dragging !== diet ? 'bg-indigo-50 ring-2 ring-inset ring-indigo-300' : ''} ${hidden ? 'bg-slate-50' : ''}`}
-              >
-                <span className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 select-none px-0.5 text-lg leading-none" title="اسحب لتغيير الترتيب">⋮⋮</span>
-                <span className="w-6 text-center text-xs font-bold text-slate-400 shrink-0">{idx + 1}</span>
-                <span className={`flex items-center gap-2 font-medium text-sm flex-1 min-w-0 ${hidden ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
-                  <span className="w-3.5 h-3.5 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: selected || '#ffffff' }} />
-                  <span className="truncate" title={diet}>{diet}</span>
-                  {count !== undefined && <span className="text-[11px] text-slate-400 font-normal shrink-0">({count})</span>}
-                </span>
-                <span className="flex items-center shrink-0">
-                  <button type="button" onClick={() => moveTo(diet, 0)} disabled={idx === 0} title="للأعلى" aria-label={`نقل ${diet} للأعلى`} className={iconBtn}>
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 11l7-7 7 7M5 19l7-7 7 7" /></svg>
-                  </button>
-                  <button type="button" onClick={() => move(diet, -1)} disabled={idx === 0} title="خطوة لأعلى" aria-label={`تحريك ${diet} لأعلى`} className={iconBtn}>
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" /></svg>
-                  </button>
-                  <button type="button" onClick={() => move(diet, 1)} disabled={idx === ordered.length - 1} title="خطوة لأسفل" aria-label={`تحريك ${diet} لأسفل`} className={iconBtn}>
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
-                  </button>
-                  <button type="button" onClick={() => moveTo(diet, ordered.length - 1)} disabled={idx === ordered.length - 1} title="للأسفل" aria-label={`نقل ${diet} للأسفل`} className={iconBtn}>
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 13l-7 7-7-7M19 5l-7 7-7-7" /></svg>
-                  </button>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => toggleHiddenColor(colorKey)}
-                  title={hidden ? 'إظهار هذا اللون' : 'إخفاء هذا اللون من المعاينة والتصدير'}
-                  aria-pressed={hidden}
-                  className={`p-1 rounded shrink-0 ${hidden ? 'text-rose-500 hover:bg-rose-50' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'}`}
-                >
-                  {hidden ? (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>
-                  ) : (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                  )}
+// ── ترتيب الأنظمة الغذائية ────────────────────────────────────────────────────
+/**
+ * ترتيب فرز الستيكرات حسب النظام الغذائي — مستقل عن الألوان. السحب والإفلات
+ * من ⋮⋮ أو أزرار: للأعلى، خطوة، خطوة، للأسفل. مشترك لكل المستخدمين.
+ */
+export function DietOrderPanel({ dietTypes, settings, counts, defaultOpen }: {
+  dietTypes: string[];
+  settings: LdSettings;
+  /** عدد الستيكرات لكل نظام */
+  counts?: Map<string, number>;
+  defaultOpen?: boolean;
+}) {
+  const { dietColors, dietOrder, setDietOrder, sharedSettings } = settings;
+  const ordered = effectiveDietOrder(dietTypes, dietOrder);
+  const move = (diet: string, delta: -1 | 1) => setDietOrder(moveDiet(dietTypes, dietOrder, diet, delta));
+  const moveTo = (diet: string, idx: number) => setDietOrder(moveDietTo(dietTypes, dietOrder, diet, idx));
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<number | null>(null);
+
+  if (dietTypes.length === 0) return null;
+  const iconBtn = 'p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-25 disabled:pointer-events-none';
+
+  return (
+    <Collapsible
+      title="ترتيب الأنظمة الغذائية"
+      hint={`${dietTypes.length} نظام`}
+      defaultOpen={defaultOpen}
+      icon={
+        <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
+        </svg>
+      }
+    >
+      <div className="flex items-center justify-between gap-2 py-2">
+        <p className="text-[11px] text-slate-500">
+          اسحب النظام من <b>⋮⋮</b> لمكانه، أو استخدم الأزرار. الستيكرات تُعرض وتُصدَّر بهذا الترتيب، ومن ليس له نظام في الآخر.
+          {!sharedSettings && <span className="text-amber-600"> (محفوظ على هذا الجهاز فقط — شغّل supabase/sticker-settings-migration.sql ليصير مشتركاً)</span>}
+        </p>
+        {dietOrder.length > 0 && (
+          <button type="button" onClick={() => setDietOrder([])}
+            className="text-[11px] text-slate-400 hover:text-slate-700 underline whitespace-nowrap">
+            ترتيب أبجدي
+          </button>
+        )}
+      </div>
+      <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg">
+        {ordered.map((diet, idx) => {
+          const color = dietColors[diet];
+          const count = counts?.get(diet);
+          return (
+            <div
+              key={diet}
+              draggable
+              onDragStart={e => { setDragging(diet); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', diet); }}
+              onDragEnd={() => { setDragging(null); setDropAt(null); }}
+              onDragOver={e => { if (dragging) { e.preventDefault(); setDropAt(idx); } }}
+              onDrop={e => { e.preventDefault(); if (dragging) moveTo(dragging, idx); setDragging(null); setDropAt(null); }}
+              className={`flex items-center gap-2 px-2 py-1.5 transition-colors ${dragging === diet ? 'opacity-40' : ''} ${
+                dropAt === idx && dragging && dragging !== diet ? 'bg-emerald-50 ring-2 ring-inset ring-emerald-300' : ''}`}
+            >
+              <span className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 select-none px-0.5 text-lg leading-none" title="اسحب لتغيير الترتيب">⋮⋮</span>
+              <span className="w-6 text-center text-xs font-bold text-slate-400 shrink-0">{idx + 1}</span>
+              <span className="flex items-center gap-2 font-medium text-sm flex-1 min-w-0 text-slate-700">
+                <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: color || '#ffffff' }} />
+                <span className="truncate" title={diet}>{diet}</span>
+                {count !== undefined && <span className="text-[11px] text-slate-400 font-normal shrink-0">({count})</span>}
+              </span>
+              <span className="flex items-center shrink-0">
+                <button type="button" onClick={() => moveTo(diet, 0)} disabled={idx === 0} title="للأعلى" aria-label={`نقل ${diet} للأعلى`} className={iconBtn}>
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 11l7-7 7 7M5 19l7-7 7 7" /></svg>
                 </button>
-                <div className="relative shrink-0">
+                <button type="button" onClick={() => move(diet, -1)} disabled={idx === 0} title="خطوة لأعلى" aria-label={`تحريك ${diet} لأعلى`} className={iconBtn}>
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" /></svg>
+                </button>
+                <button type="button" onClick={() => move(diet, 1)} disabled={idx === ordered.length - 1} title="خطوة لأسفل" aria-label={`تحريك ${diet} لأسفل`} className={iconBtn}>
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
+                </button>
+                <button type="button" onClick={() => moveTo(diet, ordered.length - 1)} disabled={idx === ordered.length - 1} title="للأسفل" aria-label={`نقل ${diet} للأسفل`} className={iconBtn}>
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 13l-7 7-7-7M19 5l-7 7-7-7" /></svg>
+                </button>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </Collapsible>
+  );
+}
+
+// ── ألوان الأنظمة الغذائية ────────────────────────────────────────────────────
+/** لون ستيكر كل نظام + زر 👁 لإخفاء لونه من المعاينة والتصدير — مستقل عن الترتيب */
+export function DietColorsPanel({ dietTypes, settings, counts }: {
+  dietTypes: string[];
+  settings: LdSettings;
+  counts?: Map<string, number>;
+}) {
+  const { dietColors, setDietColor, hiddenColors, toggleHiddenColor } = settings;
+  const [openColorFor, setOpenColorFor] = useState<string | null>(null);
+  if (dietTypes.length === 0) return null;
+  const sorted = [...dietTypes].sort((a, b) => a.localeCompare(b, 'ar'));
+
+  return (
+    <Collapsible
+      title="ألوان الأنظمة الغذائية"
+      hint={`${Object.keys(dietColors).filter(d => dietTypes.includes(d)).length} ملوّن من ${dietTypes.length}`}
+      icon={
+        <svg className="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343" />
+        </svg>
+      }
+    >
+      <p className="text-[11px] text-slate-500 py-2">لون خلفية الستيكر لكل نظام. زر 👁 يخفي ستيكرات ذلك اللون من المعاينة والتصدير.</p>
+      <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg">
+        {sorted.map(diet => {
+          const selected = dietColors[diet];
+          const pickerOpen = openColorFor === diet;
+          const colorKey = selected ? selected.toLowerCase() : NO_DIET;
+          const hidden = hiddenColors.includes(colorKey);
+          const count = counts?.get(diet);
+          return (
+            <div key={diet} className={`flex items-center gap-2 px-2 py-1.5 ${hidden ? 'bg-slate-50' : ''}`}>
+              <span className={`flex items-center gap-2 font-medium text-sm flex-1 min-w-0 ${hidden ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
+                <span className="w-3.5 h-3.5 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: selected || '#ffffff' }} />
+                <span className="truncate" title={diet}>{diet}</span>
+                {count !== undefined && <span className="text-[11px] text-slate-400 font-normal shrink-0">({count})</span>}
+              </span>
+              <button
+                type="button"
+                onClick={() => toggleHiddenColor(colorKey)}
+                title={hidden ? 'إظهار هذا اللون' : 'إخفاء هذا اللون من المعاينة والتصدير'}
+                aria-pressed={hidden}
+                className={`p-1 rounded shrink-0 ${hidden ? 'text-rose-500 hover:bg-rose-50' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'}`}
+              >
+                {hidden ? (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                )}
+              </button>
+              <div className="relative shrink-0">
                   <button
                     type="button"
                     onClick={() => setOpenColorFor(pickerOpen ? null : diet)}
@@ -360,14 +446,12 @@ export function DietColorsPanel({ dietTypes, settings, counts }: {
                       </div>
                     </>
                   )}
-                </div>
               </div>
-            );
-          })}
-          </div>
-        </div>
-      )}
-    </div>
+            </div>
+          );
+        })}
+      </div>
+    </Collapsible>
   );
 }
 
@@ -559,6 +643,17 @@ export function DietGroupHeader({ diet, color, count, index }: {
       <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: color || '#ffffff' }} />
       <span className="text-sm font-bold text-slate-700">{diet || 'بدون نظام غذائي'}</span>
       <span className="text-xs text-slate-400">({count} ستيكر)</span>
+    </div>
+  );
+}
+
+// ── عنوان مرتبة الفرز (العادي / الكاربوهيدرات / أخرى / وجبات مخصصة) ───────────
+export function TierSectionHeader({ index, label, count }: { index: number; label: string; count: number }) {
+  return (
+    <div className="w-full flex items-center gap-2 mt-4 first:mt-0 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-100">
+      <span className="text-sm font-extrabold text-emerald-700">{index}.</span>
+      <span className="text-sm font-extrabold text-emerald-800">{label}</span>
+      <span className="text-xs text-emerald-600">({count} ستيكر)</span>
     </div>
   );
 }

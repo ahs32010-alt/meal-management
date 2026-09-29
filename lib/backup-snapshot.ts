@@ -34,6 +34,7 @@ export const BACKUP_TABLES = [
   'delivery_meals',
   'delivery_creators',
   'delivery_print_header',
+  'sticker_settings',
   'diet_systems',
   // ── تابعة لـ meals / beneficiaries ──
   'meal_alternatives',
@@ -119,6 +120,7 @@ const TABLE_KEY: Record<BackupTableName, string> = {
   delivery_meals: 'id',
   delivery_creators: 'id',
   delivery_print_header: 'id',
+  sticker_settings: 'id',
   diet_systems: 'id',
   diet_system_exclusions: 'id',
   beneficiary_diets: 'id',

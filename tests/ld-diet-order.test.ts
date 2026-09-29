@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { colorsInUse, effectiveDietOrder, moveDiet, moveDietTo, sortByDietOrder, stickerColorKey } from '@/components/lunch-dinner-stickers/ld-diet-order';
+import { colorsInUse, effectiveDietOrder, moveDiet, moveDietTo, sortByDietOrder, sortByTierAndDiet, stickerColorKey } from '@/components/lunch-dinner-stickers/ld-diet-order';
 
 describe('effectiveDietOrder', () => {
   it('puts saved diets first and appends new ones in incoming order', () => {
@@ -55,5 +55,25 @@ describe('colorsInUse', () => {
   });
   it('a diet without a colour counts as white', () => {
     expect(stickerColorKey('عادي', {})).toBe('');
+  });
+});
+
+describe('sortByTierAndDiet', () => {
+  const b = (n: number, diet_type: string, extra: { low_carb?: boolean; custom_ld_meals?: boolean } = {}) =>
+    ({ n, diet_type, ...extra });
+  it('all diets (normal first) → carbs (Ⓡ flag) → custom meals last (even with Ⓡ)', () => {
+    const items = [
+      b(1, 'نظام غذائي سكري'),
+      b(2, 'نظام غذائي عادي', { custom_ld_meals: true }),
+      b(3, 'نظام غذائي عادي - قليل الكاربوهيدرات', { low_carb: true, custom_ld_meals: true }),
+      b(4, 'نظام غذائي عادي - قليل الكاربوهيدرات', { low_carb: true }),
+      b(5, 'نظام غذائي عادي'),
+      b(6, ''),
+      b(7, 'نظام غذائي قليل الكربوهيدرات (شبه مهروس)'), // الاسم وحده لا يكفي — بلا Ⓡ
+      b(8, 'نظام غذائي سكري', { low_carb: true }),
+      b(9, 'نظام غذائي عادي'),
+    ];
+    const out = sortByTierAndDiet(items, x => x, []).map(x => x.n);
+    expect(out).toEqual([5, 9, 1, 7, 6, 4, 8, 2, 3]);
   });
 });

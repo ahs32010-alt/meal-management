@@ -11,11 +11,11 @@ import StickerCard from './ld-sticker-card';
 import { fetchStickerBeneficiaries } from './ld-fetch';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import {
-  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, HeaderControls, HiddenColorsControl,
-  SizeFields, SortByDietToggle, customLdFilterSuffix, matchesCustomLdFilter, type CustomLdFilter,
+  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, TierSectionHeader, DietOrderPanel, HeaderControls, HiddenColorsControl,
+  SizeFields, customLdFilterSuffix, matchesCustomLdFilter, type CustomLdFilter,
   colorFilterSuffix, matchesColorFilter, type ColorFilter, type LdSettings,
 } from './ld-settings';
-import { colorsInUse, effectiveDietOrder, sortByDietOrder, stickerColorKey } from './ld-diet-order';
+import { TIER_LABELS, colorsInUse, sortByTierAndDiet, stickerColorKey, stickerTier } from './ld-diet-order';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
 export default function LdFixedTab({ settings }: { settings: LdSettings }) {
@@ -28,10 +28,9 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
   const [sizeWidth, setSizeWidth] = useState('10');
   const [sizeHeight, setSizeHeight] = useState('10');
   const [colorFilter, setColorFilter] = useState<ColorFilter>('all');
-  const [sortByDiet, setSortByDiet] = useState(true);
   const [customLdFilter, setCustomLdFilter] = useState<CustomLdFilter>('all');
 
-  const { headerUrl, dietColors, dietOrder, hiddenColors } = settings;
+  const { headerUrl, dietColors, hiddenColors } = settings;
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
@@ -77,12 +76,21 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
   }, [beneficiaries]);
   const visibleBeneficiaries = useMemo(() => {
     const filtered = colorFiltered.filter(b => !hiddenColors.includes(stickerColorKey(dietOf(b), dietColors)));
-    return sortByDiet ? sortByDietOrder(filtered, dietOf, effectiveDietOrder(dietTypes, dietOrder)) : filtered;
-  }, [colorFiltered, hiddenColors, dietColors, sortByDiet, dietTypes, dietOrder]);
+    // ترتيب ثابت دائماً: كل الأنظمة ← Ⓡ ← وجبات مخصصة (الأنظمة أبجدياً والعادي أولاً)
+    return sortByTierAndDiet(filtered, b => b, dietTypes);
+  }, [colorFiltered, hiddenColors, dietColors, dietTypes]);
+  // مفتاح المجموعة = المرتبة + النظام: صاحب الوجبات المخصصة ينفصل عن نفس نظامه في المراتب الأعلى
+  const groupKeyOf = (b: (typeof visibleBeneficiaries)[number]) => `${stickerTier(b)}|${dietOf(b)}`;
   const groupCounts = useMemo(() => {
     const m = new Map<string, number>();
-    visibleBeneficiaries.forEach(b => m.set(dietOf(b), (m.get(dietOf(b)) ?? 0) + 1));
+    visibleBeneficiaries.forEach(b => m.set(groupKeyOf(b), (m.get(groupKeyOf(b)) ?? 0) + 1));
     return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleBeneficiaries]);
+  const tierCounts = useMemo(() => {
+    const c = [0, 0, 0];
+    visibleBeneficiaries.forEach(b => { c[stickerTier(b)]++; });
+    return c;
   }, [visibleBeneficiaries]);
 
   const loadBeneficiaries = useCallback(async () => {
@@ -154,7 +162,6 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
               counts={{ white: beneficiaries.length - coloredCount, colored: coloredCount }} />
             <CustomLdFilterControl value={customLdFilter} onChange={setCustomLdFilter}
               counts={{ custom: customLdCount, other: beneficiaries.length - customLdCount }} />
-            <SortByDietToggle checked={sortByDiet} onChange={setSortByDiet} />
             <HeaderControls settings={settings} />
           </div>
         </div>
@@ -182,7 +189,11 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
 
         {/* ألوان الأنظمة الغذائية — قسم قابل للطيّ */}
         <HiddenColorsControl colors={colorChips} settings={settings} />
-        <DietColorsPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />
+        {/* الترتيب والألوان قسمان منفصلان؛ الترتيب يُخفى من الإعدادات */}
+        <div className={`grid gap-4 items-start max-w-5xl ${settings.showDietOrder ? 'lg:grid-cols-2' : 'max-w-2xl'}`}>
+          {settings.showDietOrder && <DietOrderPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />}
+          <DietColorsPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />
+        </div>
       </div>
 
       {error && (
@@ -203,12 +214,16 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
         <div className="flex flex-wrap gap-4 justify-center md:justify-start">
           {visibleBeneficiaries.map((ben, i) => {
             const diet = dietOf(ben);
-            const newGroup = sortByDiet && (i === 0 || dietOf(visibleBeneficiaries[i - 1]) !== diet);
+            const tier = stickerTier(ben);
+            const prev = i > 0 ? visibleBeneficiaries[i - 1] : null;
+            const newTier = (!prev || stickerTier(prev) !== tier);
+            const newGroup = (!prev || groupKeyOf(prev) !== groupKeyOf(ben));
             return (
               <Fragment key={ben.id}>
+                {newTier && <TierSectionHeader index={tier + 1} label={TIER_LABELS[tier]} count={tierCounts[tier]} />}
                 {newGroup && (
-                  <DietGroupHeader diet={diet} color={dietColors[diet]} count={groupCounts.get(diet) ?? 0}
-                    index={[...groupCounts.keys()].indexOf(diet) + 1} />
+                  <DietGroupHeader diet={diet} color={dietColors[diet]} count={groupCounts.get(groupKeyOf(ben)) ?? 0}
+                    index={[...groupCounts.keys()].indexOf(groupKeyOf(ben)) + 1} />
                 )}
                 {/* الشارة خارج عقدة الستيكر (innerRef) — لا تدخل الـPDF */}
                 <div className="relative">

@@ -12,11 +12,12 @@ import BackupRestoreView from './BackupRestoreView';
 import ExtrasView from './ExtrasView';
 import OfflineSettings from '@/components/offline/OfflineSettings';
 import TelegramView from './TelegramView';
+import StickerSettingsView from './StickerSettingsView';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { logActivity } from '@/lib/activity-log';
 import ImportModeDialog, { type ImportMode } from '@/components/shared/ImportModeDialog';
 
-type Tab = 'translit' | 'users' | 'activity' | 'extras' | 'offline' | 'telegram' | 'backup';
+type Tab = 'translit' | 'users' | 'activity' | 'extras' | 'offline' | 'telegram' | 'stickers' | 'backup';
 
 interface Row {
   mealId: string;
@@ -401,6 +402,18 @@ export default function SettingsView() {
         </button>
         {isAdmin && (
           <button
+            onClick={() => setTab('stickers')}
+            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${
+              tab === 'stickers'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            الستيكرات
+          </button>
+        )}
+        {isAdmin && (
+          <button
             onClick={() => setTab('backup')}
             className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${
               tab === 'backup'
@@ -415,6 +428,7 @@ export default function SettingsView() {
 
       {tab === 'users' && isAdmin ? <UsersManager />
         : tab === 'backup' && isAdmin ? <BackupRestoreView />
+        : tab === 'stickers' && isAdmin ? <StickerSettingsView />
         : tab === 'activity' ? <ActivityLogView />
         : tab === 'extras' ? <ExtrasView />
         : tab === 'offline' ? <OfflineSettings />

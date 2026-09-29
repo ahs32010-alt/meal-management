@@ -47,6 +47,7 @@ as $$
     'delivery_meals',
     'delivery_creators',
     'delivery_print_header',
+    'sticker_settings',
     'diet_systems',
     -- تابعة لـ meals / beneficiaries / daily_orders
     'meal_alternatives',

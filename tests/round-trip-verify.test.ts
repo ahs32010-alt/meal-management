@@ -136,7 +136,7 @@ describe('تغطية النسخة الاحتياطية', () => {
     const expected = [
       'meals', 'beneficiaries', 'daily_orders', 'custom_transliterations',
       'lunch_dinner_diet_colors', 'cost_units', 'cities', 'delivery_meals',
-      'delivery_creators', 'delivery_print_header',
+      'delivery_creators', 'delivery_print_header', 'sticker_settings',
       'diet_systems', 'diet_system_exclusions', 'beneficiary_diets',
       'meal_alternatives', 'exclusions', 'beneficiary_fixed_meals', 'fixed_extras_manual',
       'beneficiary_menu_overrides', 'menu_items',

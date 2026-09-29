@@ -23,11 +23,11 @@ import { fetchStickerBeneficiaries } from './ld-fetch';
 import { splitDetailByCategory } from './ld-split';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import {
-  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, HeaderControls, HiddenColorsControl,
-  SizeFields, SortByDietToggle, customLdFilterSuffix, matchesCustomLdFilter, type CustomLdFilter,
+  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, TierSectionHeader, DietOrderPanel, HeaderControls, HiddenColorsControl,
+  SizeFields, customLdFilterSuffix, matchesCustomLdFilter, type CustomLdFilter,
   colorFilterSuffix, matchesColorFilter, type ColorFilter, type LdSettings,
 } from './ld-settings';
-import { colorsInUse, effectiveDietOrder, sortByDietOrder, stickerColorKey } from './ld-diet-order';
+import { TIER_LABELS, colorsInUse, sortByTierAndDiet, stickerColorKey, stickerTier } from './ld-diet-order';
 import type { LdMealCustomization } from './ld-types';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
@@ -58,13 +58,12 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   const [sizeHeight, setSizeHeight] = useState('10');
   const [onlyWithCustom, setOnlyWithCustom] = useState(false);
   const [colorFilter, setColorFilter] = useState<ColorFilter>('all');
-  const [sortByDiet, setSortByDiet] = useState(true);
   const [customLdFilter, setCustomLdFilter] = useState<CustomLdFilter>('all');
   const [exporting, setExporting] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
-  const { headerUrl, dietColors, dietOrder, hiddenColors } = settings;
+  const { headerUrl, dietColors, hiddenColors } = settings;
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
@@ -208,14 +207,21 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   }, [customFiltered]);
   const visibleRows = useMemo(() => {
     const filtered = colorFiltered.filter(r => !hiddenColors.includes(stickerColorKey(dietOfRow(r), dietColors)));
-    return sortByDiet
-      ? sortByDietOrder(filtered, dietOfRow, effectiveDietOrder(dietTypes, dietOrder))
-      : filtered;
-  }, [colorFiltered, hiddenColors, dietColors, sortByDiet, dietTypes, dietOrder]);
+    // ترتيب ثابت دائماً: كل الأنظمة ← Ⓡ ← وجبات مخصصة (الأنظمة أبجدياً والعادي أولاً)
+    return sortByTierAndDiet(filtered, r => r.ben, dietTypes);
+  }, [colorFiltered, hiddenColors, dietColors, dietTypes]);
+  // مفتاح المجموعة = المرتبة + النظام: صاحب الوجبات المخصصة ينفصل عن نفس نظامه في المراتب الأعلى
+  const groupKeyOf = (r: (typeof visibleRows)[number]) => `${stickerTier(r.ben)}|${dietOfRow(r)}`;
   const groupCounts = useMemo(() => {
     const m = new Map<string, number>();
-    visibleRows.forEach(r => m.set(dietOfRow(r), (m.get(dietOfRow(r)) ?? 0) + 1));
+    visibleRows.forEach(r => m.set(groupKeyOf(r), (m.get(groupKeyOf(r)) ?? 0) + 1));
     return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleRows]);
+  const tierCounts = useMemo(() => {
+    const c = [0, 0, 0];
+    visibleRows.forEach(r => { c[stickerTier(r.ben)]++; });
+    return c;
   }, [visibleRows]);
 
   const withCustomCount = rows.filter(r => r.hasCustom).length;
@@ -315,7 +321,6 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
                   counts={{ white: customFiltered.length - coloredCount, colored: coloredCount }} />
                 <CustomLdFilterControl value={customLdFilter} onChange={setCustomLdFilter}
                   counts={{ custom: customLdCount, other: customFiltered.length - customLdCount }} />
-                <SortByDietToggle checked={sortByDiet} onChange={setSortByDiet} />
                 <HeaderControls settings={settings} />
               </div>
             </div>
@@ -341,7 +346,11 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
             </div>
 
             <HiddenColorsControl colors={colorChips} settings={settings} />
-            <DietColorsPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />
+            {/* الترتيب والألوان قسمان منفصلان؛ الترتيب يُخفى من الإعدادات */}
+            <div className={`grid gap-4 items-start max-w-5xl ${settings.showDietOrder ? 'lg:grid-cols-2' : 'max-w-2xl'}`}>
+              {settings.showDietOrder && <DietOrderPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />}
+              <DietColorsPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />
+            </div>
           </>
         )}
       </div>
@@ -367,12 +376,16 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
           {visibleRows.map((row, i) => {
             const { key, ben, custom } = row;
             const diet = dietOfRow(row);
-            const newGroup = sortByDiet && (i === 0 || dietOfRow(visibleRows[i - 1]) !== diet);
+            const tier = stickerTier(ben);
+            const prev = i > 0 ? visibleRows[i - 1] : null;
+            const newTier = (!prev || stickerTier(prev.ben) !== tier);
+            const newGroup = (!prev || groupKeyOf(prev) !== groupKeyOf(row));
             return (
               <Fragment key={key}>
+                {newTier && <TierSectionHeader index={tier + 1} label={TIER_LABELS[tier]} count={tierCounts[tier]} />}
                 {newGroup && (
-                  <DietGroupHeader diet={diet} color={dietColors[diet]} count={groupCounts.get(diet) ?? 0}
-                    index={[...groupCounts.keys()].indexOf(diet) + 1} />
+                  <DietGroupHeader diet={diet} color={dietColors[diet]} count={groupCounts.get(groupKeyOf(row)) ?? 0}
+                    index={[...groupCounts.keys()].indexOf(groupKeyOf(row)) + 1} />
                 )}
                 {/* الشارة خارج عقدة الستيكر (innerRef) — لا تدخل الـPDF */}
                 <div className="relative">

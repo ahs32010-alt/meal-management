@@ -19,6 +19,21 @@ import {
 import type { Beneficiary } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import { hasCustomization, LD_CATEGORY, type LdMealCustomization } from './ld-types';
+import { LD_FONT_SIZES } from './ld-sticker-card';
+
+/**
+ * أحجام Word (نقاط) مشتقّة من LD_FONT_SIZES (بكسل الصفحة) بنسبة ثابتة لكل
+ * عنصر — النسب هي ما كان مطابقاً بصرياً للصفحة قبل المعايرة، فأي تعديل على
+ * LD_FONT_SIZES ينعكس على Word بنفس النسبة.
+ */
+const WORD_PT = {
+  name_ar: LD_FONT_SIZES.name_ar * (14.5 / 24),
+  name_en: LD_FONT_SIZES.name_en * (14.5 / 24),
+  code: LD_FONT_SIZES.code * (11.5 / 14),
+  villa: LD_FONT_SIZES.villa * (11.5 / 14),
+  diet_ar: LD_FONT_SIZES.diet_ar * (13 / 16),
+  diet_en: LD_FONT_SIZES.diet_en * (11 / 13),
+};
 
 const DIET_TYPE_EN: Record<string, string> = {
   'عادي': 'Normal diet',
@@ -96,7 +111,24 @@ function center(children: TextRun[], after = 30, before = 0): Paragraph {
   return new Paragraph({ alignment: AlignmentType.CENTER, bidirectional: true, spacing: { after, before }, children });
 }
 
-interface Ctx { scale: number; contentPt: number; contentWpx: number; logo: LoadedImage | null; header: LoadedImage | null }
+interface Ctx {
+  scale: number;
+  /** معامل خط الاسم — أكبر في الستيكر العريض (مثل 8×5) */
+  nameScale: number;
+  contentPt: number; contentWpx: number; logo: LoadedImage | null; header: LoadedImage | null;
+}
+
+/** Code/Villa — زاوية الهيدر اليسرى مقابل الشعار (نفس ستيكر الصفحة) */
+function codeVillaParas(ben: Beneficiary, scale: number): Paragraph[] {
+  const line = (text: string, pt: number) => new Paragraph({
+    alignment: AlignmentType.LEFT, spacing: { after: 0 },
+    children: [new TextRun({ text, bold: true, size: sz(pt * scale) })],
+  });
+  return [
+    line(`Code No.: ${ben.code ?? ''}`, WORD_PT.code),
+    ...(ben.villa ? [line(`Villa No.: ${ben.villa}`, WORD_PT.villa)] : []),
+  ];
+}
 
 // محتوى أعلى الستيكر: الهيدر + النظام الغذائي + Code/Villa
 // تظليل خلفية الخلية بلون النظام الغذائي (hex بدون #)
@@ -107,63 +139,70 @@ function topCell(ben: Beneficiary, ctx: Ctx, rowHpx: number, bg?: string): Table
   const diet = dietLines(ben.diet_type);
   const children: (Paragraph | Table)[] = [];
 
+  // المستند RTL فالخلية الأولى تظهر يميناً: الشعار/الهيدر يميناً، Code/Villa يساراً
+  const codeCell = new TableCell({
+    width: { size: 30, type: WidthType.PERCENTAGE }, borders: noBorders, verticalAlign: VerticalAlign.CENTER,
+    children: codeVillaParas(ben, scale),
+  });
   if (header) {
-    children.push(center([imageRunFit(header, contentWpx, rowHpx * 0.5)], 20));
+    children.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders,
+      rows: [new TableRow({ children: [
+        new TableCell({
+          width: { size: 70, type: WidthType.PERCENTAGE }, borders: noBorders, verticalAlign: VerticalAlign.CENTER,
+          children: [center([imageRunFit(header, contentWpx * 0.68, rowHpx * 0.5)], 20)],
+        }),
+        codeCell,
+      ] })],
+    }));
   } else {
-    // هيدر افتراضي: نص "خدمات الطعام / Food Services" يسار + الشعار يمين
+    // هيدر افتراضي: الشعار يميناً، «خدمات الطعام» وسطاً، Code/Villa يساراً
     children.push(new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       borders: noBorders,
       rows: [new TableRow({
         children: [
           new TableCell({
-            width: { size: 28, type: WidthType.PERCENTAGE }, borders: noBorders, verticalAlign: VerticalAlign.CENTER,
+            width: { size: 22, type: WidthType.PERCENTAGE }, borders: noBorders, verticalAlign: VerticalAlign.CENTER,
             children: [new Paragraph({ alignment: AlignmentType.RIGHT, spacing: { after: 0 }, children: logo ? [imageRunFit(logo, 46 * scale, rowHpx * 0.4)] : [] })],
           }),
           new TableCell({
-            width: { size: 72, type: WidthType.PERCENTAGE }, borders: noBorders, verticalAlign: VerticalAlign.CENTER,
+            width: { size: 48, type: WidthType.PERCENTAGE }, borders: noBorders, verticalAlign: VerticalAlign.CENTER,
             children: [
-              center([new TextRun({ text: 'خدمات الطعام', bold: true, size: sz(14 * scale), color: '047857', rightToLeft: true })], 0),
-              center([new TextRun({ text: 'Food Services', bold: true, size: sz(11 * scale), color: '047857' })], 0),
+              center([new TextRun({ text: 'خدمات الطعام', bold: true, size: sz(fitPt('خدمات الطعام', 13 * scale, contentPt * 0.46)), color: '047857', rightToLeft: true })], 0),
+              center([new TextRun({ text: 'Food Services', bold: true, size: sz(fitPt('Food Services', 10 * scale, contentPt * 0.46)), color: '047857' })], 0),
             ],
           }),
+          codeCell,
         ],
       })],
     }));
   }
 
   // النظام الغذائي (وسط، سطر واحد، عربي فوق/إنجليزي تحت)
-  children.push(center([new TextRun({ text: diet.ar, bold: true, size: sz(fitPt(diet.ar, 13 * scale, contentPt)), underline: {}, rightToLeft: true })], 0, 24));
+  children.push(center([new TextRun({ text: diet.ar, bold: true, size: sz(fitPt(diet.ar, WORD_PT.diet_ar * scale, contentPt)), underline: {}, rightToLeft: true })], 0, 24));
   if (diet.en) {
-    children.push(center([new TextRun({ text: diet.en, bold: true, size: sz(fitPt(diet.en, 11 * scale, contentPt)), underline: {} })], 0));
+    children.push(center([new TextRun({ text: diet.en, bold: true, size: sz(fitPt(diet.en, WORD_PT.diet_en * scale, contentPt)), underline: {} })], 0));
   }
 
-  // صف: Code/Villa (يسار) + رموز الخيارات المؤشّرة (يمين)
+  // رموز الخيارات المؤشّرة (يمين) — Code/Villa انتقلت لزاوية الهيدر
   const flags = STICKER_FLAGS.filter(f => ben[f.key]);
-  const codeVilla: Paragraph[] = [
-    new Paragraph({ alignment: AlignmentType.LEFT, spacing: { after: 0 }, children: [new TextRun({ text: `Code No.:${ben.code ?? ''}`, bold: true, size: sz(10 * scale) })] }),
-  ];
-  if (ben.villa) {
-    codeVilla.push(new Paragraph({ alignment: AlignmentType.LEFT, spacing: { after: 0 }, children: [new TextRun({ text: `Villa No.:${ben.villa}`, bold: true, size: sz(10 * scale) })] }));
-  }
-  const flagParas = flags.map(f =>
-    new Paragraph({ alignment: AlignmentType.RIGHT, bidirectional: true, spacing: { after: 0 }, children: [new TextRun({ text: `${f.symbol} ${f.label}`, bold: true, size: sz(8.5 * scale), rightToLeft: true })] })
-  );
-  // المستند RTL فالخلية الأولى تظهر يميناً — نضع الرموز أولاً (يمين) وCode/Villa ثانياً (يسار)
-  children.push(new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders,
-    rows: [new TableRow({ children: [
-      new TableCell({ width: { size: 62, type: WidthType.PERCENTAGE }, borders: noBorders, verticalAlign: VerticalAlign.TOP, margins: { top: 24, bottom: 0, left: 0, right: 0 }, children: flagParas.length ? flagParas : [new Paragraph({ children: [] })] }),
-      new TableCell({ width: { size: 38, type: WidthType.PERCENTAGE }, borders: noBorders, verticalAlign: VerticalAlign.TOP, margins: { top: 24, bottom: 0, left: 0, right: 0 }, children: codeVilla }),
-    ] })],
-  }));
+  flags.forEach((f, i) => children.push(
+    new Paragraph({
+      alignment: AlignmentType.RIGHT, bidirectional: true, spacing: { before: i === 0 ? 24 : 0, after: 0 },
+      children: [new TextRun({ text: `${f.symbol} ${f.label}`, bold: true, size: sz(8.5 * scale), rightToLeft: true })],
+    }),
+  ));
 
   return new TableCell({ ...shade(bg), borders: noBorders, verticalAlign: VerticalAlign.TOP, margins: { top: 40, bottom: 0, left: 60, right: 60 }, children });
 }
 
 // صندوق الاسم (حدّ مزدوج) — وسط الستيكر
 function midCell(ben: Beneficiary, ctx: Ctx, bg?: string): TableCell {
-  const { scale, contentPt } = ctx;
+  const { nameScale, contentPt } = ctx;
+  // كل سطر بحجمه المعتمد، ويصغر فقط ليبقى في سطر واحد
+  const arPt = fitPt(ben.name, WORD_PT.name_ar * nameScale, contentPt * 0.88);
+  const enPt = ben.english_name ? fitPt(ben.english_name, WORD_PT.name_en * nameScale, contentPt * 0.88) : 0;
   const nameBox = new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     borders: {
@@ -175,8 +214,8 @@ function midCell(ben: Beneficiary, ctx: Ctx, bg?: string): TableCell {
       children: [new TableCell({
         margins: { top: 80, bottom: 80, left: 80, right: 80 }, verticalAlign: VerticalAlign.CENTER,
         children: [
-          center([new TextRun({ text: ben.name, bold: true, size: sz(fitPt(ben.name, 12.5 * scale, contentPt * 0.9)), rightToLeft: true })], ben.english_name ? 20 : 0),
-          ...(ben.english_name ? [center([new TextRun({ text: ben.english_name, bold: true, size: sz(fitPt(ben.english_name, 9.5 * scale, contentPt * 0.9)) })], 0)] : []),
+          center([new TextRun({ text: ben.name, bold: true, size: sz(arPt), rightToLeft: true })], ben.english_name ? 20 : 0),
+          ...(ben.english_name ? [center([new TextRun({ text: ben.english_name, bold: true, size: sz(enPt) })], 0)] : []),
         ],
       })],
     })],
@@ -274,7 +313,6 @@ export async function exportLunchDinnerStickers(
   const minDim = Math.min(widthCm, heightCm);
   const scale = clamp(minDim / 10, 0.55, 2);
   const contentMm = widthCm * 10 - MARGIN_MM * 2;
-  const ctx: Ctx = { scale, contentPt: contentMm * MM_TO_PT, contentWpx: contentMm * MM_TO_PX, logo, header };
 
   // ارتفاعات ثابتة (EXACT) لصفوف أعلى/وسط/أسفل، مجموعها أقل من ارتفاع الصفحة
   // بهامش أمان — فالجدول ارتفاعه ثابت ويستحيل أن يتجاوز إلى صفحة ثانية.
@@ -287,6 +325,15 @@ export async function exportLunchDinnerStickers(
   const r3 = Math.round(usable * (anyCustom ? 0.42 : 0.30));
   const r2 = usable - r1 - r3;
   const rowHpx = (r1 / 1440) * 96; // ارتفاع صف الأعلى بالبكسل (لتحجيم الهيدر)
+
+  // خط الاسم: في العريض (8×5 مثلاً) يستفيد من العرض، ومحصور بارتفاع صف الاسم
+  // (الصف EXACT يقصّ ما يفيض): سطران × 1.2 تباعد + هوامش الصندوق ≈ 12pt
+  const r2Pt = r2 / 20;
+  const nameScale = Math.min(
+    clamp(Math.min(widthCm, heightCm * 1.5) / 10, 0.55, 2),
+    Math.max(0.3, (r2Pt - 12) / ((WORD_PT.name_ar + WORD_PT.name_en) * 1.2)),
+  );
+  const ctx: Ctx = { scale, nameScale, contentPt: contentMm * MM_TO_PT, contentWpx: contentMm * MM_TO_PX, logo, header };
 
   const sections = beneficiaries.map((ben, i) => {
     const dietKey = ben.diet_type?.trim();

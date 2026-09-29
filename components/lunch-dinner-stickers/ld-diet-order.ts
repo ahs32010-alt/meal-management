@@ -89,3 +89,38 @@ export function colorsInUse<T>(
     .map(([key, e]) => ({ key, count: e.count, diets: [...e.diets] }))
     .sort((a, b) => (a.key === NO_DIET ? -1 : b.key === NO_DIET ? 1 : b.count - a.count));
 }
+
+// ── مراتب الفرز الثابتة (طلب التشغيل) ─────────────────────────────────────────
+// ١ كل الأنظمة الغذائية ← ٢ الكاربوهيدرات (رمز Ⓡ) ← ٣ وجبات غداء وعشاء مخصصة.
+// «الوجبات المخصصة» أقوى من Ⓡ: صاحبها في الآخر حتى لو كان كاربوهيدرات.
+
+export const NORMAL_DIET = 'نظام غذائي عادي';
+
+export const TIER_LABELS = ['الأنظمة الغذائية', 'الكاربوهيدرات Ⓡ', 'وجبات غداء وعشاء مخصصة'] as const;
+export type StickerTier = 0 | 1 | 2;
+
+export interface TierInput {
+  diet_type?: string;
+  low_carb?: boolean;
+  custom_ld_meals?: boolean;
+}
+
+export function stickerTier(b: TierInput): StickerTier {
+  if (b.custom_ld_meals) return 2;
+  // الكاربوهيدرات = خيار «قليل الكاربوهيدرات» (يُطبع Ⓡ على الستيكر) فقط، لا اسم النظام
+  if (b.low_carb) return 1;
+  return 0;
+}
+
+/**
+ * فرز بالمرتبة أولاً، ثم بترتيب الأنظمة داخل المرتبة، ثم الترتيب الأصلي.
+ * النظام العادي أول نظام دائماً داخل كل مرتبة.
+ */
+export function sortByTierAndDiet<T>(items: T[], getBen: (item: T) => TierInput, order: string[]): T[] {
+  const normalFirst = [NORMAL_DIET, ...order.filter(d => d !== NORMAL_DIET)];
+  const byDiet = sortByDietOrder(items, i => getBen(i).diet_type?.trim() ?? NO_DIET, normalFirst);
+  return byDiet
+    .map((item, i) => ({ item, i, t: stickerTier(getBen(item)) }))
+    .sort((a, b) => (a.t === b.t ? a.i - b.i : a.t - b.t))
+    .map(x => x.item);
+}
