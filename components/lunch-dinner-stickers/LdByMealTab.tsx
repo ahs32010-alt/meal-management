@@ -19,16 +19,17 @@ import { formatDateFull } from '@/lib/date-utils';
 import { transliterate } from '@/lib/transliterate';
 import LdOrderPicker from './LdOrderPicker';
 import StickerCard from './ld-sticker-card';
+import type { PdfMode } from './ld-pdf-export';
 import { fetchStickerBeneficiaries } from './ld-fetch';
 import { splitDetailByCategory } from './ld-split';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import {
-  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, TierSectionHeader, DietOrderPanel, HeaderControls, HiddenColorsControl,
+  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, TierSectionHeader, PdfModeControl, DietOrderPanel, HeaderControls, HiddenColorsControl,
   SizeFields, customLdFilterSuffix, matchesCustomLdFilter, type CustomLdFilter,
   colorFilterSuffix, matchesColorFilter, type ColorFilter, type LdSettings,
 } from './ld-settings';
 import { TIER_LABELS, colorsInUse, sortByTierAndDiet, stickerColorKey, stickerTier } from './ld-diet-order';
-import type { LdMealCustomization } from './ld-types';
+import { LD_CATEGORY, type LdMealCustomization } from './ld-types';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
 /** وجبات هذه الصفحة — الفطور له صفحته الخاصة (/stickers). */
@@ -61,6 +62,7 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   const [customLdFilter, setCustomLdFilter] = useState<CustomLdFilter>('all');
   const [exporting, setExporting] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [pdfMode, setPdfMode] = useState<PdfMode>('single');
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   const { headerUrl, dietColors, hiddenColors } = settings;
@@ -253,14 +255,17 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
     setExportingPdf(true);
     setProgress({ done: 0, total: visibleRows.length });
     try {
-      const nodes = visibleRows
-        .map(r => nodesRef.current.get(r.key))
-        .filter((el): el is HTMLDivElement => !!el);
+      // العقدة واسمها معاً — الاسم يُستخدم لملفات «ملف لكل ستيكر»
+      const picked = visibleRows
+        .map(r => ({ el: nodesRef.current.get(r.key), name: [r.ben.name, r.custom.category ? LD_CATEGORY[r.custom.category].ar : ''].filter(Boolean).join(' - ') }))
+        .filter((x): x is { el: HTMLDivElement; name: string } => !!x.el);
+      const nodes = picked.map(x => x.el);
       if (!nodes.length) { alert('لا توجد ستيكرات للتصدير — انتظر تحميل الصفحة كاملة ثم أعد المحاولة'); return; }
       const { exportLunchDinnerStickersPdf } = await import('./ld-pdf-export');
       const res = await exportLunchDinnerStickersPdf(
         nodes, w, h, (done, total) => setProgress({ done, total }),
         `ستيكرات-${report ? `${mealAr}-${report.order.date}` : 'الغداء-والعشاء'}${colorFilterSuffix(colorFilter)}${customLdFilterSuffix(customLdFilter)}.pdf`,
+        { mode: pdfMode, names: picked.map(x => x.name) },
       );
       if (res.failed > 0) alert(`تم التصدير: ${res.captured} ستيكر. تعذّر التقاط ${res.failed}.`);
     } catch (e) {
@@ -329,11 +334,12 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
             <div className="card p-4">
               <div className="flex items-end gap-3 flex-wrap">
                 <SizeFields w={sizeWidth} h={sizeHeight} setW={setSizeWidth} setH={setSizeHeight} />
+                <PdfModeControl value={pdfMode} onChange={setPdfMode} />
                 <button onClick={handleExportPdf} disabled={exportingPdf || exporting || !visibleRows.length}
                   className="btn-primary text-sm disabled:opacity-50">
                   {exportingPdf
                     ? (progress ? `جاري التصدير ${progress.done}/${progress.total}...` : 'جاري التصدير...')
-                    : `تصدير PDF (${visibleRows.length} ستيكر)`}
+                    : pdfMode === 'separate' ? `تصدير PDF (${visibleRows.length} ملف في zip)` : `تصدير PDF (${visibleRows.length} ستيكر)`}
                 </button>
                 <button onClick={handleExport} disabled={exporting || exportingPdf || !visibleRows.length}
                   className="btn-secondary text-sm disabled:opacity-50">

@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { effectiveDietOrder, moveDiet, moveDietTo, NO_DIET } from './ld-diet-order';
+import ColorPicker from '@/components/shared/ColorPicker';
 
 export const HEADER_KEY = 'ldStickerHeaderUrl';
 export const DIET_COLORS_KEY = 'ldDietColors';
@@ -238,11 +239,15 @@ function Collapsible({ title, icon, hint, defaultOpen = false, children }: {
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="card overflow-hidden">
+    // بلا overflow-hidden: كان يقصّ قائمة اختيار اللون لآخر الأنظمة في القسم.
+    // زوايا الزر تورث استدارة البطاقة بدلاً منه حتى لا تبرز خلفية الـhover.
+    <div className="card">
       <button
         type="button"
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center justify-between gap-2 px-4 py-3 hover:bg-slate-50 transition-colors"
+        className={`w-full flex items-center justify-between gap-2 px-4 py-3 hover:bg-slate-50 transition-colors ${
+          open ? 'rounded-t-[inherit]' : 'rounded-[inherit]'
+        }`}
       >
         <span className="flex items-center gap-2 font-bold text-slate-800 text-sm">{icon}{title}</span>
         <span className="flex items-center gap-2">
@@ -355,6 +360,7 @@ export function DietColorsPanel({ dietTypes, settings, counts }: {
 }) {
   const { dietColors, setDietColor, hiddenColors, toggleHiddenColor } = settings;
   const [openColorFor, setOpenColorFor] = useState<string | null>(null);
+  const [colorTab, setColorTab] = useState<'custom' | 'preset'>('custom');
   if (dietTypes.length === 0) return null;
   const sorted = [...dietTypes].sort((a, b) => a.localeCompare(b, 'ar'));
 
@@ -417,22 +423,39 @@ export function DietColorsPanel({ dietTypes, settings, counts }: {
                     <>
                       <div className="fixed inset-0 z-10" onClick={() => setOpenColorFor(null)} />
                       <div className="absolute z-20 left-0 mt-2 p-3 bg-white rounded-2xl shadow-xl border border-slate-100" style={{ width: 'max-content' }}>
-                        <div className="text-[10px] font-semibold text-slate-400 mb-1">ألوان قياسية</div>
-                        <div className="flex gap-1 mb-3">
-                          {STANDARD_COLORS.map(c => (
-                            <ColorSwatch key={c} color={c} selected={selected} onPick={(col) => { setDietColor(diet, col); setOpenColorFor(null); }} />
+                        {/* تبويبان: منتقي حرّ (يبقى مفتوحاً للتعديل) + الألوان الجاهزة (تُغلق عند الاختيار) */}
+                        <div className="flex border-b border-slate-200 mb-3" role="tablist">
+                          {(['custom', 'preset'] as const).map(t => (
+                            <button key={t} type="button" role="tab" aria-selected={colorTab === t}
+                              onClick={() => setColorTab(t)}
+                              className={`flex-1 pb-2 text-sm font-bold border-b-[3px] -mb-px transition-colors ${
+                                colorTab === t ? 'border-violet-500 text-slate-800' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
+                              {t === 'custom' ? 'لون ثابت' : 'ألوان جاهزة'}
+                            </button>
                           ))}
                         </div>
-                        <div className="text-[10px] font-semibold text-slate-400 mb-1">تدرّجات</div>
-                        <div className="flex gap-1">
-                          {RAMP_COLUMNS.map((col, ci) => (
-                            <div key={ci} className="flex flex-col gap-1">
-                              {col.map(c => (
-                                <ColorSwatch key={c} color={c} selected={selected} onPick={(picked) => { setDietColor(diet, picked); setOpenColorFor(null); }} />
+                        {colorTab === 'custom' ? (
+                          <ColorPicker value={selected} onChange={hex => setDietColor(diet, hex)} />
+                        ) : (
+                          <>
+                            <div className="text-[10px] font-semibold text-slate-400 mb-1">ألوان قياسية</div>
+                            <div className="flex gap-1 mb-3">
+                              {STANDARD_COLORS.map(c => (
+                                <ColorSwatch key={c} color={c} selected={selected} onPick={(col) => { setDietColor(diet, col); setOpenColorFor(null); }} />
                               ))}
                             </div>
-                          ))}
-                        </div>
+                            <div className="text-[10px] font-semibold text-slate-400 mb-1">تدرّجات</div>
+                            <div className="flex gap-1">
+                              {RAMP_COLUMNS.map((col, ci) => (
+                                <div key={ci} className="flex flex-col gap-1">
+                                  {col.map(c => (
+                                    <ColorSwatch key={c} color={c} selected={selected} onPick={(picked) => { setDietColor(diet, picked); setOpenColorFor(null); }} />
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        )}
                         <button
                           type="button"
                           onClick={() => { setDietColor(diet, null); setOpenColorFor(null); }}
@@ -665,5 +688,31 @@ export function SortByDietToggle({ checked, onChange }: { checked: boolean; onCh
         className="w-4 h-4 accent-emerald-600 cursor-pointer" />
       <span className="text-sm text-slate-700 font-medium">ترتيب حسب النظام الغذائي</span>
     </label>
+  );
+}
+
+// ── طريقة تصدير الـPDF: ملف واحد أو ملف لكل ستيكر (داخل zip) ──────────────────
+export function PdfModeControl({ value, onChange }: {
+  value: 'single' | 'separate';
+  onChange: (v: 'single' | 'separate') => void;
+}) {
+  const opts = [
+    { value: 'single' as const, label: 'ملف واحد' },
+    { value: 'separate' as const, label: 'ملف لكل ستيكر' },
+  ];
+  return (
+    <div>
+      <label className="label text-xs">طريقة PDF</label>
+      <div className="inline-flex items-center gap-1 p-1 rounded-lg bg-slate-100">
+        {opts.map(o => (
+          <button key={o.value} type="button" onClick={() => onChange(o.value)}
+            className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
+              value === o.value ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'
+            }`}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

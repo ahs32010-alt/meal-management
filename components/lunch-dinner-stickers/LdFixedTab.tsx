@@ -8,10 +8,11 @@
 import { Fragment, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Beneficiary } from '@/lib/types';
 import StickerCard from './ld-sticker-card';
+import type { PdfMode } from './ld-pdf-export';
 import { fetchStickerBeneficiaries } from './ld-fetch';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import {
-  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, TierSectionHeader, DietOrderPanel, HeaderControls, HiddenColorsControl,
+  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, TierSectionHeader, PdfModeControl, DietOrderPanel, HeaderControls, HiddenColorsControl,
   SizeFields, customLdFilterSuffix, matchesCustomLdFilter, type CustomLdFilter,
   colorFilterSuffix, matchesColorFilter, type ColorFilter, type LdSettings,
 } from './ld-settings';
@@ -24,6 +25,7 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [pdfMode, setPdfMode] = useState<PdfMode>('single');
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [sizeWidth, setSizeWidth] = useState('10');
   const [sizeHeight, setSizeHeight] = useState('10');
@@ -128,14 +130,17 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
     setProgress({ done: 0, total: visibleBeneficiaries.length });
     try {
       // نلتقط عُقد الستيكرات المرئية بالترتيب — الـPDF طبق الأصل من الصفحة
-      const nodes = visibleBeneficiaries
-        .map(b => nodesRef.current.get(b.id))
-        .filter((el): el is HTMLDivElement => !!el);
+      // العقدة واسمها معاً — الاسم يُستخدم لملفات «ملف لكل ستيكر»
+      const picked = visibleBeneficiaries
+        .map(b => ({ el: nodesRef.current.get(b.id), name: b.name }))
+        .filter((x): x is { el: HTMLDivElement; name: string } => !!x.el);
+      const nodes = picked.map(x => x.el);
       if (!nodes.length) { alert('لا توجد ستيكرات للتصدير — انتظر تحميل الصفحة كاملة ثم أعد المحاولة'); return; }
       const { exportLunchDinnerStickersPdf } = await import('./ld-pdf-export');
       const res = await exportLunchDinnerStickersPdf(
         nodes, w, h, (done, total) => setProgress({ done, total }),
         `ستيكرات-الغداء-والعشاء${colorFilterSuffix(colorFilter)}${customLdFilterSuffix(customLdFilter)}.pdf`,
+        { mode: pdfMode, names: picked.map(x => x.name) },
       );
       if (res.failed > 0) {
         alert(`تم التصدير: ${res.captured} ستيكر. تعذّر التقاط ${res.failed}.`);
@@ -170,11 +175,12 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
         <div className="card p-4">
           <div className="flex items-end gap-3 flex-wrap">
             <SizeFields w={sizeWidth} h={sizeHeight} setW={setSizeWidth} setH={setSizeHeight} />
+            <PdfModeControl value={pdfMode} onChange={setPdfMode} />
             <button onClick={handleExportPdf} disabled={exportingPdf || exporting || !visibleBeneficiaries.length}
               className="btn-primary text-sm disabled:opacity-50">
               {exportingPdf
                 ? (progress ? `جاري التصدير ${progress.done}/${progress.total}...` : 'جاري التصدير...')
-                : `تصدير PDF (${visibleBeneficiaries.length} ستيكر)`}
+                : pdfMode === 'separate' ? `تصدير PDF (${visibleBeneficiaries.length} ملف في zip)` : `تصدير PDF (${visibleBeneficiaries.length} ستيكر)`}
             </button>
             <button onClick={handleExport} disabled={exporting || exportingPdf || !visibleBeneficiaries.length}
               className="btn-secondary text-sm disabled:opacity-50">
