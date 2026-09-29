@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase-server';
 import { getCachedUser } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 import { rateLimit, clientIdFromRequest } from '@/lib/rate-limit';
-import { buildFixedExtrasReport, datesInRange, MAX_RANGE_DAYS } from '@/lib/fixed-extras-period';
+import { buildFixedExtrasReport, datesInRange, MAX_RANGE_DAYS, type ManualExtra } from '@/lib/fixed-extras-period';
 import type { MealType } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { from?: unknown; to?: unknown; meal_types?: unknown; entity_type?: unknown };
+  let body: { from?: unknown; to?: unknown; meal_types?: unknown; entity_type?: unknown; manual?: unknown };
   try { body = await request.json(); }
   catch { return NextResponse.json({ error: 'بيانات غير صالحة' }, { status: 400 }); }
 
@@ -50,8 +50,21 @@ export async function POST(request: Request) {
     : body.entity_type === 'beneficiary' ? 'beneficiary' as const
     : undefined;
 
+  // الأصناف المضافة يدوياً: [{ meal_id, meal_type, quantity }]
+  const UUID = /^[0-9a-f-]{36}$/i;
+  const manual: ManualExtra[] = (Array.isArray(body.manual) ? body.manual : [])
+    .slice(0, 500)
+    .flatMap((x: unknown) => {
+      const r = x as { meal_id?: unknown; meal_type?: unknown; quantity?: unknown };
+      const qty = Number(r.quantity);
+      if (typeof r.meal_id !== 'string' || !UUID.test(r.meal_id)) return [];
+      if (!MEAL_TYPES.includes(r.meal_type as MealType)) return [];
+      if (!Number.isInteger(qty) || qty <= 0 || qty > 1_000_000) return [];
+      return [{ meal_id: r.meal_id, meal_type: r.meal_type as MealType, quantity: qty }];
+    });
+
   try {
-    const report = await buildFixedExtrasReport(supabase, { from, to, mealTypes, entityType });
+    const report = await buildFixedExtrasReport(supabase, { from, to, mealTypes, entityType, manual });
     return NextResponse.json(report);
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : 'حدث خطأ' }, { status: 500 });

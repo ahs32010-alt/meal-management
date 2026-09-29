@@ -51,6 +51,15 @@ export interface FixedExtrasRow {
   unitPrice: number | null;
   /** الكمية × سعر الحبة (صفر لو غير مسعَّر) */
   totalPrice: number;
+  /** ما أُضيف يدوياً من هذه الكمية (داخل total، لا يخص مستفيداً) */
+  manual: number;
+}
+
+/** صنف يضيفه المستخدم يدوياً للحصر — يُجمع مع المحسوب من المستفيدين */
+export interface ManualExtra {
+  meal_id: string;
+  meal_type: MealType;
+  quantity: number;
 }
 
 export interface FixedExtrasReport {
@@ -100,6 +109,8 @@ export function computeFixedExtras(params: {
   meals: Record<string, Meal>;
   /** سعر بيع الحبة لكل صنف (meal_id → سعر) */
   prices?: Record<string, number>;
+  /** أصناف مضافة يدوياً — خارج أي مستفيد */
+  manual?: ManualExtra[];
 }): FixedExtrasReport {
   const { from, to, mealTypes, entityType, meals } = params;
   const prices = params.prices ?? {};
@@ -127,16 +138,18 @@ export function computeFixedExtras(params: {
   const usedSlots = new Set<string>();
   const regSlots = new Set<string>();
 
-  const add = (benId: string, mealId: string, mealType: MealType, qty: number) => {
+  // benId = null → إضافة يدوية: تدخل الكميات والأسعار ولا تُنسب لمستفيد
+  const add = (benId: string | null, mealId: string, mealType: MealType, qty: number) => {
     const meal = meals[mealId];
-    if (!meal || qty <= 0) return;
+    if (!meal || !(qty > 0)) return;
     let row = rows.get(mealId);
     if (!row) {
-      row = { meal, byMealType: ZERO(), total: 0, beneficiaries: 0, unitPrice: priceOf(mealId), totalPrice: 0, benIds: new Set() };
+      row = { meal, byMealType: ZERO(), total: 0, beneficiaries: 0, unitPrice: priceOf(mealId), totalPrice: 0, manual: 0, benIds: new Set() };
       rows.set(mealId, row);
     }
     row.byMealType[mealType] += qty;
     row.total += qty;
+    if (benId === null) { row.manual += qty; return; }
     row.benIds.add(benId);
     const m = perBen.get(benId) ?? new Map<string, number>();
     m.set(mealId, (m.get(mealId) ?? 0) + qty);
@@ -189,6 +202,11 @@ export function computeFixedExtras(params: {
     }
   }
 
+  // الإضافات اليدوية — فقط للوجبات المختارة في الحصر
+  for (const x of params.manual ?? []) {
+    if (mealTypes.includes(x.meal_type)) add(null, x.meal_id, x.meal_type, Math.floor(x.quantity));
+  }
+
   const benById = new Map(bens.map(b => [b.id, b]));
   const byBeneficiary = [...perBen.entries()]
     .map(([id, m]) => {
@@ -231,7 +249,7 @@ function countSlots(keys: Set<string>): number {
 
 export async function buildFixedExtrasReport(
   supabase: SupabaseClient,
-  params: { from: string; to: string; mealTypes: MealType[]; entityType?: EntityType },
+  params: { from: string; to: string; mealTypes: MealType[]; entityType?: EntityType; manual?: ManualExtra[] },
 ): Promise<FixedExtrasReport> {
   const { from, to, mealTypes, entityType } = params;
 
@@ -321,5 +339,6 @@ export async function buildFixedExtrasReport(
     overrides: ovRes.error ? [] : ovRes.data ?? [],
     meals,
     prices,
+    manual: params.manual,
   });
 }

@@ -1,13 +1,17 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import type { EntityType, MealType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
 import { formatNow, todayISO } from '@/lib/date-utils';
 
 /** 2026-09-01 → 01/09/2026 */
 const dmy = (iso: string) => iso.split('-').reverse().join('/');
-import type { FixedExtrasReport } from '@/lib/fixed-extras-period';
+import type { FixedExtrasReport, ManualExtra } from '@/lib/fixed-extras-period';
+import ManualExtrasEditor from '@/components/reports/ManualExtrasEditor';
+
+// مسودة الأصناف اليدوية تبقى في متصفح المستخدم بين الزيارات — راحة فقط
+const MANUAL_KEY = 'fixed-extras:manual';
 import FixedExtrasPdf from '@/components/reports/FixedExtrasPdf';
 import { formatMoney } from '@/lib/costs';
 
@@ -35,6 +39,17 @@ export default function FixedExtrasView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showBens, setShowBens] = useState(false);
+  const [manual, setManual] = useState<ManualExtra[]>([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(MANUAL_KEY);
+      if (raw) setManual(JSON.parse(raw) as ManualExtra[]);
+    } catch { /* تخزين غير متاح — نبدأ فاضي */ }
+  }, []);
+  const updateManual = (items: ManualExtra[]) => {
+    setManual(items);
+    try { localStorage.setItem(MANUAL_KEY, JSON.stringify(items)); } catch { /* تجاهل */ }
+  };
   const [exporting, setExporting] = useState(false);
   // الـPDF نسخة مصمَّمة لورق A4 (FixedExtrasPdf) لا لقطة من الشاشة
   const exportPdf = () => { if (report) { setError(''); setExporting(true); } };
@@ -59,6 +74,7 @@ export default function FixedExtrasView() {
         body: JSON.stringify({
           from, to,
           meal_types: MEAL_TYPES.filter(t => mealTypes.has(t)),
+          manual,
           ...(entityType ? { entity_type: entityType } : {}),
         }),
       });
@@ -66,7 +82,7 @@ export default function FixedExtrasView() {
       if (!res.ok) setError(data.error || 'حدث خطأ'); else setReport(data);
     } catch { setError('حدث خطأ في الاتصال'); }
     setLoading(false);
-  }, [from, to, mealTypes, entityType]);
+  }, [from, to, mealTypes, entityType, manual]);
 
   const canRun = !!from && !!to && from <= to && mealTypes.size > 0 && !loading;
   const cols = report?.mealTypes ?? [];
@@ -131,6 +147,11 @@ export default function FixedExtrasView() {
             </select>
           </div>
         </div>
+        <ManualExtrasEditor
+          items={manual}
+          onChange={updateManual}
+          mealTypes={MEAL_TYPES.filter(t => mealTypes.has(t))}
+        />
         <div className="flex items-center justify-between gap-3 pt-1">
           <p className="text-xs text-slate-400">
             يحصر الأصناف الثابتة غير المعلَّمة «بديل». الأيام التي لها أمر تشغيل تُحسب مثل الأمر تماماً، والأيام القادمة من التسجيل.
@@ -217,7 +238,14 @@ export default function FixedExtrasView() {
                   ) : report.rows.map((r, i) => (
                     <tr key={r.meal.id}>
                       <td className="table-cell text-xs text-slate-400">{i + 1}</td>
-                      <td className="table-cell text-sm font-medium">{r.meal.name}</td>
+                      <td className="table-cell text-sm font-medium">
+                        {r.meal.name}
+                        {r.manual > 0 && (
+                          <span className="mr-2 text-[11px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 rounded px-1.5 py-0.5 whitespace-nowrap">
+                            {r.manual === r.total ? 'يدوي' : `منها ${r.manual} يدوي`}
+                          </span>
+                        )}
+                      </td>
                       {cols.map(t => (
                         <td key={t} className="table-cell text-center">{r.byMealType[t] || <span className="text-slate-300">—</span>}</td>
                       ))}

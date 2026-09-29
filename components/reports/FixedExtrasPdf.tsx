@@ -138,7 +138,14 @@ function MainTable({ report, rows, total }: { report: Report; rows: number[]; to
           return (
             <tr key={r.meal.id} data-m="main-row" style={{ background: i % 2 ? C.zebra : '#fff' }}>
               <td style={{ ...td, color: C.muted, fontSize: 13 }}>{i + 1}</td>
-              <td style={tdName}>{r.meal.name}</td>
+              <td style={tdName}>
+                {r.meal.name}
+                {r.manual > 0 && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: '#0369a1', marginRight: 6, whiteSpace: 'nowrap' }}>
+                    ({r.manual === r.total ? 'يدوي' : `منها ${r.manual} يدوي`})
+                  </span>
+                )}
+              </td>
               {cols.map(t => <td key={t} style={{ ...td, ...num }}>{r.byMealType[t] || <span style={{ color: '#cbd5e1' }}>—</span>}</td>)}
               <td style={{ ...td, ...num, fontWeight: 800, fontSize: 18, color: C.brand }}>{r.total}</td>
               <td style={{ ...td, ...num, fontSize: 14 }}>

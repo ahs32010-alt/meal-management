@@ -89,4 +89,29 @@ describe('computeFixedExtras', () => {
     expect(r.unpricedCount).toBe(1);
     expect(r.byBeneficiary.find(b => b.id === 'a')!.totalPrice).toBe(6.6);
   });
+
+  it('الإضافات اليدوية تُجمع مع المحسوب وتدخل السعر، ولا تُنسب لمستفيد', () => {
+    const r = computeFixedExtras({
+      ...base, mealTypes: ['lunch', 'dinner'], from: '2026-09-26', to: '2026-09-26',
+      beneficiaries: [ben('a', [{ day_of_week: 6, meal_type: 'lunch', meal_id: 'dates', quantity: 2 }])],
+      prices: { dates: 2, soup: 5 },
+      manual: [
+        { meal_id: 'dates', meal_type: 'lunch', quantity: 10 },  // يُجمع مع صنف موجود
+        { meal_id: 'soup', meal_type: 'dinner', quantity: 3 },   // صنف جديد كلياً
+        { meal_id: 'milk', meal_type: 'breakfast', quantity: 4 }, // وجبة غير مختارة → لا يُحسب
+      ],
+    });
+    const dates = r.rows.find(x => x.meal.id === 'dates')!;
+    expect(dates.total).toBe(12);
+    expect(dates.manual).toBe(10);
+    expect(dates.beneficiaries).toBe(1);
+    expect(dates.totalPrice).toBe(24);
+    const soup = r.rows.find(x => x.meal.id === 'soup')!;
+    expect(soup.byMealType.dinner).toBe(3);
+    expect(soup.beneficiaries).toBe(0);
+    expect(r.rows.some(x => x.meal.id === 'milk')).toBe(false);
+    expect(r.grandTotal).toBe(15);
+    expect(r.grandTotalPrice).toBe(39);
+    expect(r.byBeneficiary.map(b => [b.id, b.total])).toEqual([['a', 2]]);
+  });
 });
