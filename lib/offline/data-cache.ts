@@ -22,6 +22,15 @@ export const DATA_CACHE_NAME = 'kha-data-v1';
 
 /** سقف المدخلات — أعلى من احتياج يوم عمل كامل بكثير، وأقل من حصّة المتصفح. */
 const MAX_ENTRIES = 400;
+/**
+ * التشذيب ينزل إلى هنا لا إلى السقف بالضبط. بلا هذا الهامش، بعد امتلاء
+ * المخزون مرة صار **كل** استعلام يتجاوز السقف بمدخل واحد فيطلق مسحاً كاملاً
+ * (keys + match لـ٤٠٠ مدخل) — مئات عمليات التخزين مع كل قراءة، وهذا كان يثقل
+ * المتصفح ويبطئ كل الصفحات.
+ */
+const TRIM_TARGET = 300;
+/** لا نشذّب أكثر من مرة في هذه المدّة — الكتابات المتتالية تتجمّع في مسح واحد. */
+const TRIM_DEBOUNCE_MS = 5_000;
 /** رد أكبر من هذا لا يُخزَّن — نسخة احتياطية واحدة ما تستاهل ملء الحصّة. */
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
@@ -86,7 +95,7 @@ export function writeCached(request: Request, response: Response): Promise<void>
       if (!storable) return;
       const cache = await caches.open(DATA_CACHE_NAME);
       await cache.put(buildCacheKey(request), storable);
-      void trim(cache);
+      scheduleTrim();
     } catch {
       // حصّة ممتلئة أو تخزين محجوب — نكمل بلا مخزون.
     }
@@ -140,7 +149,17 @@ export async function readCached(request: Request): Promise<CachedRead | null> {
   }
 }
 
-/** يحذف الأقدم متى تجاوزنا السقف. الترتيب بختم `x-kha-cached-at`. */
+let trimTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleTrim() {
+  if (trimTimer) return;
+  trimTimer = setTimeout(() => {
+    trimTimer = null;
+    void caches.open(DATA_CACHE_NAME).then(trim, () => {});
+  }, TRIM_DEBOUNCE_MS);
+}
+
+/** يحذف الأقدم متى تجاوزنا السقف، نزولاً إلى TRIM_TARGET. الترتيب بختم `x-kha-cached-at`. */
 async function trim(cache: Cache): Promise<void> {
   try {
     const keys = await cache.keys();
@@ -154,7 +173,7 @@ async function trim(cache: Cache): Promise<void> {
       }),
     );
     stamped.sort((a, b) => a.at - b.at);
-    const excess = stamped.slice(0, stamped.length - MAX_ENTRIES);
+    const excess = stamped.slice(0, stamped.length - TRIM_TARGET);
     await Promise.all(excess.map((entry) => cache.delete(entry.key)));
   } catch {
     // التشذيب تحسين — فشله لا يمنع العمل.

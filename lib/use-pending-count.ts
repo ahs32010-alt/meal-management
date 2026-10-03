@@ -37,7 +37,11 @@ export function usePendingCount(): number {
     if (!user) return;
     const channel = supabase
       .channel(`pending-count-${channelId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_actions' }, () => fetchRef.current())
+      // غير الأدمن يرى طلباته فقط — فلا داعي لإعادة العدّ عند طلبات غيره
+      .on('postgres_changes', user.is_admin
+        ? { event: '*', schema: 'public', table: 'pending_actions' }
+        : { event: '*', schema: 'public', table: 'pending_actions', filter: `user_id=eq.${user.id}` },
+        () => fetchRef.current())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [user, channelId]);

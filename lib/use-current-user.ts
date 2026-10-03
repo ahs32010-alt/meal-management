@@ -20,6 +20,15 @@ interface CachedEntry {
 let inflight: Promise<AppUser | null> | null = null;
 let memoryCache: CachedEntry | null = null;
 
+/**
+ * آخر جلب فعلي من DB **في هذا التحميل للصفحة** (ذاكرة فقط — يُصفَّر مع أي
+ * refresh فيبقى «الـrefresh يجيب أحدث صلاحيات» صحيحاً). الـhook مستخدم في
+ * عشرات المكوّنات، فبدون هذا كان كل تنقّل بين الصفحات يطلق استعلام app_users
+ * جديداً. التغييرات أثناء الجلسة تصل عبر realtime على أي حال.
+ */
+const FRESH_MS = 60_000;
+let lastFetchedAt = 0;
+
 function readCache(): CachedEntry | null {
   if (memoryCache) return memoryCache;
   if (typeof window === 'undefined') return null;
@@ -34,7 +43,19 @@ function readCache(): CachedEntry | null {
   }
 }
 
+/**
+ * نفس المحتوى ⇒ نفس المرجع. كل hook يعتمد على `[user]` (عداد الموافقات،
+ * useMyPending، OfflineProvider...) كان يعيد الجلب ويهدم قناة realtime ويبنيها
+ * مع كل جلب جديد لأن الكائن جديد ولو لم يتغيّر فيه شيء.
+ */
+function stableUser(u: AppUser | null): AppUser | null {
+  const prev = memoryCache?.user ?? null;
+  if (prev && u && JSON.stringify(prev) === JSON.stringify(u)) return prev;
+  return u;
+}
+
 function writeCache(entry: CachedEntry) {
+  entry = { ...entry, user: stableUser(entry.user) };
   memoryCache = entry;
   if (typeof window === 'undefined') return;
   try {
@@ -56,6 +77,7 @@ async function fetchUser(): Promise<AppUser | null> {
       .select('*')
       .eq('id', session.user.id)
       .maybeSingle();
+    lastFetchedAt = Date.now();
     return (data as AppUser | null) ?? null;
   })();
   try {
@@ -95,7 +117,7 @@ function ensureRealtimeSubscription(userId: string) {
       () => {
         fetchUser().then(u => {
           writeCache({ user: u, ts: Date.now() });
-          notify(u);
+          notify(memoryCache?.user ?? u);
         });
       }
     )
@@ -118,14 +140,25 @@ export function useCurrentUser() {
       setLoading(false);
     }
 
-    // 2) دائماً نجلب من DB لنحدّث الصلاحيات فوراً عند الـrefresh.
+    // 2) نجلب من DB لنحدّث الصلاحيات فوراً عند الـrefresh — إلا لو جلبنا
+    //    للتوّ في هذا التحميل والقناة الحيّة شغّالة (هي تبلّغنا بأي تغيير).
     //    نضمن وجود subscription عالمية بعد ما نعرف الـuserId.
+    if (cached && globalChannel && Date.now() - lastFetchedAt < FRESH_MS) {
+      const listener: Listener = (u) => setUser(u);
+      listeners.add(listener);
+      return () => {
+        cancelled = true;
+        listeners.delete(listener);
+      };
+    }
+
     fetchUser().then(u => {
       if (cancelled) return;
       writeCache({ user: u, ts: Date.now() });
-      setUser(u);
+      const stable = memoryCache?.user ?? u;
+      setUser(stable);
       setLoading(false);
-      notify(u);
+      notify(stable);
       if (u?.id) ensureRealtimeSubscription(u.id);
     });
 
@@ -153,6 +186,7 @@ export function useCurrentUser() {
 
 export function clearCurrentUserCache() {
   memoryCache = null;
+  lastFetchedAt = 0;
   if (typeof window !== 'undefined') {
     try { window.sessionStorage.removeItem(CACHE_KEY); } catch { /* ignore */ }
   }

@@ -5,7 +5,6 @@ import './globals.css';
 // خط ثمانية سانس — مضمَّن في البناء (لا يُوضع في public/ — راجع lib/fonts.ts)
 const thmanyah = localFont({
   src: [
-    { path: './fonts/thmanyah-sans/thmanyahsans-Light.woff2',   weight: '300', style: 'normal' },
     { path: './fonts/thmanyah-sans/thmanyahsans-Regular.woff2', weight: '400', style: 'normal' },
     { path: './fonts/thmanyah-sans/thmanyahsans-Medium.woff2',  weight: '500', style: 'normal' },
     { path: './fonts/thmanyah-sans/thmanyahsans-Bold.woff2',    weight: '700', style: 'normal' },

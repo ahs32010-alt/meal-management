@@ -14,7 +14,10 @@ import { supabase } from '@/lib/supabase-client';
 // احتياط فقط: لو جدول fixed_extras_manual غير موجود بعد نحفظ في المتصفح
 const MANUAL_KEY = 'fixed-extras:manual';
 const MANUAL_COLS = 'id, meal_id, meal_type, quantity, start_date, end_date';
-import FixedExtrasPdf from '@/components/reports/FixedExtrasPdf';
+import dynamic from 'next/dynamic';
+// يُحمَّل عند التصدير فقط — يجرّ jspdf و html-to-image، فلا داعي لتنزيلهما مع
+// كل فتح لصفحة التقارير.
+const FixedExtrasPdf = dynamic(() => import('@/components/reports/FixedExtrasPdf'), { ssr: false });
 import { formatMoney } from '@/lib/costs';
 
 const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner'];

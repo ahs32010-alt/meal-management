@@ -140,7 +140,16 @@ export default function DashboardHome() {
   }, [supabase]);
 
   // ── Analytics: meal usage, type distribution, week buckets ───────────────
-  const fetchAnalytics = useCallback(async () => {
+  // البيانات الخام لآخر فترة جُلبت — تغيير فلتر نوع الوجبة يعيد الحساب منها
+  // بلا شبكة، والجلب الفعلي يصير فقط عند تغيّر الفترة أو وصول تحديث.
+  const analyticsRaw = useRef<{
+    key: string;
+    orders: { id: string; date: string; meal_type: string }[];
+    items: { order_id: string; meal_id: string; meals: unknown }[];
+    excl: { meal_id: string; meals: unknown }[];
+  } | null>(null);
+
+  const fetchAnalytics = useCallback(async (force = false) => {
     setAnalyticsLoading(true);
     try {
       let from: string; let to: string;
@@ -151,14 +160,37 @@ export default function DashboardHome() {
         ({ from, to } = getPresetRange(datePreset));
       }
 
-      const [{ data: ordersArr }, { data: exclRaw }] = await Promise.all([
-        supabase.from('daily_orders').select('id, date, meal_type').gte('date', from).lte('date', to),
-        // exclusions تعدّى سقف الـ١٠٠٠ صف — نقرأه على دفعات وإلا الإحصائية ناقصة
-        fetchAllRows((from_, to_) =>
-          supabase.from('exclusions').select('meal_id, meals(name, type)').order('id').range(from_, to_)),
-      ]);
+      const key = `${from}|${to}`;
+      if (force || analyticsRaw.current?.key !== key) {
+        // الثلاثة مستقلة — بالتوازي. order_items تُفلتر بالتاريخ عبر الربط بأمر
+        // التشغيل بدل `.in(order_id, [مئات المعرّفات])` الذي كان يصنع رابطاً
+        // ضخماً يُعاد إرساله مع كل دفعة، وكان ينتظر انتهاء جلب الأوامر أولاً.
+        const [{ data: ordersArr }, { data: itemsArr }, { data: exclArr }] = await Promise.all([
+          // بلا دفعات كانت فترة «الكل» تُقصّ بصمت عند ١٠٠٠ أمر
+          fetchAllRows((from_, to_) =>
+            supabase.from('daily_orders').select('id, date, meal_type')
+              .gte('date', from).lte('date', to).order('id').range(from_, to_)),
+          fetchAllRows((from_, to_) =>
+            supabase
+              .from('order_items')
+              .select('order_id, meal_id, meals(id, name, type, is_snack), daily_orders!inner(date)')
+              .gte('daily_orders.date', from)
+              .lte('daily_orders.date', to)
+              .order('id')
+              .range(from_, to_)),
+          // exclusions تعدّى سقف الـ١٠٠٠ صف — نقرأه على دفعات وإلا الإحصائية ناقصة
+          fetchAllRows((from_, to_) =>
+            supabase.from('exclusions').select('meal_id, meals(name, type)').order('id').range(from_, to_)),
+        ]);
+        analyticsRaw.current = {
+          key,
+          orders: (ordersArr ?? []) as { id: string; date: string; meal_type: string }[],
+          items: (itemsArr ?? []) as { order_id: string; meal_id: string; meals: unknown }[],
+          excl: (exclArr ?? []) as { meal_id: string; meals: unknown }[],
+        };
+      }
 
-      const allOrders = ordersArr ?? [];
+      const { orders: allOrders, items: itemsData, excl: exclRaw } = analyticsRaw.current!;
       const orderIds = allOrders.map(o => o.id);
 
       const typeDistribution: TypeDistribution = { breakfast: 0, lunch: 0, dinner: 0 };
@@ -180,15 +212,6 @@ export default function DashboardHome() {
 
       let mealUsage: MealUsage[] = [];
       if (orderIds.length > 0) {
-        // order_items يتجاوز ١٠٠٠ صف بسهولة — قراءة على دفعات
-        const { data: itemsData } = await fetchAllRows((from_, to_) =>
-          supabase
-            .from('order_items')
-            .select('order_id, meal_id, meals(id, name, type, is_snack)')
-            .in('order_id', orderIds)
-            .order('id')
-            .range(from_, to_));
-
         const filteredOrderIds = new Set(
           mealTypeFilter === 'all'
             ? orderIds
@@ -230,14 +253,18 @@ export default function DashboardHome() {
 
   // Initial load + refetch when filters change
   useEffect(() => { fetchStats(); }, [fetchStats]);
-  useEffect(() => { fetchAnalytics(); }, [fetchAnalytics]);
+  useEffect(() => { lastFullRefresh.current = Date.now(); fetchAnalytics(); }, [fetchAnalytics]);
 
+  const lastFullRefresh = useRef(0);
   const refreshAll = useCallback(() => {
+    lastFullRefresh.current = Date.now();
     fetchStats();
-    fetchAnalytics();
+    fetchAnalytics(true);
   }, [fetchStats, fetchAnalytics]);
 
-  // ── Coalesce realtime bursts: collapse N events within 600ms into one refresh ─
+  // ── Coalesce realtime bursts: collapse N events into one refresh ──────────
+  // ٢٫٥ ثانية لا ٦٠٠ms: إنشاء أوامر بالجملة يطلق مئات الأحداث على مدى ثوانٍ،
+  // فالنافذة القصيرة كانت تعيد قراءة الجداول الكبيرة مرة بعد مرة أثناءها.
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFull = useRef(false);
   const scheduleRefresh = useCallback((full: boolean) => {
@@ -251,7 +278,7 @@ export default function DashboardHome() {
       } else {
         fetchStats();
       }
-    }, 600);
+    }, 2500);
   }, [refreshAll, fetchStats]);
 
   // ── Realtime: refresh on any change to relevant tables ───────────────────
@@ -274,11 +301,16 @@ export default function DashboardHome() {
   }, [supabase, scheduleRefresh]);
 
   // ── Refresh on window focus (fallback if realtime isn't enabled) ─────────
+  // realtime يغطي التحديثات أصلاً، فلا نعيد قراءة كل شيء مع كل رجوع للتبويب —
+  // مرة كل دقيقة على الأكثر.
   useEffect(() => {
-    const onFocus = () => scheduleRefresh(true);
+    const onFocus = () => {
+      if (Date.now() - lastFullRefresh.current < 60_000) return;
+      scheduleRefresh(true);
+    };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [refreshAll]);
+  }, [scheduleRefresh]);
 
   // ── Loading skeleton ──────────────────────────────────────────────────────
   if (loading) {

@@ -227,6 +227,8 @@ function Cell({
 export default function MenuView() {
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.is_admin === true;
+  const isAdminRef = useRef(isAdmin);
+  isAdminRef.current = isAdmin;
   const canEdit = can(currentUser, 'menu', 'edit');
   const editNeedsApproval = needsApproval(currentUser, 'menu', 'edit');
   const myPending = useMyPending('menu_item');
@@ -335,8 +337,24 @@ export default function MenuView() {
       return withEntity ? q.eq('entity_type', entityType) : q;
     };
 
-    let itemsRes = await tryFetchItems(true, true, true);
-    let mealsRes = await tryFetchMeals(true, true);
+    // أعداد المستفيدين/المحظورات مستقلة تماماً عن المنيو — نطلقها الآن بالتوازي
+    // بدل انتظار المنيو والأصناف أولاً.
+    // ⚠️ exclusions جدول كبير (تعدّى ١٠٠٠ صف) — بدون قراءة على دفعات يقصّه
+    // PostgREST بصمت فتظهر أعداد أكبر من الحقيقة في خلايا المنيو.
+    const countsPromise = Promise.all([
+      fetchAllRows<{ id: string; entity_type?: string }>((from, to) =>
+        supabase.from('beneficiaries').select('id, entity_type').order('id').range(from, to)),
+      fetchAllRows<{ beneficiary_id?: string; meal_id: string; beneficiaries?: { entity_type?: string } | { entity_type?: string }[] }>((from, to) =>
+        supabase
+          .from('exclusions')
+          .select('beneficiary_id, meal_id, beneficiaries!inner(entity_type)')
+          .order('id')
+          .range(from, to)),
+      fetchInactiveBeneficiaryIds(supabase),
+    ]);
+    countsPromise.catch(() => {}); // يُنتظر لاحقاً — نمنع «unhandled» لو خرجنا مبكراً
+
+    let [itemsRes, mealsRes] = await Promise.all([tryFetchItems(true, true, true), tryFetchMeals(true, true)]);
 
     // إذا extra_quantity ما موجود (الـmigration ما اتشغّل) أعد المحاولة بدونه
     if (itemsRes.error && /extra_quantity|column/i.test(itemsRes.error.message)) {
@@ -382,19 +400,7 @@ export default function MenuView() {
 
     // جلب إجمالي المستفيدين والمحظورات لعرض الأعداد الفعلية في الخلايا
     try {
-      // ⚠️ exclusions جدول كبير (تعدّى ١٠٠٠ صف) — بدون قراءة على دفعات يقصّه
-      // PostgREST بصمت فتظهر أعداد أكبر من الحقيقة في خلايا المنيو.
-      const [bensRes, exclRes, inactiveSet] = await Promise.all([
-        fetchAllRows<{ id: string; entity_type?: string }>((from, to) =>
-          supabase.from('beneficiaries').select('id, entity_type').order('id').range(from, to)),
-        fetchAllRows<{ beneficiary_id?: string; meal_id: string; beneficiaries?: { entity_type?: string } | { entity_type?: string }[] }>((from, to) =>
-          supabase
-            .from('exclusions')
-            .select('beneficiary_id, meal_id, beneficiaries!inner(entity_type)')
-            .order('id')
-            .range(from, to)),
-        fetchInactiveBeneficiaryIds(supabase),
-      ]);
+      const [bensRes, exclRes, inactiveSet] = await countsPromise;
       if (bensRes.error || !bensRes.data || exclRes.error || !exclRes.data) {
         // ما نعرض أعداداً نصف مقروءة ولا نسمح بتعديلها — الصمت هنا كان يعني
         // أرقاماً خاطئة تُحفظ على أنها «كمية إضافية» وتظل تزيد وتنقص بعدها.
@@ -423,8 +429,16 @@ export default function MenuView() {
     // نُثبّت الفئة على فئة الصنف ونجعل الـposition متسلسلاً بلا فجوات. الترتيب
     // الناتج مطابق للمعروض حالياً، فما يتحرّك شيء على الشاشة — لكنه يمنع تبادل
     // الصفوف عشوائياً في التحميلات القادمة.
-    if (loadedItems && isAdmin) void repairMenuPositions(loadedItems);
-  }, [supabase, entityType, isAdmin, repairMenuPositions]);
+    if (loadedItems && isAdminRef.current) void repairMenuPositions(loadedItems);
+  // isAdmin عبر ref: كان يبدأ false ثم يصير true بعد تحميل المستخدم، فيُعاد
+  // الجلب كاملاً مرتين عند كل فتح للصفحة.
+  }, [supabase, entityType, repairMenuPositions]);
+
+  // الإصلاح الذاتي يحتاج الأدمن — لو وصل المستخدم بعد انتهاء الجلب نشغّله مرة.
+  useEffect(() => {
+    if (isAdmin && !loading && allItems.length > 0) void repairMenuPositions(allItems);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

@@ -30,7 +30,24 @@ describe('fetchAllRows', () => {
     expect(data).toHaveLength(1678);
     expect(data?.[0].id).toBe(0);
     expect(data?.[1677].id).toBe(1677);
-    expect(t.calls).toEqual([[0, 999], [1000, 1999]]);
+    // الدفعة الأولى وحدها، ثم موجة متوازية متتالية الإزاحات بلا فجوات
+    expect(t.calls.slice(0, 2)).toEqual([[0, 999], [1000, 1999]]);
+    t.calls.forEach(([from, to], i) => expect([from, to]).toEqual([i * 1000, i * 1000 + 999]));
+  });
+
+  it('يجلب ما بعد الدفعة الأولى بالتوازي لا رحلة بعد رحلة', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const t = table(5500);
+    const page = async (from: number, to: number) => {
+      inFlight++; peak = Math.max(peak, inFlight);
+      await new Promise(r => setTimeout(r, 5));
+      try { return await t.page(from, to); } finally { inFlight--; }
+    };
+    const { data } = await fetchAllRows<{ id: number }>(page);
+    expect(data).toHaveLength(5500);
+    expect(data?.map(r => r.id)).toEqual(Array.from({ length: 5500 }, (_, i) => i));
+    expect(peak).toBeGreaterThan(1);
   });
 
   it('ما يخسر ولا يكرّر صفاً عند حد الدفعة بالضبط', async () => {
@@ -38,8 +55,9 @@ describe('fetchAllRows', () => {
     const { data } = await fetchAllRows<{ id: number }>(t.page);
     expect(data).toHaveLength(2000);
     expect(new Set(data?.map(r => r.id)).size).toBe(2000);
-    // دفعة ثالثة فاضية لازم تنهي الحلقة
-    expect(t.calls).toHaveLength(3);
+    // دفعة فاضية لازم تنهي الحلقة — الموجة قد تطلب دفعات بعدها، ولا تتجاوز موجة واحدة
+    expect(t.calls.length).toBeGreaterThanOrEqual(3);
+    expect(t.calls.length).toBeLessThanOrEqual(5);
   });
 
   it('يكتفي بطلب واحد للجداول الصغيرة', async () => {

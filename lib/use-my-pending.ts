@@ -56,10 +56,11 @@ export function useMyPending(entityType: PendingEntityType): MyPendingState {
     if (!user) return;
     const channel = supabase
       .channel(`my-pending-${entityType}-${channelId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_actions' }, () => fetchRef.current())
+      // مفلترة على المستخدم — بدونها كان كل طلب من أي مستخدم يعيد الجلب عند الجميع
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_actions', filter: `user_id=eq.${user.id}` }, () => fetchRef.current())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [user, entityType, channelId]);
+  }, [user?.id, entityType, channelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updates = useMemo(() => new Set(items.filter(i => i.action === 'update' && i.entity_id).map(i => i.entity_id!)), [items]);
   const deletes = useMemo(() => new Set(items.filter(i => i.action === 'delete' && i.entity_id).map(i => i.entity_id!)), [items]);
@@ -71,13 +72,15 @@ export function useMyPending(entityType: PendingEntityType): MyPendingState {
     return m;
   }, [items]);
 
-  return {
+  // كائن ثابت ما دامت البيانات نفسها — يُمرَّر كـprop، فالجديد مع كل render
+  // كان يُبطل أي memo عند الأبناء.
+  return useMemo(() => ({
     ready,
     items,
-    hasUpdate: (id) => updates.has(id),
-    hasDelete: (id) => deletes.has(id),
+    hasUpdate: (id: string) => updates.has(id),
+    hasDelete: (id: string) => deletes.has(id),
     getCreates: () => items.filter(i => i.action === 'create'),
-    getForId: (id) => byId.get(id),
-    refresh: () => { fetchData(); },
-  };
+    getForId: (id: string) => byId.get(id),
+    refresh: () => { fetchRef.current(); },
+  }), [ready, items, updates, deletes, byId]);
 }
