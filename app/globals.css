@@ -1,11 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* خط ثمانية سانس — المتغير يعرّفه next/font في app/layout.tsx (مرجعه lib/fonts.ts) */
 * {
-  font-family: 'Cairo', sans-serif;
+  font-family: var(--font-thmanyah), 'thmanyah sans', Tahoma, Arial, sans-serif;
 }
 
 html {
@@ -563,7 +562,7 @@ html { scroll-behavior: smooth; }
   border-bottom: 1.5px solid #1e293b;
   overflow: hidden;
   background: white;
-  font-family: 'Cairo', Arial, sans-serif;
+  font-family: var(--font-thmanyah), 'thmanyah sans', Tahoma, Arial, sans-serif;
   direction: rtl;
   display: flex;
   flex-direction: column;
@@ -783,7 +782,7 @@ html { scroll-behavior: smooth; }
     padding: 5mm 0 4mm;
     border-bottom: 2px solid #1e293b;
     margin-bottom: 4mm;
-    font-family: 'Cairo', Arial, sans-serif;
+    font-family: var(--font-thmanyah), 'thmanyah sans', Tahoma, Arial, sans-serif;
   }
 
   .sticker-grid {

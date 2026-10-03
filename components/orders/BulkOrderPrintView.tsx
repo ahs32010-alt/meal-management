@@ -4,6 +4,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import type { Meal } from '@/lib/types';
 import { customizationCells, customSectionTitle, fetchOrderReports, sumBy } from './order-print-utils';
+import { APP_FONT_STACK, FILE_FONT_STACK, appFontFaceCss } from '@/lib/fonts';
 
 interface MealCount { meal: Meal; gets?: number; qty?: number; quantity?: number; fixedQty?: number }
 interface BeneficiaryDetail {
@@ -45,7 +46,7 @@ const PALETTE = {
 };
 
 const s: Record<string, React.CSSProperties> = {
-  page:      { fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif", fontSize: 11, color: '#1e293b', background: '#fff', direction: 'rtl', padding: '6mm 8mm', width: '210mm', maxWidth: '100%', margin: '0 auto', boxSizing: 'border-box' },
+  page:      { fontFamily: APP_FONT_STACK, fontSize: 11, color: '#1e293b', background: '#fff', direction: 'rtl', padding: '6mm 8mm', width: '210mm', maxWidth: '100%', margin: '0 auto', boxSizing: 'border-box' },
   titleBar:  { fontSize: 22, fontWeight: 800, color: PALETTE.title.text, textAlign: 'center', padding: '8px 0', marginBottom: 6 },
   infoBar:   { background: PALETTE.title.bg, border: `1.5px solid ${PALETTE.title.border}`, borderRadius: 8, padding: '8px 14px', textAlign: 'center', lineHeight: 1.7, marginBottom: 10 },
   infoMain:  { fontSize: 15, fontWeight: 700, color: '#0f172a' },
@@ -258,7 +259,7 @@ body { background: #e2e8f0; }
 // into the React-rendered nodes so they conform to the @page printable area.
 const STANDALONE_PRINT_CSS = `
 @page { size: A4 portrait; margin: 5mm; }
-html, body { margin: 0; padding: 0; background: #fff; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
+html, body { margin: 0; padding: 0; background: #fff; font-family: ${FILE_FONT_STACK}; }
 * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
 .print-page {
   background: #fff !important;
@@ -287,7 +288,8 @@ function openPrintWindow(htmlBody: string) {
 <head>
 <meta charset="UTF-8">
 <title>تصدير أوامر التشغيل</title>
-<style>${STANDALONE_PRINT_CSS}</style>
+<style>${appFontFaceCss()}
+${STANDALONE_PRINT_CSS}</style>
 </head>
 <body>${htmlBody}
 <script>
@@ -347,7 +349,7 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
       <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
 
       {/* Toolbar */}
-      <div className="no-print" style={{ background: '#1e293b', color: '#fff', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, fontFamily: 'sans-serif', direction: 'rtl', position: 'sticky', top: 0, zIndex: 100 }}>
+      <div className="no-print" style={{ background: '#1e293b', color: '#fff', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, fontFamily: APP_FONT_STACK, direction: 'rtl', position: 'sticky', top: 0, zIndex: 100 }}>
         <span style={{ fontWeight: 600 }}>
           تصدير بكج أوامر التشغيل —{' '}
           {allLoaded
@@ -382,7 +384,7 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
 
       {/* Loading state */}
       {!allLoaded && (
-        <div className="no-print" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: 16, fontFamily: 'sans-serif', color: '#555' }}>
+        <div className="no-print" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: 16, fontFamily: APP_FONT_STACK, color: '#555' }}>
           <div style={{ width: 36, height: 36, border: '3px solid #10b981', borderTopColor: 'transparent', borderRadius: '50%', animation: 'bulk-spin 0.8s linear infinite' }} />
           <p style={{ margin: 0 }}>جاري تحميل الأوامر... ({loaded} / {orderIds.length})</p>
           <div style={{ width: 280, background: '#e2e8f0', borderRadius: 99, overflow: 'hidden', height: 8 }}>
@@ -393,7 +395,7 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
 
       {/* Empty state — when loaded but no valid reports */}
       {allLoaded && validReports.length === 0 && (
-        <div className="no-print" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: 12, fontFamily: 'sans-serif', color: '#c00', textAlign: 'center', padding: 20 }}>
+        <div className="no-print" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: 12, fontFamily: APP_FONT_STACK, color: '#c00', textAlign: 'center', padding: 20 }}>
           <p style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>تعذّر تحميل أي أمر تشغيل</p>
           <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
             تحقّق من اتصالك بالإنترنت ومن صلاحياتك، ثم أعد المحاولة.

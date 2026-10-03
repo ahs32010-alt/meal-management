@@ -5,6 +5,7 @@ import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
 import { WEEK_TITLES, MENU_DAYS } from '@/lib/menu-utils';
 import type { MenuPeriodReport } from '@/lib/menu-period-report';
 import type { Meal, MealType, EntityType } from '@/lib/types';
+import { APP_FONT_STACK, FILE_FONT_STACK, appFontFaceCss } from '@/lib/fonts';
 
 interface MealCount { meal: Meal; gets?: number; qty?: number; quantity?: number }
 
@@ -36,7 +37,7 @@ function formatSelectionsLabel(selections: Record<string, number[]>): string {
 // ── Shared sub-components ────────────────────────────────────────────────────
 const s: Record<string, React.CSSProperties> = {
   page: {
-    fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif",
+    fontFamily: APP_FONT_STACK,
     fontSize: 11, color: '#1e293b', background: '#fff',
     direction: 'rtl', padding: '6mm 8mm',
     width: '210mm', maxWidth: '100%', margin: '0 auto', boxSizing: 'border-box',
@@ -204,13 +205,13 @@ export default function PeriodPrintView({ selectionsParam, mealType, entityType 
   }, [report, fitOnePage]);
 
   if (error) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'sans-serif', color: '#c00' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: APP_FONT_STACK, color: '#c00' }}>
       {error}
     </div>
   );
 
   if (!report) return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12, fontFamily: 'sans-serif', color: '#555' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12, fontFamily: APP_FONT_STACK, color: '#555' }}>
       <div style={{ width: 36, height: 36, border: '3px solid #10b981', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
       <p>جاري تحضير تقرير الفترة...</p>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
@@ -233,7 +234,8 @@ export default function PeriodPrintView({ selectionsParam, mealType, entityType 
 <html lang="ar" dir="rtl">
 <head><meta charset="UTF-8"><title>تقرير فترة زمنية</title>
 <style>
-  body { margin: 0; padding: 12px; background: #f1f5f9; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
+  ${appFontFaceCss()}
+  body { margin: 0; padding: 12px; background: #f1f5f9; font-family: ${FILE_FONT_STACK}; }
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   #period-print-root { width: 100% !important; max-width: 100% !important; padding: 16px !important; box-shadow: 0 2px 12px rgba(0,0,0,.08); background: #fff; border-radius: 8px; }
   #period-print-root table { width: 100% !important; table-layout: auto !important; }
@@ -263,7 +265,7 @@ ${html}
     const wordHtml = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40" lang="ar" dir="rtl">
 <head><meta charset="UTF-8"><title>تقرير فترة زمنية</title>
 <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->
-<style>@page { size: A4 portrait; margin: 8mm; } body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; direction: rtl; } table { border-collapse: collapse; }</style>
+<style>@page { size: A4 portrait; margin: 8mm; } body { font-family: ${FILE_FONT_STACK}; direction: rtl; } table { border-collapse: collapse; }</style>
 </head><body>${html}</body></html>`;
     const blob = new Blob(['﻿', wordHtml], { type: 'application/msword' });
     const url = URL.createObjectURL(blob);
@@ -297,7 +299,7 @@ ${html}
       `}</style>
 
       {/* Toolbar */}
-      <div className="no-print" style={{ background: '#1e293b', color: '#fff', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, fontFamily: 'sans-serif', direction: 'rtl' }}>
+      <div className="no-print" style={{ background: '#1e293b', color: '#fff', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, fontFamily: APP_FONT_STACK, direction: 'rtl' }}>
         <span style={{ fontWeight: 600 }}>تقرير الفترة الزمنية — خطوة أمل</span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#94a3b8', fontSize: 12, userSelect: 'none' }}>

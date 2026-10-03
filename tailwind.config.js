@@ -9,7 +9,8 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        arabic: ['Cairo', 'sans-serif'],
+        arabic: ['var(--font-thmanyah)', 'thmanyah sans', 'Tahoma', 'Arial', 'sans-serif'],
+        sans: ['var(--font-thmanyah)', 'thmanyah sans', 'Tahoma', 'Arial', 'sans-serif'],
       },
       colors: {
         primary: {

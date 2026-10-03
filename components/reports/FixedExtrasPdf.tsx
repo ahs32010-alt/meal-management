@@ -7,6 +7,7 @@ import { APP_TIME_ZONE } from '@/lib/date-utils';
 import type { FixedExtrasReport } from '@/lib/fixed-extras-period';
 import { exportPagesToPdf } from '@/components/reports/node-pdf-export';
 import { formatMoney } from '@/lib/costs';
+import { APP_FONT_STACK } from '@/lib/fonts';
 
 /**
  * نسخة الطباعة من «حصر الإضافات»: صفحات A4 مصمَّمة للورق (٧٩٤×١١٢٣ بكسل =
@@ -31,7 +32,7 @@ const C = {
   zebra: '#f8fafc',
 };
 
-const FONT = "'Cairo', Tahoma, Arial, sans-serif";
+const FONT = APP_FONT_STACK;
 
 /** 2026-09-01 → 01/09/2026 — أرقام قصيرة لا تنكسر على سطرين مثل اسم الشهر */
 const dmy = (iso: string) => iso.split('-').reverse().join('/');

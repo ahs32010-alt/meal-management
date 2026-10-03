@@ -159,7 +159,7 @@ function NameBox({ name, english, s, grow }: {
       area.style.minHeight = `${box.offsetHeight}px`;
     };
     fit();
-    // القياس قبل تحميل خط Cairo يعطي عرضاً أضيق فيُقصّ الاسم — نعيده بعد تحميله
+    // القياس قبل تحميل خط ثمانية يعطي عرضاً أضيق فيُقصّ الاسم — نعيده بعد تحميله
     let alive = true;
     void document.fonts?.ready.then(() => { if (alive) fit(); });
     const ro = new ResizeObserver(fit);

@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import type { DeliveryOrder, DeliveryPrintHeader } from '@/lib/types';
 import { DELIVERY_MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
+import { APP_FONT_STACK } from '@/lib/fonts';
 
 function arabicDate(dateStr: string) {
   const d = new Date(dateStr);
@@ -44,13 +45,13 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
   useEffect(() => { load(); }, [load]);
 
   if (error) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'sans-serif', color: '#c00' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: APP_FONT_STACK, color: '#c00' }}>
       {error}
     </div>
   );
 
   if (!order) return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12, fontFamily: 'sans-serif', color: '#555' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12, fontFamily: APP_FONT_STACK, color: '#555' }}>
       <div style={{ width: 36, height: 36, border: '3px solid #10b981', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
       <p>جاري تحضير أمر التسليم...</p>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
@@ -62,7 +63,7 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
   // ── Styles ────────────────────────────────────────────────────────────────
   const s: Record<string, React.CSSProperties> = {
     page: {
-      fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif",
+      fontFamily: APP_FONT_STACK,
       fontSize: 12, color: '#1e293b', background: '#fff',
       direction: 'rtl', padding: '8mm 10mm',
       width: '210mm', maxWidth: '100%', margin: '0 auto', boxSizing: 'border-box',
@@ -221,7 +222,7 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
       `}</style>
 
       {/* Toolbar */}
-      <div className="no-print" style={{ background: '#1e293b', color: '#fff', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, fontFamily: 'sans-serif', direction: 'rtl' }}>
+      <div className="no-print" style={{ background: '#1e293b', color: '#fff', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, fontFamily: APP_FONT_STACK, direction: 'rtl' }}>
         <span style={{ fontWeight: 600 }}>أمر التسليم {order.order_number} — {arabicDate(order.date)}</span>
         <div style={{ display: 'flex', gap: 8 }}>
           <button
@@ -362,7 +363,7 @@ function ReleasedStamp({ date }: { date: string }) {
         padding: '6px 14px 8px',
         background: '#fff',
         textAlign: 'center',
-        fontFamily: 'Arial, "Helvetica Neue", sans-serif',
+        fontFamily: APP_FONT_STACK,
         display: 'inline-block',
         lineHeight: 1.1,
       }}

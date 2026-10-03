@@ -14,6 +14,7 @@ import {
   mainPosition,
   snackPosition,
 } from '@/lib/menu-utils';
+import { APP_FONT_NAME } from '@/lib/fonts';
 
 // ─── Layout ─────────────────────────────────────────────────────────────────
 //   Row 0:  Title — merged across all columns
@@ -353,7 +354,7 @@ function buildWeekSheet(
       const cell = ws[addr];
       cell.s = cell.s ?? {};
       cell.s.alignment = { horizontal: 'center', vertical: 'center', wrapText: true, readingOrder: 2 };
-      cell.s.font = { name: 'Cairo', sz: r === 0 ? 13 : 11, bold: r === 0 || r === 1 || c === LABEL_COL_INDEX };
+      cell.s.font = { name: APP_FONT_NAME, sz: r === 0 ? 13 : 11, bold: r === 0 || r === 1 || c === LABEL_COL_INDEX };
       cell.s.border = BORDER;
 
       if (r === 0) {

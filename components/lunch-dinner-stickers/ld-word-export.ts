@@ -20,6 +20,7 @@ import type { Beneficiary } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import { hasCustomization, LD_CATEGORY, type LdMealCustomization } from './ld-types';
 import { LD_FONT_SIZES, dietLines } from './ld-sticker-card';
+import { APP_FONT_NAME } from '@/lib/fonts';
 
 /**
  * أحجام Word (نقاط) مشتقّة من LD_FONT_SIZES (بكسل الصفحة) بنسبة ثابتة لكل
@@ -345,7 +346,7 @@ export async function exportLunchDinnerStickers(
   const doc = new Document({
     creator: 'Khutwat Amal',
     title: 'ستيكرات الغداء والعشاء',
-    styles: { default: { document: { run: { font: 'Cairo', size: sz(10) } } } },
+    styles: { default: { document: { run: { font: APP_FONT_NAME, size: sz(10) } } } },
     sections: sections.length ? sections : [{ children: [new Paragraph({ children: [] })] }],
   });
 

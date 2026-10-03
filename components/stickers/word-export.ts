@@ -18,6 +18,7 @@ import type { ReportData, ItemCategory } from '@/lib/types';
 import { CATEGORY_LABELS } from '@/lib/types';
 import { transliterate } from '@/lib/transliterate';
 import { GROUP_COLORS, CATEGORY_THEME } from './sticker-utils';
+import { APP_FONT_NAME } from '@/lib/fonts';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -349,7 +350,7 @@ export async function exportStickersWord(
     styles: {
       default: {
         document: {
-          run: { font: 'Cairo', size: sz(10) },
+          run: { font: APP_FONT_NAME, size: sz(10) },
         },
       },
     },
@@ -431,7 +432,7 @@ export async function exportStickersPerPageDocx(
     styles: {
       default: {
         document: {
-          run: { font: 'Cairo', size: sz(10) },
+          run: { font: APP_FONT_NAME, size: sz(10) },
         },
       },
     },
