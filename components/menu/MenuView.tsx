@@ -680,7 +680,8 @@ export default function MenuView() {
 
   const handleExport = async () => {
     const { exportMenuXLSX } = await import('./menu-xlsx');
-    await exportMenuXLSX(allItems, meals);
+    // فئة المنيو تُكتب في العنوان واسم الملف؛ ومع منيو فارغ يخرج قالب فارغ بنفس التخطيط
+    await exportMenuXLSX(allItems, meals, entityType);
   };
 
   // اختيار الملف لا ينفّذ الاستيراد مباشرة — بل يفتح حوار اختيار الطريقة (إضافة/استبدال).
@@ -702,7 +703,7 @@ export default function MenuView() {
       }
 
       const { importMenuXLSX } = await import('./menu-xlsx');
-      const { rows, errors, weeks } = await importMenuXLSX(file, meals);
+      const { rows, errors, weeks } = await importMenuXLSX(file, meals, entityType);
 
       // لا نكتب أي شيء ما دام في الملف مشكلة واحدة. سابقاً كان الاستيراد يمشي
       // جزئياً: يمسح الأسبوع كاملاً ثم يُدرج الصفوف التي انقرأت فقط — فكل صنف
@@ -771,8 +772,13 @@ export default function MenuView() {
           {/* الاستيراد والتصدير ومسح الأسبوع — للأدمن فقط */}
           {isAdmin && (
             <>
-              <button onClick={handleExport} disabled={loading || allItems.length === 0} className="btn-secondary text-sm">
-                تصدير Excel
+              <button
+                onClick={handleExport}
+                disabled={loading}
+                title={allItems.length === 0 ? 'المنيو فارغ — سيُنزَّل قالب فارغ بنفس تخطيط الاستيراد' : undefined}
+                className="btn-secondary text-sm"
+              >
+                {allItems.length === 0 ? 'تنزيل قالب Excel' : 'تصدير Excel'}
               </button>
               <button
                 onClick={() => importRef.current?.click()}

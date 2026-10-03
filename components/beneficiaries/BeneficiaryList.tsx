@@ -8,13 +8,18 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import {
   BENEFICIARY_HEADERS,
+  BENEFICIARY_TEMPLATE_ROW,
   COL_ACTIVE,
+  COL_DIETS,
+  COL_MENU_OVERRIDES,
   EXCLUSION_COLUMNS,
   FIXED_COLUMNS,
   STICKER_FLAG_COLUMNS,
   COL_CUSTOM_LD,
   buildBeneficiaryRow,
+  normalizeSheetRow,
   parseFixedToken,
+  parseOverrideToken,
   parseYesNo,
   splitCellTokens,
   DAY_FROM_AR,
@@ -22,6 +27,7 @@ import {
   type SheetExclusion,
   type SheetFixedMeal,
   type SheetMeal,
+  type SheetMenuOverride,
 } from '@/lib/beneficiary-sheet';
 import { logActivity } from '@/lib/activity-log';
 import { valueDetails } from '@/lib/activity-diff';
@@ -358,7 +364,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
    * الفئة الحالية فقط لسقطت أسماء مشروعة من الملف — وأبلغ عنها زر التحقق
    * كأنها بيانات ضائعة. لذلك نضمّ `allMealsForSheet` (كل الأصناف بلا فلترة).
    */
-  const buildSheetMealsMap = () => {
+  const buildSheetMealsMap = (freshAllMeals: { id: string; name: string; type: MealType; is_snack: boolean }[] = []) => {
     const mealsById = new Map<string, SheetMeal>();
     const addMeal = (m: { id?: string; name?: string; type?: string; is_snack?: boolean } | null | undefined) => {
       if (!m?.id || !m.name || !m.type) return;
@@ -366,6 +372,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     };
     for (const m of meals) addMeal(m);
     for (const m of allMealsForSheet) addMeal(m);
+    for (const m of freshAllMeals) addMeal(m);
     // الأصناف المرتبطة تأتي مضمّنة مع المستفيد — نضيفها حتى لو غابت عن قائمة الصفحة
     for (const b of beneficiaries) {
       for (const e of b.exclusions ?? []) {
@@ -380,17 +387,57 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     return mealsById;
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     // الصيغة من lib/beneficiary-sheet — نفسها التي تستعملها ورقة النسخة
     // الاحتياطية، فما تعود الاثنتان تتباعدان.
-    const mealsById = buildSheetMealsMap();
+    //
+    // حقلان تحرّرهما نافذة المستفيد ولا تحملهما قائمة الصفحة، فنقرأهما هنا:
+    //   • أسماء الأنظمة الغذائية (الصفحة تحمل diet_id فقط)
+    //   • قرارات «المنيو المخصّص» على خانة محددة
+    // الجدول غير الموجود (الترقية ما اتشغّلت) = عمود فارغ. أي خطأ آخر يوقف
+    // التصدير: ملف بعمود فارغ خطأً يمسح القرارات عند رفعه بوضع التحديث.
+    const tableMissing = (msg: string) =>
+      /does not exist|schema cache|could not find the table|relation/i.test(msg);
+    const benIds = new Set(beneficiaries.map(b => b.id));
+    const [allMealsRes, dietsRes, ovRes] = await Promise.all([
+      fetchAllRows<{ id: string; name: string; type: MealType; is_snack: boolean }>(
+        (from, to) => supabase.from('meals').select('id, name, type, is_snack').order('id').range(from, to)),
+      supabase.from('diet_systems').select('id, name'),
+      fetchAllRows<SheetMenuOverride & { beneficiary_id: string }>(
+        (from, to) => supabase
+          .from('beneficiary_menu_overrides')
+          .select('beneficiary_id, week_number, day_of_week, meal_type, action, base_meal_id, target_meal_id, quantity, is_alternative')
+          .order('id')
+          .range(from, to)),
+    ]);
+    if (dietsRes.error && !tableMissing(dietsRes.error.message)) {
+      setNotice(`⚠ تعذّر التصدير — فشلت قراءة الأنظمة الغذائية: ${dietsRes.error.message}`);
+      return;
+    }
+    if (ovRes.error && !tableMissing(ovRes.error.message)) {
+      setNotice(`⚠ تعذّر التصدير — فشلت قراءة تعديلات المنيو: ${ovRes.error.message}`);
+      return;
+    }
+    const dietNameById = new Map((dietsRes.data ?? []).map(d => [d.id as string, d.name as string] as const));
+    const ovByBen = new Map<string, SheetMenuOverride[]>();
+    for (const ov of ovRes.data ?? []) {
+      if (!benIds.has(ov.beneficiary_id)) continue;
+      const list = ovByBen.get(ov.beneficiary_id);
+      if (list) list.push(ov); else ovByBen.set(ov.beneficiary_id, [ov]);
+    }
+
+    const mealsById = buildSheetMealsMap(allMealsRes.data ?? []);
     const rows = beneficiaries.map(b => buildBeneficiaryRow(
-      b as SheetBeneficiary,
+      {
+        ...(b as SheetBeneficiary),
+        diet_names: (b.diets ?? []).map(d => dietNameById.get(d.diet_id) ?? '').filter(Boolean),
+      },
       // محظورات الأنظمة الغذائية لا تُصدَّر — تُشتق من النظام نفسه، ولو دخلت
       // الملف لرجعت بالاستيراد محظورات شخصية منفصلة عن نظامها
       (b.exclusions ?? []).filter(e => !e.diet_id) as SheetExclusion[],
       (b.fixed_meals ?? []) as unknown as SheetFixedMeal[],
       mealsById,
+      ovByBen.get(b.id) ?? [],
     ));
     const fileLabel = entityType === 'companion' ? 'مرافقون' : 'مستفيدون';
     exportXLSX(rows, `${fileLabel}_${new Date().toISOString().slice(0, 10)}.xlsx`, entityPlural);
@@ -758,67 +805,68 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
           modes={['append', 'update', 'replace']}
           updateHint="يطابق بالكود: يحدّث الموجود ويضيف الجديد — بلا حذف أحد"
 
-          templateRow={[
-            'محمد أحمد', 'Mohammad Ahmad', 'B001', 'عائلة', '5', '',
-            'فول؛كبدة - شكشوكة؛تونة', '',
-            '', '',
-            '', '',
-            // أمثلة الأصناف الثابتة:
-            //   فول×2؛سبت احد اربعاء  → كمية 2 (تصنيف افتراضي حار)
-            //   سلطة؛سبت احد@بارد       → فئة بارد بدل الافتراضي
-            //   مكرونة؛سبت↛فول,بيض     → تُلغى لو وُجد "فول" أو "بيض" في نفس الأمر
-            //   تمر؛سبت@بديل            → يُحتسب مع البدائل بدل الأصناف الثابتة
-            'فول×2؛سبت احد اربعاء - سلطة؛سبت احد@بارد - مكرونة؛سبت↛فول,بيض', '',
-            '', '',
-            '', '',
-            '',
-            // مفعّل + خيارات الستيكر — أعمدة اختيارية، غيابها يعني مفعّل/لا
-            'نعم',
-            ...STICKER_FLAG_COLUMNS.map(() => 'لا'),
-            'لا',
-          ]}
+          templateRow={BENEFICIARY_TEMPLATE_ROW}
           onClose={() => setImportOpen(false)}
           onDone={() => { setImportOpen(false); fetchData(); }}
-          replaceWarning={`سيتم حذف كل ${entityPlural} الحاليين (وما يرتبط بهم من محظورات وأصناف ثابتة) قبل إضافة بيانات الملف.`}
-          onImport={async (rows, mode) => {
+          replaceWarning={`سيتم حذف كل ${entityPlural} الحاليين (وما يرتبط بهم من محظورات وأصناف ثابتة وأنظمة غذائية وتعديلات منيو) ثم إضافة بيانات الملف — ما في الملف فقط هو ما يبقى.`}
+          onImport={async (rawRows, mode) => {
             const errors: string[] = [];
             const EXCL_COLS = EXCLUSION_COLUMNS;
             const FIXED_COLS = FIXED_COLUMNS;
+            // رؤوس بمسافات زائدة كانت تُقرأ أعمدة فارغة بصمت
+            const rows = rawRows.map(normalizeSheetRow);
+            // عمود موجود في الملف؟ (parseXLSX يملأ كل رؤوس الملف بـ'' فالمفتاح موجود)
+            const fileHas = (col: string) => rows.length > 0 && col in rows[0];
+            const tableMissing = (msg: string) =>
+              /does not exist|schema cache|could not find the table|relation/i.test(msg);
 
-            // ① (في وضع الاستبدال فقط) حذف بيانات هذا النوع + جلب الأصناف — بالتوازي
-            // ⚠️ مهم جداً: الـdelete مقيّد بـentity_type عشان استيراد المرافقين ما يمسح المستفيدين والعكس.
-            // في وضع الإضافة نُبقي على الموجود ونضيف صفوف الملف فوقه (الأكواد المكررة تُبلّغ كأخطاء).
-            // وجلب الأصناف مقيّد بنفس الـentity_type عشان أسماء المحظورات/الثوابت تُربط
-            // بأصناف الفئة الصحيحة فقط.
+            // ① جلب الأصناف (كلها) والأنظمة الغذائية — بالتوازي.
+            // أسماء المحظورات/الثوابت/تعديلات المنيو تُربط بأصناف الفئة الحالية
+            // فقط، أما قائمة الإلغاء (↛) فعابرة للأنواع والفئات — والتصدير يكتب
+            // أسماءها من كل الأصناف، فلازم الاستيراد يبحث في كلها كذلك.
+            // ⚠️ الحذف في وضع الاستبدال **لا** يحدث هنا: كان يسبق قراءة الملف،
+            // فملف كل صفوفه خاطئة يمسح الجميع ثم لا يضيف أحداً.
+            type ImportMeal = { id: string; name: string; type: MealType; is_snack: boolean; entity_type?: string };
             const fetchImportMeals = async () => {
-              const r = await supabase
-                .from('meals')
-                .select('id, name, type, is_snack')
-                .eq('entity_type', entityType);
+              const r = await fetchAllRows<ImportMeal>((from, to) =>
+                supabase.from('meals').select('id, name, type, is_snack, entity_type').order('id').range(from, to));
               if (r.error && /entity_type|column/i.test(r.error.message)) {
-                return supabase.from('meals').select('id, name, type, is_snack');
+                return fetchAllRows<ImportMeal>((from, to) =>
+                  supabase.from('meals').select('id, name, type, is_snack').order('id').range(from, to));
               }
               return r;
             };
-            const [, mealsResult] = await Promise.all([
-              mode === 'replace'
-                ? supabase.from('beneficiaries').delete().eq('entity_type', entityType)
-                : Promise.resolve(),
+            const [mealsResult, dietsResult] = await Promise.all([
               fetchImportMeals(),
+              supabase.from('diet_systems').select('id, name'),
             ]);
-            const mealsData = mealsResult.data ?? [];
+            if (mealsResult.error) {
+              return { imported: 0, errors: [`تعذّر قراءة قائمة الأصناف — لم يُستورد شيء: ${mealsResult.error.message}`] };
+            }
+            const allMealsData = mealsResult.data ?? [];
+            // عمود entity_type غير موجود (الترقية ما اتشغّلت) → كل الأصناف، كما كان
+            const mealsData = allMealsData.some(m => m.entity_type !== undefined)
+              ? allMealsData.filter(m => (m.entity_type ?? 'beneficiary') === entityType)
+              : allMealsData;
+            // null = جدول الأنظمة غير موجود (diet-systems-migration ما اتشغّل)
+            const dietIdByName = dietsResult.error
+              ? null
+              : new Map((dietsResult.data ?? []).map(d => [String(d.name).trim(), d.id as string] as const));
 
             // مفتاح مركّب: اسم|نوع|سناك — يمنع تلخبط الأصناف بنفس الاسم في وجبات مختلفة
-            const mealByKey = new Map(
+            const mealByKey = new Map<string, ImportMeal>(
               mealsData.map(m => [`${m.name.trim()}|${m.type}|${String(m.is_snack)}`, m] as const)
             );
             const lookupMeal = (name: string, type: string, isSnack: boolean) =>
               mealByKey.get(`${name}|${type}|${String(isSnack)}`);
+            // تعديلات المنيو لا تحدّد سناك/أساسي — نفضّل الأساسي عند تطابق الاسمين
+            const lookupSlotMeal = (name: string, type: string) =>
+              lookupMeal(name, type, false) ?? lookupMeal(name, type, true);
 
             // البحث بالاسم فقط — يُستخدم في suppress_if_meal_ids اللي يقبل أي صنف
             // باسم معيّن بغض النظر عن نوعه (لأن الـsuppress_if منطقياً عابر للأنواع).
-            const mealsByName = new Map<string, typeof mealsData>();
-            for (const m of mealsData) {
+            const mealsByName = new Map<string, ImportMeal[]>();
+            for (const m of allMealsData) {
               const key = m.name.trim();
               const list = mealsByName.get(key) ?? [];
               list.push(m);
@@ -835,8 +883,19 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               payload: Record<string, unknown>;
               exclCols: { type: string; isSnack: boolean; raw: string }[];
               fixedCols: { type: string; isSnack: boolean; raw: string }[];
+              /** null = العمود غير موجود في الملف → لا نمسّ الأنظمة المسندة */
+              dietIds: string[] | null;
+              /** null = العمود غير موجود في الملف → لا نمسّ تعديلات المنيو */
+              overridesRaw: string | null;
             };
             const parsed: ParsedRow[] = [];
+            const hasDietsCol = fileHas(COL_DIETS);
+            const hasOverridesCol = fileHas(COL_MENU_OVERRIDES);
+            if (hasDietsCol && dietsResult.error) {
+              errors.push(tableMissing(dietsResult.error.message)
+                ? `عمود «${COL_DIETS}» تُجوهل — جدول الأنظمة الغذائية غير موجود (شغّل supabase/diet-systems-migration.sql)`
+                : `عمود «${COL_DIETS}» تُجوهل — تعذّر قراءة الأنظمة الغذائية: ${dietsResult.error.message}`);
+            }
 
             const seenCodes = new Map<string, number>(); // code → first row index
             for (let i = 0; i < rows.length; i++) {
@@ -853,6 +912,16 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               }
               seenCodes.set(code, i);
 
+              let dietIds: string[] | null = null;
+              if (hasDietsCol && dietIdByName) {
+                dietIds = [];
+                for (const dn of splitCellTokens(row[COL_DIETS] ?? '')) {
+                  const id = dietIdByName.get(dn);
+                  if (!id) { errors.push(`صف ${i + 2} (${name}): النظام الغذائي "${dn}" غير موجود في صفحة «النظام الغذائي» — سيُتجاهل`); continue; }
+                  if (!dietIds.includes(id)) dietIds.push(id);
+                }
+              }
+
               parsed.push({
                 rowIdx: i,
                 payload: {
@@ -864,21 +933,37 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                   diet_type: row['النظام الغذائي']?.toString().trim() || null,
                   notes: row['ملاحظات']?.toString().trim() || null,
                   entity_type: entityType,
-                  // أعمدة اختيارية — الملفات القديمة بدونها تُقرأ كما كانت تماماً
-                  // (مفعّل، وكل خيارات الستيكر مطفأة).
-                  is_active: parseYesNo(row[COL_ACTIVE], true),
+                  // أعمدة اختيارية — تُكتب فقط لو العمود في الملف. الملف القديم
+                  // بدونها: الإضافة تأخذ افتراضي القاعدة (مفعّل، والخيارات مطفأة)،
+                  // و«تحديث الموجود» لا يعيد تفعيل المعطّل ولا يمسح خياراته.
+                  ...(fileHas(COL_ACTIVE) ? { is_active: parseYesNo(row[COL_ACTIVE], true) } : {}),
                   ...Object.fromEntries(
-                    STICKER_FLAG_COLUMNS.map(f => [f.key, parseYesNo(row[f.col], false)]),
+                    STICKER_FLAG_COLUMNS
+                      .filter(f => fileHas(f.col))
+                      .map(f => [f.key, parseYesNo(row[f.col], false)]),
                   ),
-                  // يُكتب فقط لو العمود في الملف — الملف القديم لا يمسح العلامة في وضع التحديث
-                  ...(COL_CUSTOM_LD in row ? { custom_ld_meals: parseYesNo(row[COL_CUSTOM_LD], false) } : {}),
+                  ...(fileHas(COL_CUSTOM_LD) ? { custom_ld_meals: parseYesNo(row[COL_CUSTOM_LD], false) } : {}),
                 },
                 exclCols:  EXCL_COLS.map(c => ({ type: c.type, isSnack: c.isSnack, raw: row[c.col]?.toString().trim() || '' })),
                 fixedCols: FIXED_COLS.map(c => ({ type: c.type, isSnack: c.isSnack, raw: row[c.col]?.toString().trim() || '' })),
+                dietIds,
+                overridesRaw: hasOverridesCol ? (row[COL_MENU_OVERRIDES]?.toString().trim() ?? '') : null,
               });
             }
 
-            if (parsed.length === 0) return { imported: 0, errors };
+            if (parsed.length === 0) {
+              if (mode === 'replace') errors.push('لم يُحذف أحد — الملف بلا صفوف صالحة');
+              return { imported: 0, errors };
+            }
+
+            // وضع الاستبدال: الحذف الآن فقط، بعد التأكد أن في الملف صفوفاً صالحة.
+            // ⚠️ مقيّد بـentity_type عشان استيراد المرافقين ما يمسح المستفيدين والعكس.
+            if (mode === 'replace') {
+              const del = await supabase.from('beneficiaries').delete().eq('entity_type', entityType);
+              if (del.error) {
+                return { imported: 0, errors: [...errors, `تعذّر حذف ${entityPlural} الحاليين — لم يُستورد شيء: ${del.error.message}`] };
+              }
+            }
 
             // عمود custom_ld_meals قبل ترقيته غير موجود — الملفات المصدَّرة الآن
             // تحمله دائماً، فنسقطه من الصفوف بدل ما يفشل الاستيراد كله
@@ -933,6 +1018,21 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                 if (ex.error) errors.push(`تعذّر تحديث المحظورات: ${ex.error.message}`);
                 if (fx.error) errors.push(`تعذّر تحديث الأصناف الثابتة: ${fx.error.message}`);
               }
+
+              // الأنظمة الغذائية وتعديلات المنيو — تُستبدل فقط لو عمودها في الملف؛
+              // الملف القديم بدونها لا يمسّها.
+              if (hasDietsCol && dietIdByName) {
+                for (let c = 0; c < touchedIds.length; c += CHUNK) {
+                  const { error: e } = await supabase.from('beneficiary_diets').delete().in('beneficiary_id', touchedIds.slice(c, c + CHUNK));
+                  if (e) errors.push(`تعذّر تحديث الأنظمة الغذائية: ${e.message}`);
+                }
+              }
+              if (hasOverridesCol) {
+                for (let c = 0; c < touchedIds.length; c += CHUNK) {
+                  const { error: e } = await supabase.from('beneficiary_menu_overrides').delete().in('beneficiary_id', touchedIds.slice(c, c + CHUNK));
+                  if (e && !tableMissing(e.message)) errors.push(`تعذّر تحديث تعديلات المنيو: ${e.message}`);
+                }
+              }
             }
 
             for (let c = 0; mode !== 'update' && c < parsed.length; c += CHUNK) {
@@ -970,23 +1070,30 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               for (const b of data ?? []) codeToId.set(b.code, b.id);
             }
 
-            // ④ بناء صفوف المحظورات والأصناف الثابتة
+            // ④ بناء صفوف المحظورات والأصناف الثابتة والأنظمة وتعديلات المنيو
             const exclusionRows: Record<string, unknown>[] = [];
             const fixedRows:     Record<string, unknown>[] = [];
+            const dietRows:      Record<string, unknown>[] = [];
+            const overrideRows:  Record<string, unknown>[] = [];
 
-            for (const { rowIdx: i, payload, exclCols, fixedCols } of parsed) {
+            for (const { rowIdx: i, payload, exclCols, fixedCols, dietIds, overridesRaw } of parsed) {
               const benId = codeToId.get(payload.code as string);
               if (!benId) continue;
 
+              // القاعدة تمنع تكرار الصنف المحظور لنفس الشخص — تكراره في الملف
+              // كان يُفشل دفعة الإدراج كلها (٥٠ شخصاً) لا الصف وحده
+              const excludedHere = new Set<string>();
               for (const { type, isSnack, raw } of exclCols) {
                 if (!raw) continue;
-                for (const pair of raw.split(/ - | -|- /).map(s => s.trim()).filter(Boolean)) {
+                for (const pair of splitCellTokens(raw)) {
                   const [mealName, altName] = pair.split('؛').map(s => s.trim());
                   if (!mealName) continue;
                   const meal = lookupMeal(mealName, type, isSnack);
-                  if (!meal) { errors.push(`صف ${i + 2}: الصنف "${mealName}" غير موجود في هذه الوجبة`); continue; }
+                  if (!meal) { errors.push(`صف ${i + 2}: الصنف المحظور "${mealName}" غير موجود في هذه الوجبة`); continue; }
+                  if (excludedHere.has(meal.id)) { errors.push(`صف ${i + 2}: الصنف المحظور "${mealName}" مكرر — أُخذ أول ظهور فقط`); continue; }
+                  excludedHere.add(meal.id);
                   const altMeal = altName ? (lookupMeal(altName, type, isSnack) ?? null) : null;
-                  if (altName && !altMeal) errors.push(`صف ${i + 2}: البديل "${altName}" غير موجود في هذه الوجبة`);
+                  if (altName && !altMeal) errors.push(`صف ${i + 2}: البديل "${altName}" غير موجود في هذه الوجبة — حُظر "${mealName}" بلا بديل`);
                   exclusionRows.push({ beneficiary_id: benId, meal_id: meal.id, alternative_meal_id: altMeal?.id ?? null });
                 }
               }
@@ -998,7 +1105,10 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                 // التصدير: الكمية ×N، الفئة @بارد، البديل @بديل، الإلغاء ↛…
                 for (const partRaw of splitCellTokens(raw)) {
                   const token = parseFixedToken(partRaw, sectionDefault);
-                  if (!token) continue;
+                  if (!token) {
+                    errors.push(`صف ${i + 2}: الصنف الثابت "${partRaw}" ناقص — الصيغة: الصنف؛الأيام (مثال: فول؛سبت احد)`);
+                    continue;
+                  }
 
                   const seenIds = new Set<string>();
                   for (const n of token.suppressNames) {
@@ -1029,6 +1139,36 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                   }
                 }
               }
+
+              for (const diet_id of dietIds ?? []) dietRows.push({ beneficiary_id: benId, diet_id });
+
+              if (overridesRaw) {
+                // القاعدة تمنع قرارين على نفس الصنف في نفس الخانة — آخر ظهور يغلب
+                const bySlot = new Map<string, Record<string, unknown>>();
+                for (const raw of splitCellTokens(overridesRaw)) {
+                  const t = parseOverrideToken(raw);
+                  if (typeof t === 'string') { errors.push(`صف ${i + 2}: ${t}`); continue; }
+                  const base = t.baseName ? lookupSlotMeal(t.baseName, t.meal_type) : null;
+                  const target = t.targetName ? lookupSlotMeal(t.targetName, t.meal_type) : null;
+                  if (t.baseName && !base) { errors.push(`صف ${i + 2}: الصنف "${t.baseName}" في تعديلات المنيو غير موجود في هذه الوجبة`); continue; }
+                  if (t.targetName && !target) { errors.push(`صف ${i + 2}: الصنف "${t.targetName}" في تعديلات المنيو غير موجود في هذه الوجبة`); continue; }
+                  const slot = `${t.week_number}|${t.day_of_week}|${t.meal_type}`;
+                  const key = t.action === 'add' ? `${slot}|add|${target!.id}` : `${slot}|base|${base!.id}`;
+                  if (bySlot.has(key)) errors.push(`صف ${i + 2}: "${raw}" مكرر لنفس الصنف في نفس الخانة — أُخذ آخر ظهور`);
+                  bySlot.set(key, {
+                    beneficiary_id: benId,
+                    week_number: t.week_number,
+                    day_of_week: t.day_of_week,
+                    meal_type: t.meal_type,
+                    action: t.action,
+                    base_meal_id: base?.id ?? null,
+                    target_meal_id: target?.id ?? null,
+                    quantity: t.quantity,
+                    is_alternative: t.isAlternative,
+                  });
+                }
+                overrideRows.push(...bySlot.values());
+              }
             }
 
             // ⑤ bulk insert
@@ -1055,10 +1195,26 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                     });
                     const { error: e2 } = await supabase.from('beneficiary_fixed_meals').insert(fallback);
                     if (e2) errors.push(`خطأ في الأصناف الثابتة: ${e2.message}`);
+                    else errors.push('تنبيه: الأصناف الثابتة حُفظت بلا الفئة/الإلغاء/علامة البديل — شغّل ترقيات fixed-meals-*.sql');
                   } else {
                     errors.push(`خطأ في الأصناف الثابتة: ${error.message}`);
                   }
                 }
+              }
+            }
+            // الأنظمة بعد المحظورات الشخصية: trigger القاعدة يشتق محظورات النظام
+            // ويتخطّى ما له محظور شخصي — نفس ترتيب نافذة المستفيد.
+            for (let c = 0; c < dietRows.length; c += CHUNK) {
+              const { error } = await supabase.from('beneficiary_diets').insert(dietRows.slice(c, c + CHUNK));
+              if (error) errors.push(`خطأ في الأنظمة الغذائية: ${error.message}`);
+            }
+            for (let c = 0; c < overrideRows.length; c += CHUNK) {
+              const { error } = await supabase.from('beneficiary_menu_overrides').insert(overrideRows.slice(c, c + CHUNK));
+              if (error) {
+                errors.push(tableMissing(error.message)
+                  ? 'تعديلات المنيو لم تُحفظ — شغّل supabase/beneficiary-menu-overrides-migration.sql'
+                  : `خطأ في تعديلات المنيو: ${error.message}`);
+                if (tableMissing(error.message)) break;
               }
             }
 

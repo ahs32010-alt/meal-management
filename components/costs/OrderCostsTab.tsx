@@ -2,8 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatDateFull } from '@/lib/date-utils';
-import { exportXLSX } from '@/lib/xlsx-utils';
-import { formatMoney, round } from '@/lib/costs';
+import { exportWorkbook } from '@/lib/xlsx-utils';
+import { formatMoney } from '@/lib/costs';
+import {
+  ORDER_ITEM_HEADERS,
+  ORDER_SHEETS,
+  ORDER_SUMMARY_HEADERS,
+  buildOrderReportRows,
+} from '@/lib/costs-xlsx';
 import { ENTITY_TYPE_LABELS, MEAL_TYPE_LABELS, type MealType } from '@/lib/types';
 
 /** يطابق OrderCostResult في lib/costs-server.ts */
@@ -144,23 +150,15 @@ export default function OrderCostsTab({ canFreeze, canUnfreeze }: Props) {
 
   const handleExport = () => {
     if (!data || data.orders.length === 0) return;
-    const rows: Record<string, string | number>[] = [];
-    for (const o of data.orders) {
-      for (const item of o.items) {
-        rows.push({
-          'التاريخ': o.date,
-          'الوجبة': MEAL_TYPE_LABELS[o.meal_type],
-          'الفئة': ENTITY_TYPE_LABELS[o.entity_type],
-          'الصنف': item.meal_name,
-          'الكمية': item.quantity,
-          'تكلفة الحصة': round(item.portion_cost, 4),
-          'الإجمالي': round(item.total_cost, 2),
-          'الحالة': item.unpriced ? 'بدون تسعير' : item.partial ? 'تسعير ناقص' : 'مسعّر',
-          'اعتماد': o.frozen ? 'مجمّدة' : 'مباشر',
-        });
-      }
-    }
-    void exportXLSX(rows, `order-costs-${from}_${to}.xlsx`, 'تكاليف أوامر التشغيل');
+    // ملخّص بإجمالي كل أمر كما يظهر هنا + تفصيل الأصناف
+    const { summary, items } = buildOrderReportRows(data.orders);
+    void exportWorkbook(
+      [
+        { name: ORDER_SHEETS.summary, rows: summary, headers: ORDER_SUMMARY_HEADERS },
+        { name: ORDER_SHEETS.items,   rows: items,   headers: ORDER_ITEM_HEADERS },
+      ],
+      `تكاليف-أوامر-التشغيل-${from}_${to}.xlsx`,
+    );
   };
 
   return (

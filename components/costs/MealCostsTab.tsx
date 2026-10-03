@@ -5,7 +5,8 @@ import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { changeDetails } from '@/lib/activity-diff';
-import { exportXLSX } from '@/lib/xlsx-utils';
+import { exportWorkbook } from '@/lib/xlsx-utils';
+import { MEAL_REPORT_HEADERS, SHEETS, buildMealReportRows } from '@/lib/costs-xlsx';
 import {
   formatMoney,
   mealMargin,
@@ -157,20 +158,22 @@ export default function MealCostsTab({
 
   const handleExport = () => {
     if (filtered.length === 0) return;
-    void exportXLSX(
-      filtered.map(r => ({
-        'الصنف': r.meal.name,
-        'الوجبة': MEAL_TYPE_LABELS[r.meal.type],
-        'عدد المكوّنات': r.items.length,
-        'تكلفة الحصة': r.hasRecipe ? round(r.portionCost, 4) : '',
-        'سعر البيع': r.margin.price ?? '',
-        'الربح للحصة': r.margin.profit !== null ? round(r.margin.profit, 4) : '',
-        'هامش الربح %': r.margin.marginPct !== null ? round(r.margin.marginPct, 2) : '',
-        'نسبة التكلفة %': r.margin.foodCostPct !== null ? round(r.margin.foodCostPct, 2) : '',
-        'الحالة': !r.hasRecipe ? 'بلا تكلفة' : r.issueCount > 0 ? 'تسعير ناقص' : 'مسعّر',
-      })),
+    // الورقة باسم «أسعار البيع» وبرؤوسها — فتعديل عمود السعر ثم استيراد الملف
+    // من زر «استيراد من Excel» يحدّث أسعار البيع مباشرة
+    void exportWorkbook(
+      [{
+        name: SHEETS.prices,
+        rows: buildMealReportRows(filtered.map(r => ({
+          meal: r.meal,
+          itemsCount: r.items.length,
+          portionCost: r.portionCost,
+          hasRecipe: r.hasRecipe,
+          issueCount: r.issueCount,
+          margin: r.margin,
+        }))),
+        headers: MEAL_REPORT_HEADERS,
+      }],
       `اسعار-وتكاليف-الاصناف-${new Date().toISOString().slice(0, 10)}.xlsx`,
-      'الأسعار والتكاليف',
     );
   };
 

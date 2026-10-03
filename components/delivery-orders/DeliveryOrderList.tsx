@@ -21,9 +21,13 @@ import { exportXLSX } from '@/lib/xlsx-utils';
 import {
   DELIVERY_ORDER_HEADERS,
   DELIVERY_ORDER_REQUIRED_HEADERS,
+  DELIVERY_ORDER_TEMPLATE_ROW,
   buildDeliveryOrderRow,
+  buildDeliveryUpdateBody,
+  creatorRefKey,
   parseDeliveryOrderRow,
   type DeliveryImportRefs,
+  type DeliveryOrderPayload,
 } from '@/lib/delivery-order-sheet';
 import type { ImportMode } from '@/components/shared/ImportModeDialog';
 import Pagination from '@/components/shared/Pagination';
@@ -140,12 +144,17 @@ export default function DeliveryOrderList() {
   // التي يقرأها الاستيراد وورقة النسخة الاحتياطية.
   const handleExport = () => {
     const rows = filteredOrders.map(buildDeliveryOrderRow);
-    void exportXLSX(rows, `أوامر_التسليم_${new Date().toISOString().slice(0, 10)}.xlsx`, 'أوامر التسليم');
+    const tag = entityFilter === 'all' ? '' : `_${ENTITY_TYPE_LABELS_PLURAL[entityFilter]}`;
+    void exportXLSX(rows, `أوامر_التسليم${tag}_${new Date().toISOString().slice(0, 10)}.xlsx`, 'أوامر التسليم');
   };
 
   // ── الاستيراد ─────────────────────────────────────────────────────────────
   // نمرّ على نفس واجهة POST التي تستخدمها نافذة الإنشاء، فترقيم الأوامر
   // والتحقق يبقى في مكان واحد بالسيرفر ولا نكرّره هنا.
+  //   • إضافة  — كل صف أمر جديد برقم جديد.
+  //   • تحديث  — صف برقم أمر موجود يحدّث ذلك الأمر في مكانه (يبقى رقمه وتوقيعاته
+  //     وربطه بأمر التشغيل)، وصف بلا رقم أو برقم غير موجود يُنشأ جديداً.
+  //   • استبدال — يحذف أوامر الفئة المعروضة في الفلتر (أو الكل) ثم يُنشئ أوامر الملف.
   const handleImport = async (rows: Record<string, string>[], mode: ImportMode) => {
     const errors: string[] = [];
 
@@ -154,51 +163,86 @@ export default function DeliveryOrderList() {
       fetch('/api/delivery-creators').then(r => r.ok ? r.json() : []).catch(() => []),
     ]);
     const norm = (v: string) => String(v ?? '').replace(/\s+/g, ' ').trim();
+    const creators = creatorRes as { id: string; name: string; phone?: string | null }[];
     const refs: DeliveryImportRefs = {
       locationIdByName: new Map((locRes as { id: string; name: string }[]).map(l => [norm(l.name), l.id])),
-      creatorIdByName:  new Map((creatorRes as { id: string; name: string }[]).map(c => [norm(c.name), c.id])),
+      creatorIdByName:  new Map(creators.map(c => [norm(c.name), c.id])),
+      creatorIdByNameAndPhone: new Map(creators.map(c => [creatorRefKey(c.name, c.phone), c.id])),
     };
 
     // نتحقّق من كل الصفوف أولاً — لا نكتب شيئاً لو في الملف مشكلة واحدة،
     // فلا تُنشأ أوامر نصفية يصعب تتبّعها.
-    const payloads: ReturnType<typeof parseDeliveryOrderRow>['payload'][] = [];
+    const parsed: { payload: DeliveryOrderPayload; orderNumber: string | null; label: string }[] = [];
     for (let i = 0; i < rows.length; i++) {
-      const { payload, errors: rowErrors } = parseDeliveryOrderRow(rows[i], refs, `صف ${i + 2}`);
+      const label = `صف ${i + 2}`;
+      const { payload, errors: rowErrors, orderNumber } = parseDeliveryOrderRow(rows[i], refs, label);
       errors.push(...rowErrors);
-      if (payload) payloads.push(payload);
+      if (!payload) continue;
+      // الاستبدال محصور بفئة الفلتر — صف من الفئة الأخرى كان سيُضاف بينما
+      // أوامر فئته الحالية باقية، فيتكرر.
+      if (mode === 'replace' && entityFilter !== 'all' && payload.entity_type !== entityFilter) {
+        errors.push(`${label}: الأمر من فئة ${ENTITY_TYPE_LABELS_PLURAL[payload.entity_type]} والاستبدال الآن محصور بـ${ENTITY_TYPE_LABELS_PLURAL[entityFilter]} — غيّر الفلتر إلى «الكل» أو احذف الصف`);
+        continue;
+      }
+      if (mode === 'update' && orderNumber && parsed.some(p => p.orderNumber === orderNumber)) {
+        errors.push(`${label}: رقم الأمر ${orderNumber} مكرر في الملف`);
+        continue;
+      }
+      parsed.push({ payload, orderNumber, label });
     }
-    if (errors.length > 0) return { imported: 0, errors };
-    if (payloads.length === 0) return { imported: 0, errors: ['لم يُعثر على أوامر صالحة في الملف'] };
+    if (errors.length > 0) return { imported: 0, errors: ['لم يُحفظ أي شيء — صحّح الأخطاء التالية ثم أعد الاستيراد:', ...errors] };
+    if (parsed.length === 0) return { imported: 0, errors: ['لم يُعثر على أوامر صالحة في الملف'] };
 
-    // «استبدال الكل» يحذف الأوامر الحالية أولاً — تحذير الحوار يوضّح ذلك
+    // الواجهة تحدّ الكتابة بـ٦٠ طلباً في الدقيقة — بدون انتظار يفشل كل ما بعد
+    // الأمر الستين في ملف كبير. عند 429 ننتظر ونعيد المحاولة.
+    const send = async (url: string, init: RequestInit): Promise<Response> => {
+      for (let attempt = 0; ; attempt++) {
+        const res = await fetch(url, init);
+        if (res.status !== 429 || attempt >= 6) return res;
+        await new Promise(r => setTimeout(r, 10_000));
+      }
+    };
+
+    // «استبدال» يحذف أوامر الفئة المعروضة (أو الكل) — تحذير الحوار يوضّح ذلك
     if (mode === 'replace') {
-      for (const o of orders) {
+      const toDelete = entityFilter === 'all' ? orders : orders.filter(o => entityOf(o) === entityFilter);
+      for (const o of toDelete) {
         const res = await fetch(`/api/delivery-orders/${o.id}`, { method: 'DELETE' });
         if (!res.ok) errors.push(`تعذّر حذف الأمر ${o.order_number}`);
       }
     }
 
+    const byNumber = new Map(orders.map(o => [o.order_number, o]));
     let imported = 0;
-    for (let i = 0; i < payloads.length; i++) {
-      const res = await fetch('/api/delivery-orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payloads[i]),
-      });
+    let updated = 0;
+    for (const { payload, orderNumber, label } of parsed) {
+      const existing = mode === 'update' && orderNumber ? byNumber.get(orderNumber) : undefined;
+      const res = existing
+        ? await send(`/api/delivery-orders/${existing.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildDeliveryUpdateBody(existing, payload)),
+          })
+        : await send('/api/delivery-orders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        errors.push(`صف ${i + 2}: ${(j as { error?: string }).error ?? 'تعذّر الإنشاء'}`);
+        errors.push(`${label}: ${(j as { error?: string }).error ?? (existing ? 'تعذّر التحديث' : 'تعذّر الإنشاء')}`);
         continue;
       }
       imported++;
+      if (existing) updated++;
     }
 
     if (imported > 0) {
       void logActivity({
-        action: 'create',
+        action: mode === 'update' && updated > 0 ? 'update' : 'create',
         entity_type: 'order',
         entity_name: `استيراد أوامر تسليم (${imported})`,
-        details: { count: imported, mode, source: 'delivery_xlsx_import' },
+        details: { count: imported, updated, mode, source: 'delivery_xlsx_import' },
       });
     }
     return { imported, errors };
@@ -451,12 +495,12 @@ export default function DeliveryOrderList() {
           title="أوامر التسليم"
           templateHeaders={DELIVERY_ORDER_HEADERS}
           requiredHeaders={DELIVERY_ORDER_REQUIRED_HEADERS}
-          templateRow={[
-            '(يولّده النظام)', '2026-08-17', 'غداء', 'مقر الشركة', 'الدمام',
-            'أحمد', '0500000000', '2026-08-17', '12:30',
-            'كبسة (غداء) ×20 | سلطة (غداء) ×20', 'ملاحظة', '(يولّده النظام)',
-          ]}
-          replaceWarning="سيتم حذف كل أوامر التسليم الحالية قبل إضافة أوامر الملف."
+          templateRow={DELIVERY_ORDER_TEMPLATE_ROW}
+          modes={['append', 'update', 'replace']}
+          updateHint="الصف الذي يحمل رقم أمر موجود يحدّث ذلك الأمر (يبقى رقمه وتوقيعاته)، والباقي يُنشأ جديداً"
+          replaceWarning={entityFilter === 'all'
+            ? 'سيتم حذف كل أوامر التسليم الحالية (المستفيدون والمرافقون) ثم إنشاء أوامر الملف بأرقام جديدة. لا يُحذف شيء لو في الملف أي خطأ.'
+            : `سيتم حذف أوامر تسليم ${ENTITY_TYPE_LABELS_PLURAL[entityFilter]} فقط (حسب الفلتر الحالي) ثم إنشاء أوامر الملف بأرقام جديدة. لا يُحذف شيء لو في الملف أي خطأ.`}
           onImport={handleImport}
           onClose={() => setImportOpen(false)}
           onDone={() => { setImportOpen(false); fetchOrders(); }}

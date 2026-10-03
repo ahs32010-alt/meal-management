@@ -19,7 +19,7 @@ import {
 import type { Beneficiary } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import { hasCustomization, LD_CATEGORY, type LdMealCustomization } from './ld-types';
-import { LD_FONT_SIZES } from './ld-sticker-card';
+import { LD_FONT_SIZES, dietLines } from './ld-sticker-card';
 
 /**
  * أحجام Word (نقاط) مشتقّة من LD_FONT_SIZES (بكسل الصفحة) بنسبة ثابتة لكل
@@ -35,24 +35,8 @@ const WORD_PT = {
   diet_en: LD_FONT_SIZES.diet_en * (11 / 13),
 };
 
-const DIET_TYPE_EN: Record<string, string> = {
-  'عادي': 'Normal diet',
-  'نظام غذائي عادي': 'Normal diet',
-  'سكري': 'Diabetic diet',
-  'سكر': 'Diabetic diet',
-  'لين': 'Soft diet',
-  'مهروس': 'Pureed diet',
-  'سائل': 'Liquid diet',
-  'قليل الملح': 'Low salt diet',
-  'قليل الدهون': 'Low fat diet',
-  'كلوي': 'Renal diet',
-  'نباتي': 'Vegetarian diet',
-};
-
-function dietLines(diet?: string): { ar: string; en: string } {
-  const ar = (diet ?? '').trim() || 'نظام غذائي عادي';
-  return { ar, en: DIET_TYPE_EN[ar] ?? '' };
-}
+// ترجمة النظام الغذائي (dietLines) من نفس مصدر ستيكر الصفحة — كانت هنا نسخة
+// مكرّرة، وأي إضافة لنظام جديد في واحدة فقط تُخرج Word مختلفاً عن الشاشة/الـPDF.
 
 const sz = (pt: number) => Math.round(pt * 2); // half-points
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));

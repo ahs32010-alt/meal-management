@@ -3,17 +3,26 @@ import type { ItemCategory, MealType } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import {
   BENEFICIARY_HEADERS,
+  BENEFICIARY_TEMPLATE_ROW,
   COL_ACTIVE,
+  COL_CUSTOM_LD,
+  COL_DIETS,
+  COL_MENU_OVERRIDES,
   DAY_FROM_AR,
   EXCLUSION_COLUMNS,
   FIXED_COLUMNS,
   STICKER_FLAG_COLUMNS,
   buildBeneficiaryRow,
+  normalizeSheetRow,
   parseFixedToken,
+  parseOverrideToken,
   parseYesNo,
   splitCellTokens,
+  verifyBeneficiaryRoundTrip,
+  type ParsedOverrideToken,
   type SheetFixedMeal,
   type SheetMeal,
+  type SheetMenuOverride,
 } from '@/lib/beneficiary-sheet';
 
 /**
@@ -177,5 +186,100 @@ describe('أعمدة خيارات الستيكر مربوطة بمصدرها', (
   it('عمود لكل خيار، بنفس مفتاحه وتسميته', () => {
     expect(STICKER_FLAG_COLUMNS.map(c => c.key)).toEqual(STICKER_FLAGS.map(f => f.key));
     expect(STICKER_FLAG_COLUMNS.map(c => c.col)).toEqual(STICKER_FLAGS.map(f => f.label));
+  });
+});
+
+describe('قالب الاستيراد يطابق التصدير', () => {
+  it('صف المثال بطول الرؤوس تماماً — لا إزاحة', () => {
+    expect(BENEFICIARY_TEMPLATE_ROW).toHaveLength(BENEFICIARY_HEADERS.length);
+  });
+
+  it('كل مثال تحت رأسه الصحيح', () => {
+    const at = (h: string) => BENEFICIARY_TEMPLATE_ROW[BENEFICIARY_HEADERS.indexOf(h)];
+    expect(at('الاسم')).toBe('محمد أحمد');
+    expect(at('الكود')).toBe('B001');
+    expect(at(COL_ACTIVE)).toBe('نعم');
+    expect(at(COL_CUSTOM_LD)).toBe('لا');
+    for (const f of STICKER_FLAG_COLUMNS) expect(at(f.col)).toBe('لا');
+    for (const t of splitCellTokens(at('ثابتة الفطور'))) expect(parseFixedToken(t, 'hot')).not.toBeNull();
+    for (const t of splitCellTokens(at(COL_MENU_OVERRIDES))) expect(typeof parseOverrideToken(t)).toBe('object');
+  });
+
+  it('رؤوس التصدير هي رؤوس القالب نفسها وبنفس الترتيب', () => {
+    const row = buildBeneficiaryRow(BEN, [], [], mealsById);
+    expect(Object.keys(row)).toEqual(BENEFICIARY_HEADERS);
+  });
+});
+
+describe('الأنظمة الغذائية المسندة', () => {
+  it('تُكتب بأسمائها وتُقرأ كما هي', () => {
+    const row = buildBeneficiaryRow({ ...BEN, diet_names: ['سكري', 'قليل الملح'] }, [], [], mealsById);
+    expect(row[COL_DIETS]).toBe('سكري - قليل الملح');
+    expect(splitCellTokens(row[COL_DIETS])).toEqual(['سكري', 'قليل الملح']);
+  });
+
+  it('بلا أنظمة (أو من النسخة الاحتياطية) = عمود فارغ', () => {
+    expect(buildBeneficiaryRow(BEN, [], [], mealsById)[COL_DIETS]).toBe('');
+  });
+});
+
+describe('تعديلات المنيو لخانات محددة', () => {
+  const OVERRIDES: SheetMenuOverride[] = [
+    { week_number: 2, day_of_week: 0, meal_type: 'lunch', action: 'add', target_meal_id: 'm-date', quantity: 2, is_alternative: true },
+    { week_number: 1, day_of_week: 6, meal_type: 'lunch', action: 'replace', base_meal_id: 'm-rice', target_meal_id: 'm-salad', quantity: 3 },
+    { week_number: 1, day_of_week: 6, meal_type: 'breakfast', action: 'remove', base_meal_id: 'm-foul' },
+  ];
+
+  it('تُكتب مرتّبة بالأسبوع ثم اليوم ثم الوجبة', () => {
+    const row = buildBeneficiaryRow(BEN, [], [], mealsById, OVERRIDES);
+    expect(row[COL_MENU_OVERRIDES]).toBe(
+      'أسبوع1؛سبت؛فطور؛حذف؛فول - أسبوع1؛سبت؛غداء؛استبدال؛رز←سلطة×3 - أسبوع2؛احد؛غداء؛إضافة؛تمر×2@بديل',
+    );
+  });
+
+  it('دورة كاملة بلا فقد: الخانة والإجراء والصنفان والكمية والبديل', () => {
+    const row = buildBeneficiaryRow(BEN, [], [], mealsById, OVERRIDES);
+    const tokens = splitCellTokens(row[COL_MENU_OVERRIDES]).map(t => parseOverrideToken(t) as ParsedOverrideToken);
+    expect(tokens).toEqual([
+      { week_number: 1, day_of_week: 6, meal_type: 'breakfast', action: 'remove', baseName: 'فول', targetName: null, quantity: 1, isAlternative: false },
+      { week_number: 1, day_of_week: 6, meal_type: 'lunch', action: 'replace', baseName: 'رز', targetName: 'سلطة', quantity: 3, isAlternative: false },
+      { week_number: 2, day_of_week: 0, meal_type: 'lunch', action: 'add', baseName: null, targetName: 'تمر', quantity: 2, isAlternative: true },
+    ]);
+  });
+
+  it('زر التحقق يقول سليم مع التعديلات والأنظمة', () => {
+    const res = verifyBeneficiaryRoundTrip(
+      [{ ben: { ...BEN, diet_names: ['سكري'] }, exclusions: [], fixed: [], overrides: OVERRIDES }],
+      mealsById,
+    );
+    expect(res.issues).toEqual([]);
+    expect(res.ok).toBe(true);
+  });
+
+  it('يتسامح مع الأرقام العربية وأل التعريف والسهم المعكوس', () => {
+    expect(parseOverrideToken('الأسبوع٣؛الخميس؛العشاء؛تبديل؛رز→سلطة')).toMatchObject({
+      week_number: 3, day_of_week: 4, meal_type: 'dinner', action: 'replace', baseName: 'رز', targetName: 'سلطة',
+    });
+  });
+
+  it('رسائل خطأ عربية واضحة', () => {
+    expect(parseOverrideToken('أسبوع1؛سبت؛غداء')).toContain('غير مكتمل');
+    expect(parseOverrideToken('أسبوع5؛سبت؛غداء؛حذف؛رز')).toContain('أسبوع1 إلى أسبوع4');
+    expect(parseOverrideToken('أسبوع1؛فلان؛غداء؛حذف؛رز')).toContain('اليوم');
+    expect(parseOverrideToken('أسبوع1؛سبت؛سحور؛حذف؛رز')).toContain('فطور أو غداء أو عشاء');
+    expect(parseOverrideToken('أسبوع1؛سبت؛غداء؛نقل؛رز')).toContain('استبدال أو حذف أو إضافة');
+    expect(parseOverrideToken('أسبوع1؛سبت؛غداء؛استبدال؛رز')).toContain('قديم←جديد');
+  });
+
+  it('بلا تعديلات (أو من النسخة الاحتياطية) = عمود فارغ', () => {
+    expect(buildBeneficiaryRow(BEN, [], [], mealsById)[COL_MENU_OVERRIDES]).toBe('');
+  });
+});
+
+describe('normalizeSheetRow', () => {
+  it('يزيل المسافات الزائدة من الرؤوس فلا يُسقط العمود بصمت', () => {
+    expect(normalizeSheetRow({ ' الاسم ': 'أحمد', 'محظورات  الفطور': 'فول', 'الكود': 5 })).toEqual({
+      'الاسم': 'أحمد', 'محظورات الفطور': 'فول', 'الكود': '5',
+    });
   });
 });

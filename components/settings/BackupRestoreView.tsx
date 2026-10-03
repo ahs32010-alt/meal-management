@@ -7,6 +7,7 @@ import { useCurrentUser } from '@/lib/use-current-user';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import {
   AUTO_BACKUP_RETENTION,
+  BACKUP_TABLE_LABELS,
   type BackupRow,
   type BackupSummary,
   type BackupTriggerType,
@@ -49,17 +50,8 @@ function formatDateTime(iso: string): string {
   }
 }
 
-const TABLE_LABELS: Record<string, string> = {
-  meals: 'الأصناف',
-  beneficiaries: 'المستفيدون والمرافقون',
-  daily_orders: 'أوامر التشغيل',
-  custom_transliterations: 'الترجمة الحرفية',
-  exclusions: 'المحظورات',
-  beneficiary_fixed_meals: 'الأصناف الثابتة',
-  menu_items: 'بنود قائمة الطعام',
-  order_items: 'أصناف أوامر التشغيل',
-  sticker_splits: 'فصل الستيكرات',
-};
+// الأسماء العربية لكل جداول النسخة — مصدر واحد مع ورقة Meta في ملف Excel
+const TABLE_LABELS = BACKUP_TABLE_LABELS as Record<string, string>;
 
 export default function BackupRestoreView() {
   const { user: currentUser } = useCurrentUser();
@@ -262,8 +254,10 @@ export default function BackupRestoreView() {
         `سيتم استبدال البيانات الحالية بمحتوى نسخة "${formatDateTime(backup.created_at)}".\n\n` +
         `قبل الاستبدال، سيتم أخذ نسخة احتياطية تلقائية للحالة الحالية باسم "قبل الاستعادة" — ` +
         `بحيث تقدر ترجع للوضع الحالي لو ما عجبك الاستعادة.\n\n` +
-        `الجداول التي تتأثر: الأصناف، المستفيدون والمرافقون، أوامر التشغيل، ` +
-        `قائمة الطعام، التخصيصات، الترجمات. (المستخدمون والصلاحيات وسجل النشاط لا تتأثر.)\n\n` +
+        `الجداول التي تتأثر: الأصناف، المستفيدون والمرافقون، المحظورات والأصناف الثابتة، ` +
+        `الأنظمة الغذائية، تعديلات منيو المستفيدين، قائمة الطعام، أوامر التشغيل، الإضافات اليدوية، ` +
+        `أوامر التسليم ومواقعها، منظومة التكاليف، إعدادات الستيكرات وألوانها، الترجمات. ` +
+        `(المستخدمون والصلاحيات وسجل النشاط وطلبات الموافقة وربط تيليجرام لا تتأثر.)\n\n` +
         `متابعة؟`,
       confirmLabel: 'متابعة',
       onConfirm: () => {

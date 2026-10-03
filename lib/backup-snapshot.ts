@@ -20,7 +20,12 @@ export type BackupTriggerType = 'auto_daily' | 'manual' | 'pre_restore';
  *
  * غير مشمول عمداً: backups (تفادي التكرار)، app_users و activity_log
  * (المستخدمون والصلاحيات والسجل لا تتأثر بالاستعادة)، pending_actions
- * (طابور موافقات لحظي — استعادته تُحيي طلبات قديمة).
+ * (طابور موافقات لحظي — استعادته تُحيي طلبات قديمة)، telegram_* (ربط حسابات
+ * تيليجرام بالمستخدمين — يتبع app_users). اختبار tests/backup-coverage.test.ts
+ * يفشل لو أُنشئ جدول جديد في supabase/*.sql ولم يدخل هنا أو في الاستثناءات.
+ *
+ * ⚠️ قائمة السيرفر backup_logical_tables() (للنسخ التلقائية والاستعادة الذرّية)
+ * لازم تطابقها حرفياً — آخر تعريف في supabase/backup-menu-overrides-coverage-migration.sql.
  */
 export const BACKUP_TABLES = [
   // ── جداول مستقلة (لا تعتمد على غيرها) ──
@@ -59,6 +64,68 @@ export const BACKUP_TABLES = [
 ] as const;
 
 export type BackupTableName = (typeof BACKUP_TABLES)[number];
+
+/**
+ * اسم عربي لكل جدول — يُعرض في قائمة النسخ وفي ورقة Meta داخل ملف Excel.
+ * النوع Record<BackupTableName, …> يُجبر على إضافة اسم لأي جدول جديد؛ القائمة
+ * السابقة في الواجهة توقفت عند ٩ جداول فكانت البقية تظهر بأسمائها الإنجليزية.
+ */
+export const BACKUP_TABLE_LABELS: Record<BackupTableName, string> = {
+  meals: 'الأصناف',
+  beneficiaries: 'المستفيدون والمرافقون',
+  daily_orders: 'أوامر التشغيل',
+  custom_transliterations: 'الترجمة الحرفية',
+  lunch_dinner_diet_colors: 'ألوان الأنظمة (ستيكرات الغداء والعشاء)',
+  cost_units: 'وحدات القياس',
+  cities: 'المدن',
+  delivery_meals: 'أصناف التسليم',
+  delivery_creators: 'منشئو أوامر التسليم',
+  delivery_print_header: 'ترويسة طباعة التسليم',
+  sticker_settings: 'إعدادات الستيكرات',
+  diet_systems: 'الأنظمة الغذائية',
+  meal_alternatives: 'بدائل الأصناف',
+  diet_system_exclusions: 'استبعادات الأنظمة الغذائية',
+  beneficiary_diets: 'أنظمة المستفيدين',
+  exclusions: 'المحظورات',
+  beneficiary_fixed_meals: 'الأصناف الثابتة',
+  fixed_extras_manual: 'الإضافات الثابتة اليدوية',
+  beneficiary_menu_overrides: 'تعديلات منيو المستفيدين',
+  menu_items: 'بنود قائمة الطعام',
+  order_items: 'أصناف أوامر التشغيل',
+  sticker_splits: 'فصل الستيكرات',
+  raw_materials: 'المواد الأولية',
+  meal_recipe_items: 'الوصفات',
+  meal_pricing: 'أسعار البيع',
+  order_cost_snapshots: 'التكاليف المجمّدة',
+  delivery_locations: 'مواقع التسليم',
+  delivery_orders: 'أوامر التسليم',
+  delivery_order_items: 'أصناف أوامر التسليم',
+};
+
+/**
+ * الجداول الغائبة كلياً عن لقطة (مفتاحها غير موجود) — نسخة أُخذت قبل إضافة
+ * الجدول، أو نسخة pg_cron من دالة SQL قديمة. الاستعادة منها تُفرغ الجدول
+ * الحالي (أو يُفرَّغ بالـcascade من meals/beneficiaries)، فنحذّر صراحة.
+ */
+export function snapshotMissingTables(snapshot: Pick<BackupSnapshot, 'tables'>): BackupTableName[] {
+  const tables = (snapshot.tables ?? {}) as Record<string, unknown>;
+  return BACKUP_TABLES.filter(t => !Array.isArray(tables[t]));
+}
+
+/**
+ * صفوف الجدول كما تُدرَج في مسار الاستعادة من المتصفح (غير الذرّي).
+ * صفوف exclusions المشتقة من نظام غذائي (diet_id ≠ null) تُستبعد: الـtriggers
+ * تعيد بنائها تلقائياً عند إدراج beneficiary_diets والمحظورات الشخصية، وإدراجها
+ * يدوياً يصطدم بالقيد الفريد (beneficiary_id, meal_id) ويُغرق النتيجة بتحذيرات.
+ * (الدالة الذرّية على السيرفر توقف المزامنة وتُدرجها كما هي.)
+ */
+export function rowsForClientInsert(
+  table: BackupTableName,
+  rows: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  if (table === 'exclusions') return rows.filter(r => r.diet_id == null);
+  return rows;
+}
 
 export interface BackupSnapshot {
   // إصدار شكل البيانات — يساعد في الاستعادة لو غيّرنا الشكل لاحقاً
@@ -428,6 +495,15 @@ export async function restoreFromSnapshot(
   const warnings: string[] = [];
   const inserted: Record<BackupTableName, number> = {} as Record<BackupTableName, number>;
 
+  // نسخة أقدم من بعض الجداول — تُستعاد، لكن تلك الجداول ستُفرَّغ.
+  const missing = snapshotMissingTables(snapshot);
+  if (missing.length > 0) {
+    warnings.push(
+      `النسخة لا تحتوي: ${missing.map(t => BACKUP_TABLE_LABELS[t]).join('، ')} — ` +
+      'أُخذت قبل إضافتها، فستصبح فارغة بعد الاستعادة.'
+    );
+  }
+
   // ── المسار المفضّل: استعادة ذرّية على السيرفر ─────────────────────────────
   // كل شيء داخل معاملة واحدة: إما تكتمل أو ترجع القاعدة كما كانت. المسار
   // القديم (مسح ثم إدراج من المتصفح) يترك القاعدة ممسوحة جزئياً لو انقطع
@@ -436,11 +512,24 @@ export async function restoreFromSnapshot(
     const { data, error } = await supabase.rpc('restore_backup_snapshot', { p_snapshot: snapshot });
     if (!error && data) {
       const res = data as { inserted?: Record<string, number>; skipped_tables?: string[] };
-      for (const t of BACKUP_TABLES) inserted[t] = res.inserted?.[t] ?? 0;
-      for (const t of res.skipped_tables ?? []) {
+      const serverInserted = res.inserted ?? {};
+      const skipped = res.skipped_tables ?? [];
+      for (const t of BACKUP_TABLES) inserted[t] = serverInserted[t] ?? 0;
+      for (const t of skipped) {
         warnings.push(`${t}: الجدول غير موجود في قاعدة البيانات — لم يُستعد`);
       }
-      return { inserted, warnings, atomic: true };
+      // قائمة الجداول على السيرفر (backup_logical_tables) قد تتخلّف عن
+      // BACKUP_TABLES — كانت تنقصها beneficiary_menu_overrides، فتُمسح
+      // بالـcascade مع meals/beneficiaries ولا تُعاد أبداً. نكمل الناقص هنا.
+      const uncovered = tablesNotCoveredByServer(serverInserted, skipped);
+      if (uncovered.length > 0) {
+        warnings.push(
+          `دالة الاستعادة على السيرفر لا تشمل: ${uncovered.join(', ')} — استُعيدت من المتصفح. ` +
+          'شغّل supabase/backup-menu-overrides-coverage-migration.sql.'
+        );
+        await clientRestoreTables(supabase, snapshot, uncovered, inserted, warnings);
+      }
+      return { inserted, warnings, atomic: uncovered.length === 0 };
     }
     if (error && !/does not exist|could not find|function/i.test(error.message)) {
       // الدالة موجودة لكن التنفيذ فشل — المعاملة تراجعت، فالقاعدة سليمة.
@@ -456,11 +545,41 @@ export async function restoreFromSnapshot(
     warnings.push('تعذّر نداء الاستعادة الذرّية — تمّت الاستعادة بالطريقة القديمة.');
   }
 
+  await clientRestoreTables(supabase, snapshot, [...BACKUP_TABLES], inserted, warnings);
+  return { inserted, warnings, atomic: false };
+}
+
+/**
+ * جداول BACKUP_TABLES التي لم تظهر في ردّ الدالة الذرّية لا في inserted ولا
+ * في skipped_tables — أي أن قائمة السيرفر لا تعرفها أصلاً.
+ */
+export function tablesNotCoveredByServer(
+  serverInserted: Record<string, unknown>,
+  skipped: readonly string[],
+): BackupTableName[] {
+  return BACKUP_TABLES.filter(t => !(t in serverInserted) && !skipped.includes(t));
+}
+
+/**
+ * مسار الاستعادة من المتصفح (غير ذرّي): مسح الجداول المطلوبة بعكس ترتيب
+ * الإدراج ثم إدراجها بالترتيب. يُستخدم كاحتياطي كامل، أو لإكمال جداول لا
+ * تعرفها الدالة الذرّية على السيرفر.
+ */
+async function clientRestoreTables(
+  supabase: SupabaseClient,
+  snapshot: BackupSnapshot,
+  tables: BackupTableName[],
+  inserted: Record<BackupTableName, number>,
+  warnings: string[],
+): Promise<void> {
+  // نحافظ على ترتيب BACKUP_TABLES مهما كان ترتيب المُدخل
+  const ordered = BACKUP_TABLES.filter(t => tables.includes(t));
+
   // 1) محو البيانات الحالية — عكس ترتيب الإدراج بالضبط، فالتابع يُمسح قبل الأم.
   //    اشتقاقه من BACKUP_TABLES بدل قائمة يدوية يضمن أن أي جدول يُضاف مستقبلاً
   //    يدخل الاستعادة تلقائياً؛ القائمة اليدوية السابقة نسيت meal_alternatives
   //    ومنظومة التكاليف، فكانت الاستعادة تُبقي بيانات قديمة وتفقد أخرى.
-  const wipeOrder: BackupTableName[] = [...BACKUP_TABLES].reverse();
+  const wipeOrder: BackupTableName[] = [...ordered].reverse();
 
   // فلتر «صادق دائماً» بديلاً عن delete بلا where (يحجبه supabase-js) — نستخدم
   // مفتاح كل جدول لأن meal_pricing و lunch_dinner_diet_colors بلا عمود id.
@@ -481,8 +600,8 @@ export async function restoreFromSnapshot(
   // 2) إعادة الإدراج بالترتيب الصحيح (BACKUP_TABLES مرتب أصلاً)
   //    نقطّع كل جدول إلى دفعات (chunks) لتفادي حدود الحجم.
   const CHUNK = 100;
-  for (const t of BACKUP_TABLES) {
-    const rows = snapshot.tables[t] ?? [];
+  for (const t of ordered) {
+    const rows = rowsForClientInsert(t, snapshot.tables[t] ?? []);
     inserted[t] = 0;
     if (rows.length === 0) continue;
 
@@ -515,8 +634,6 @@ export async function restoreFromSnapshot(
       }
     }
   }
-
-  return { inserted, warnings, atomic: false };
 }
 
 // ─── حذف نسخة محددة ──────────────────────────────────────────────────────────

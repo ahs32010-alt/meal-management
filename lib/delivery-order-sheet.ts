@@ -33,6 +33,28 @@ export const DELIVERY_ORDER_HEADERS: string[] = [
 
 export const DELIVERY_ORDER_REQUIRED_HEADERS = [COL_DATE, COL_MEAL_TYPE, COL_ITEMS];
 
+/**
+ * صف القالب مبنيّ بالاسم لا بالموضع — كان مصفوفة مكتوبة يدوياً سقط منها
+ * عمود الفئة، فانزاحت كل القيم بعده خانة (الوجبة تحت «الفئة»، الموقع تحت
+ * «نوع الوجبة»...) وفشل استيراد القالب نفسه.
+ */
+const TEMPLATE_VALUES: Record<string, string> = {
+  [COL_ORDER_NO]:   '(يولّده النظام — اكتبه فقط لتحديث أمر موجود)',
+  [COL_DATE]:       '2026-08-17',
+  [COL_ENTITY]:     ENTITY_TYPE_LABELS_PLURAL.beneficiary,
+  [COL_MEAL_TYPE]:  DELIVERY_MEAL_TYPE_LABELS.lunch,
+  [COL_LOCATION]:   'مقر الشركة',
+  [COL_CITY]:       'الدمام',
+  [COL_CREATOR]:    '',
+  [COL_PHONE]:      '',
+  [COL_DEL_DATE]:   '',
+  [COL_DEL_TIME]:   '',
+  [COL_ITEMS]:      'كبسة (غداء) ×20 | سلطة (غداء) ×20',
+  [COL_NOTES]:      'ملاحظة',
+  [COL_CREATED_AT]: '(يولّده النظام)',
+};
+export const DELIVERY_ORDER_TEMPLATE_ROW: string[] = DELIVERY_ORDER_HEADERS.map(h => TEMPLATE_VALUES[h] ?? '');
+
 const MEAL_TYPE_FROM_AR: Record<string, DeliveryMealType> = Object.fromEntries(
   (Object.entries(DELIVERY_MEAL_TYPE_LABELS) as [DeliveryMealType, string][])
     .map(([key, label]) => [label, key]),
@@ -123,7 +145,9 @@ export function parseDeliveryItems(
     }
 
     if (!name) { errors.push(`بند بلا اسم: «${token}»`); continue; }
-    if (!Number.isFinite(quantity) || quantity < 1) { errors.push(`كمية غير صالحة في البند «${token}»`); continue; }
+    // الكمية صفر مسموحة — نافذة الأمر تبدأ البند بصفر والواجهة تقبله، فرفضه
+    // كان يُفشل استيراد ملف صدّرته الصفحة نفسها.
+    if (!Number.isFinite(quantity) || quantity < 0) { errors.push(`كمية غير صالحة في البند «${token}»`); continue; }
     items.push({ display_name: name, meal_type: mealType, quantity });
   }
 
@@ -159,7 +183,15 @@ export interface DeliveryImportRefs {
   locationIdByName: Map<string, string>;
   /** اسم المُنشئ → معرّفه */
   creatorIdByName: Map<string, string>;
+  /**
+   * «الاسم|الجوال» → معرّفه. الجدول فريد على (name, phone) فقد يتكرر الاسم
+   * بجوالين؛ نطابق بالاثنين أولاً ثم بالاسم وحده.
+   */
+  creatorIdByNameAndPhone?: Map<string, string>;
 }
+
+export const creatorRefKey = (name: string, phone: string | null | undefined) =>
+  `${clean(name)}|${clean(phone)}`;
 
 export interface DeliveryOrderPayload {
   date: string;
@@ -178,15 +210,37 @@ export interface DeliveryOrderPayload {
 const clean = (v: string | undefined | null) => String(v ?? '').replace(/\s+/g, ' ').trim();
 
 /** ISO date (YYYY-MM-DD) أو فراغ — نقبل ما يكتبه Excel بصيغته المحلية كذلك */
-function normalizeDate(raw: string): string | null {
+export function normalizeDate(raw: string | undefined | null): string | null {
   const s = clean(raw);
   if (!s) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`;
   const m = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/); // dd/mm/yyyy
   if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
   const d = new Date(s);
-  if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  // بالمكوّنات المحلية لا toISOString — هذا الأخير يحوّل لـUTC فيرجع اليوم
+  // السابق في توقيت السعودية (+3) لتاريخ مقروء كمنتصف ليل محلي.
+  if (!Number.isNaN(d.getTime())) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
   return null;
+}
+
+/**
+ * الوقت بصيغة HH:MM أو HH:MM:SS كما تشترطها الواجهة. نقبل الساعة برقم واحد
+ * و«ص/م» أو AM/PM. undefined = قيمة غير مفهومة (خطأ)، null = خانة فارغة.
+ */
+export function normalizeTime(raw: string | undefined | null): string | null | undefined {
+  const s = clean(raw);
+  if (!s) return null;
+  const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(ص|م|am|pm|AM|PM)?$/);
+  if (!m) return undefined;
+  let h = parseInt(m[1], 10);
+  const suffix = (m[4] ?? '').toLowerCase();
+  if (suffix === 'م' || suffix === 'pm') { if (h < 12) h += 12; }
+  else if ((suffix === 'ص' || suffix === 'am') && h === 12) h = 0;
+  if (h > 23 || parseInt(m[2], 10) > 59) return undefined;
+  return `${String(h).padStart(2, '0')}:${m[2]}${m[3] ? `:${m[3]}` : ''}`;
 }
 
 /**
@@ -197,8 +251,12 @@ export function parseDeliveryOrderRow(
   row: Record<string, string>,
   refs: DeliveryImportRefs,
   rowLabel: string,
-): { payload: DeliveryOrderPayload | null; errors: string[] } {
+): { payload: DeliveryOrderPayload | null; errors: string[]; orderNumber: string | null } {
   const errors: string[] = [];
+  // رقم الأمر لا يدخل الحِمل (النظام يولّده)، لكنه يُرجَع منفصلاً ليُطابَق
+  // به أمر موجود في وضع «تحديث الموجود».
+  const orderNumberRaw = clean(row[COL_ORDER_NO]);
+  const orderNumber = orderNumberRaw && !orderNumberRaw.startsWith('(') ? orderNumberRaw : null;
 
   const date = normalizeDate(row[COL_DATE]);
   if (!date) { errors.push(`${rowLabel}: التاريخ مفقود أو غير مفهوم`); }
@@ -224,8 +282,22 @@ export function parseDeliveryOrderRow(
     if (!locationId) errors.push(`${rowLabel}: موقع التسليم "${locName}" غير موجود — أضفه أولاً`);
   }
 
-  const creatorName = clean(row[COL_CREATOR]);
-  const creatorId = creatorName ? (refs.creatorIdByName.get(creatorName) ?? null) : null;
+  // ورقة «أوامر التسليم» في النسخة الاحتياطية تكتب الرأسين بلا ضمّة
+  // («المنشئ»، «جوال المنشئ») — نقبلهما حتى لا يضيع المُنشئ بصمت.
+  const creatorName = clean(row[COL_CREATOR] ?? row['المنشئ']);
+  const creatorPhone = clean(row[COL_PHONE] ?? row['جوال المنشئ']);
+  const creatorId = creatorName
+    ? (refs.creatorIdByNameAndPhone?.get(creatorRefKey(creatorName, creatorPhone))
+      ?? refs.creatorIdByName.get(creatorName) ?? null)
+    : null;
+
+  const deliveryDateRaw = clean(row[COL_DEL_DATE]);
+  const deliveryDate = normalizeDate(deliveryDateRaw);
+  if (deliveryDateRaw && !deliveryDate) errors.push(`${rowLabel}: تاريخ التسليم "${deliveryDateRaw}" غير مفهوم — استخدم الصيغة 2026-08-17`);
+
+  const deliveryTimeRaw = clean(row[COL_DEL_TIME]);
+  const deliveryTime = normalizeTime(deliveryTimeRaw);
+  if (deliveryTime === undefined) errors.push(`${rowLabel}: وقت التسليم "${deliveryTimeRaw}" غير مفهوم — استخدم الصيغة 12:30`);
 
   const { items, errors: itemErrors } = mealType
     ? parseDeliveryItems(row[COL_ITEMS] ?? '', mealType)
@@ -233,7 +305,7 @@ export function parseDeliveryOrderRow(
   for (const e of itemErrors) errors.push(`${rowLabel}: ${e}`);
   if (items.length === 0) errors.push(`${rowLabel}: لا يوجد أي بند صالح في عمود «${COL_ITEMS}»`);
 
-  if (errors.length > 0) return { payload: null, errors };
+  if (errors.length > 0) return { payload: null, errors, orderNumber };
 
   return {
     payload: {
@@ -244,12 +316,34 @@ export function parseDeliveryOrderRow(
       creator_id: creatorId,
       // لو المُنشئ غير مسجّل نحفظ اسمه وجواله كنص — نفس ما تفعله النافذة
       created_by_name: creatorId ? null : (creatorName || null),
-      created_by_phone: creatorId ? null : (clean(row[COL_PHONE]) || null),
-      delivery_date: normalizeDate(row[COL_DEL_DATE]),
-      delivery_time: clean(row[COL_DEL_TIME]) || null,
+      created_by_phone: creatorId ? null : (creatorPhone || null),
+      delivery_date: deliveryDate,
+      delivery_time: deliveryTime ?? null,
       notes: clean(row[COL_NOTES]) || null,
       items,
     },
     errors: [],
+    orderNumber,
+  };
+}
+
+/**
+ * حِمل «تحديث الموجود»: واجهة PUT تكتب الأمر كاملاً، فما لا يحمله الملف
+ * (ربط أمر التشغيل المصدر، التوقيعات) نأخذه من الأمر الحالي حتى لا يُمسح.
+ * توقيع المستلم على البند يبقى ما دام البند في موضعه بنفس الاسم.
+ */
+export function buildDeliveryUpdateBody(existing: DeliveryOrder, payload: DeliveryOrderPayload) {
+  const oldItems = [...(existing.delivery_order_items ?? [])].sort((a, b) => a.position - b.position);
+  return {
+    ...payload,
+    source_order_id: existing.source_order_id ?? null,
+    creator_signature_url: existing.creator_signature_url ?? null,
+    receiver_signature_url: existing.receiver_signature_url ?? null,
+    items: payload.items.map((it, idx) => ({
+      ...it,
+      receiver_signature_url: oldItems[idx]?.display_name === it.display_name
+        ? (oldItems[idx].receiver_signature_url ?? null)
+        : null,
+    })),
   };
 }

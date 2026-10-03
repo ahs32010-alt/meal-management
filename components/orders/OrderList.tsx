@@ -15,6 +15,8 @@ import { formatDate, formatDateTime } from '@/lib/date-utils';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import Pagination from '@/components/shared/Pagination';
 import { usePagination } from '@/lib/use-pagination';
+import { exportWorkbook } from '@/lib/xlsx-utils';
+import { buildOrdersSheetRows, orderItemFinalCount, orderWeekday, ORDERS_SHEET_HEADERS, type EntityCounts } from './order-list-export';
 
 const OrderModal = dynamic(() => import('./OrderModal'), { ssr: false });
 const BulkOrderModal = dynamic(() => import('./BulkOrderModal'), { ssr: false });
@@ -25,13 +27,7 @@ const MEAL_TYPE_STYLES: Record<string, string> = {
   dinner: 'bg-purple-100 text-purple-700',
 };
 
-// عدد المستفيدين/المرافقين وعدد المحظورات لكل صنف — مفصول حسب نوع الكيان.
-// altCounts[alt_meal_id][excl_meal_id] = عدد المستفيدين الذين يأخذون alt بديلاً عن excl
-type EntityCounts = {
-  total: number;
-  exclusions: Record<string, number>;
-  altCounts: Record<string, Record<string, number>>;
-};
+// EntityCounts: عدد المستفيدين/المرافقين ومحظوراتهم لكل صنف — راجع order-list-export.ts
 const EMPTY_COUNTS: EntityCounts = { total: 0, exclusions: {}, altCounts: {} };
 
 export default function OrderList() {
@@ -282,7 +278,7 @@ export default function OrderList() {
     if (!q) return orders;
     return orders.filter(order => {
       const orderEntity: EntityType = order.entity_type === 'companion' ? 'companion' : 'beneficiary';
-      const dayLabel = DAY_LABELS[new Date(order.date).getDay()] ?? '';
+      const dayLabel = DAY_LABELS[orderWeekday(order.date)] ?? '';
       const itemsText = (order.order_items ?? [])
         .map(i => `${i.display_name ?? i.meals?.name ?? ''} ${i.meals?.is_snack ? 'سناك snack' : ''}`)
         .join(' ');
@@ -320,6 +316,18 @@ export default function OrderList() {
     ? Array.from(selectedOrderIds)
     : filteredOrders.map(o => o.id);
 
+  // Excel: نفس نطاق تصدير PDF (المحدد، أو كل نتائج البحث) وبنفس أرقام الجدول
+  const exportExcel = () => {
+    const picked = selectedOrderIds.size > 0
+      ? orders.filter(o => selectedOrderIds.has(o.id))
+      : filteredOrders;
+    const rows = buildOrdersSheetRows(picked, counts);
+    void exportWorkbook(
+      [{ name: 'أوامر التشغيل', rows, headers: [...ORDERS_SHEET_HEADERS] }],
+      `أوامر_التشغيل_${new Date().toISOString().slice(0, 10)}.xlsx`,
+    );
+  };
+
   return (
     <div className="p-6 space-y-4">
       {/* Header */}
@@ -344,6 +352,15 @@ export default function OrderList() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
               {selectedOrderIds.size > 0 ? `تصدير المحدد (${selectedOrderIds.size})` : `تصدير الكل (${filteredOrders.length})`}
+            </button>
+          )}
+          {filteredOrders.length > 0 && (
+            <button
+              onClick={exportExcel}
+              className="btn-secondary"
+              title="ملف Excel: صف لكل صنف في كل أمر — التصنيف والمضاعف والكمية الإضافية والعدد النهائي"
+            >
+              تصدير Excel
             </button>
           )}
           {/* إنشاء بكج أوامر */}
@@ -471,7 +488,7 @@ export default function OrderList() {
                       {formatDate(order.date)}
                     </td>
                     <td className="table-cell text-slate-600">
-                      {DAY_LABELS[new Date(order.date).getDay()] ?? '—'}
+                      {DAY_LABELS[orderWeekday(order.date)] ?? '—'}
                     </td>
                     <td className="table-cell">
                       <span className={`badge ${ENTITY_BADGE_STYLES[orderEntity]}`}>
@@ -490,26 +507,9 @@ export default function OrderList() {
                         <div className="flex flex-wrap gap-1.5">
                           {order.order_items.map((item) => {
                             const label = itemLabel(item);
-                            const extra = item.extra_quantity ?? 0;
                             const mult = item.multiplier ?? 1;
-                            // Prefer the order's snapshot count (frozen at save time).
-                            // Fall back to the live calculation if no snapshot yet.
-                            // يأتي من `snapshot->itemFinalCounts` — لا من اللقطة كاملة
-                            const snapCounts = (order as DailyOrder & { itemFinalCounts?: Record<string, number> | null }).itemFinalCounts;
-                            const snapCount = snapCounts?.[item.meal_id];
-                            const liveBase = Math.max(0, entityCounts.total - (entityCounts.exclusions[item.meal_id] ?? 0));
-                            // البدائل: نضيف من كل محظور (موجود في نفس الأمر) × مضاعفه
-                            const orderMealIdSet = new Set(order.order_items?.map((oi: { meal_id: string }) => oi.meal_id) ?? []);
-                            const liveAltBonus = Object.entries(entityCounts.altCounts[item.meal_id] ?? {})
-                              .filter(([exclId]) => orderMealIdSet.has(exclId))
-                              .reduce((sum, [exclId, cnt]) => {
-                                const exclItem = order.order_items?.find((oi: { meal_id: string; multiplier?: number }) => oi.meal_id === exclId);
-                                return sum + cnt * (exclItem?.multiplier ?? 1);
-                              }, 0);
-                            const finalCount = snapCount != null
-                              ? snapCount
-                              : liveBase * mult + extra + liveAltBonus;
-                            const isFrozen = snapCount != null;
+                            // المحفوظ في لقطة الأمر يغلب، وإلا حساب حيّ — نفس دالة ملف Excel
+                            const { count: finalCount, frozen: isFrozen } = orderItemFinalCount(order, item, entityCounts);
                             return (
                               <div key={item.id}
                                 title={isFrozen ? 'محفوظ من وقت إنشاء الأمر' : 'محسوب بناءً على الوضع الحالي'}

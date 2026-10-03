@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
-import type { ItemCategory, Meal, MealType, MenuItem } from '@/lib/types';
+import type { EntityType, ItemCategory, Meal, MealType, MenuItem } from '@/lib/types';
 import { buildMenuWorkbook, parseCellText, parseMenuWorkbook, formatCellText } from '@/components/menu/menu-xlsx';
+import { planMenuImport, type ExistingMenuRow } from '@/lib/menu-import';
 import { normalizeSlot, buildSlotMap, MAIN_ROWS_PER_MEAL } from '@/lib/menu-utils';
 
 /**
@@ -272,5 +273,156 @@ describe('قراءة الملفات القديمة ثابتة الأحجام', (
       { week_number: 1, day_of_week: 6, meal_type: 'lunch', meal_id: cold.id,  category: 'cold',  position: 1,   multiplier: 1, extra_quantity: 0 },
       { week_number: 1, day_of_week: 6, meal_type: 'lunch', meal_id: snack.id, category: 'snack', position: 100, multiplier: 1, extra_quantity: 10 },
     ]);
+  });
+});
+
+describe('تدقيق التصدير/الاستيراد — حالات أُصلحت', () => {
+  function reread(wb: XLSX.WorkBook) {
+    return XLSX.read(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }), { type: 'buffer' });
+  }
+
+  it('خانة فيها أكثر من ٨ أصناف أساسية (بعد «إضافة صف») تعبر الدورة بلا خطأ سعة', () => {
+    const mains = Array.from({ length: 11 }, (_, i) => meal(`كبير ${i + 1}`, i < 9 ? 'hot' : 'cold'));
+    const snacks = Array.from({ length: 6 }, (_, i) => meal(`سناك كبير ${i + 1}`, 'snack'));
+    const meals = [...mains, ...snacks];
+    const items = [
+      ...mains.map((m, i) => item(m, { position: i })),
+      ...snacks.map((m, i) => item(m, { position: 100 + i })),
+    ];
+    const { rows, errors } = roundTrip(items, meals);
+    expect(errors).toEqual([]);
+    expect(sorted(rows)).toEqual(sorted(expectedRows(items)));
+  });
+
+  it('يكتب فئة المنيو وشرح الرموز في عنوان الورقة', () => {
+    const rice = meal('رز عنوان', 'hot');
+    const wb = buildMenuWorkbook(XLSX, [item(rice, { position: 0 })], { entityType: 'companion' });
+    const title = String(wb.Sheets[wb.SheetNames[0]]['A1'].v);
+    expect(title).toContain('الأسبوع الأول');
+    expect(title).toContain('منيو المرافقين');
+    expect(title).toContain('المضاعف');
+  });
+
+  it('يرفض ملف منيو الفئة الأخرى بدل كتابته على التبويب المفتوح', () => {
+    const rice = meal('رز فئة', 'hot');
+    const wb = reread(buildMenuWorkbook(XLSX, [item(rice, { position: 0 })], { entityType: 'beneficiary' }));
+    const wrong = parseMenuWorkbook(XLSX, wb, [rice], { entityType: 'companion' });
+    expect(wrong.rows).toEqual([]);
+    expect(wrong.weeks).toEqual([]);
+    expect(wrong.errors.length).toBeGreaterThan(0);
+    expect(wrong.errors[0]).toContain('منيو المستفيدين');
+
+    const right = parseMenuWorkbook(XLSX, wb, [rice], { entityType: 'beneficiary' });
+    expect(right.errors).toEqual([]);
+    expect(right.rows).toHaveLength(1);
+  });
+
+  it('ملف النسخة الاحتياطية (أوراق الفئتين) يُقرأ منه منيو الفئة المفتوحة فقط', () => {
+    const benMeal = meal('رز مستفيد', 'hot');
+    const compMeal = meal('رز مرافق', 'hot');
+    const out = XLSX.utils.book_new();
+    for (const [et, m, suffix] of [['beneficiary', benMeal, 'مستفيدين'], ['companion', compMeal, 'مرافقين']] as const) {
+      const src = buildMenuWorkbook(XLSX, [{ ...item(m, { position: 0 }), entity_type: et as EntityType }]);
+      for (const n of src.SheetNames) XLSX.utils.book_append_sheet(out, src.Sheets[n], `${n} ${suffix}`);
+    }
+    const wb = reread(out);
+    const comp = parseMenuWorkbook(XLSX, wb, [compMeal], { entityType: 'companion' });
+    expect(comp.errors).toEqual([]);
+    expect(comp.rows.map(r => r.meal_id)).toEqual([compMeal.id]);
+    expect(comp.weeks).toEqual([1, 2, 3, 4]);
+  });
+
+  it('المضاعف خارج المدى خطأ واضح بدل استبداله بـ١ بصمت', () => {
+    const rice = meal('رز مضاعف', 'hot');
+    const wb = reread(buildMenuWorkbook(XLSX, [item(rice, { position: 0 })]));
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    ws['G3'] = { t: 's', v: 'رز مضاعف ×150' };
+    const { errors } = parseMenuWorkbook(XLSX, wb, [rice]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('×150');
+    expect(parseCellText('رز ×0', () => false).invalid).toBeDefined();
+  });
+
+  it('صنف بارد في قسم الحار يُكتب بفئته الحقيقية (بارد)', () => {
+    const salad = meal('سلطة قسم', 'cold', 'breakfast');
+    const wb = reread(buildMenuWorkbook(XLSX, []));
+    wb.Sheets[wb.SheetNames[0]]['G3'] = { t: 's', v: 'سلطة قسم' }; // أول صف حار في الفطور، السبت
+    const { rows, errors } = parseMenuWorkbook(XLSX, wb, [salad]);
+    expect(errors).toEqual([]);
+    expect(rows[0]).toMatchObject({ meal_id: salad.id, category: 'cold', position: 0 });
+  });
+
+  it('ورقة باسم يحوي رقماً (Sheet1) لا تُعامل كأسبوع', () => {
+    const rice = meal('رز ورقة', 'hot');
+    const wb = reread(buildMenuWorkbook(XLSX, [item(rice, { position: 0 })]));
+    const extra = XLSX.utils.aoa_to_sheet([['ملاحظات']]);
+    XLSX.utils.book_append_sheet(wb, extra, 'Sheet1');
+    const { errors, weeks } = parseMenuWorkbook(XLSX, wb, [rice]);
+    expect(errors).toEqual([]);
+    expect(weeks).toEqual([1, 2, 3, 4]);
+  });
+
+  it('القالب الفارغ = نفس تخطيط التصدير ويُقرأ بلا أخطاء', () => {
+    const wb = reread(buildMenuWorkbook(XLSX, [], { entityType: 'beneficiary' }));
+    expect(wb.SheetNames).toEqual(['الأسبوع الأول', 'الأسبوع الثاني', 'الأسبوع الثالث', 'الأسبوع الرابع']);
+    const { rows, errors, weeks } = parseMenuWorkbook(XLSX, wb, [], { entityType: 'beneficiary' });
+    expect(errors).toEqual([]);
+    expect(rows).toEqual([]);
+    expect(weeks).toEqual([1, 2, 3, 4]);
+  });
+
+  it('اسم الصنف يُؤخذ من قائمة الأصناف لو ما وصل مع صف المنيو', () => {
+    const rice = meal('رز احتياطي', 'hot');
+    const bare: MenuItem = { ...item(rice, { position: 0 }), meals: undefined };
+    const wb = reread(buildMenuWorkbook(XLSX, [bare], { meals: [rice] }));
+    const { rows, errors } = parseMenuWorkbook(XLSX, wb, [rice]);
+    expect(errors).toEqual([]);
+    expect(rows.map(r => r.meal_id)).toEqual([rice.id]);
+  });
+});
+
+describe('planMenuImport — تطبيق الاستيراد', () => {
+  const ex = (id: string, meal_id: string, position: number, category: ItemCategory = 'hot', extra: Partial<ExistingMenuRow> = {}): ExistingMenuRow => ({
+    id, week_number: 1, day_of_week: 6, meal_type: 'lunch', meal_id, category, position, multiplier: 1, extra_quantity: 0, entity_type: 'beneficiary', ...extra,
+  });
+  const row = (meal_id: string, position: number, category: ItemCategory = 'hot') => ({
+    week_number: 1, day_of_week: 6, meal_type: 'lunch' as MealType, meal_id, category, position, multiplier: 1, extra_quantity: 0,
+  });
+
+  it('رفع نفس المنيو بدون تعديل: لا كتابة ولا حذف', () => {
+    const plan = planMenuImport([ex('a', 'm1', 0), ex('b', 'm2', 100, 'snack')], [row('m1', 0), row('m2', 100, 'snack')], 'beneficiary', 'replace');
+    expect(plan).toMatchObject({ toWrite: [], staleIds: [], inserted: 0, updated: 0, unchanged: 2 });
+  });
+
+  it('الاستبدال يحذف ما ليس في الملف فقط', () => {
+    const plan = planMenuImport([ex('a', 'm1', 0), ex('b', 'm2', 1)], [row('m1', 0)], 'beneficiary', 'replace');
+    expect(plan.staleIds).toEqual(['b']);
+    expect(plan.toWrite).toEqual([]);
+  });
+
+  it('الإضافة لا تحذف، وترحّل الأصناف الباقية بعد أصناف الملف بلا تصادم في الترتيب', () => {
+    const existing = [ex('a', 'm1', 0), ex('b', 'm2', 1), ex('c', 's1', 100, 'snack')];
+    const plan = planMenuImport(existing, [row('m3', 0), row('m4', 1), row('s2', 100, 'snack')], 'beneficiary', 'append');
+    expect(plan.staleIds).toEqual([]);
+    expect(plan.inserted).toBe(3);
+    const pos = new Map(plan.toWrite.map(p => [p.meal_id as string, p.position as number]));
+    expect(pos.get('m3')).toBe(0);
+    expect(pos.get('m4')).toBe(1);
+    expect(pos.get('m1')).toBe(2);
+    expect(pos.get('m2')).toBe(3);
+    expect(pos.get('s2')).toBe(100);
+    expect(pos.get('s1')).toBe(101);
+    expect(plan.updated).toBe(3); // m1، m2، s1 رُحّلت
+  });
+
+  it('الإضافة لا تلمس خانات لم يذكرها الملف', () => {
+    const other = ex('z', 'm9', 0, 'hot', { day_of_week: 0 });
+    const plan = planMenuImport([other], [row('m3', 0)], 'beneficiary', 'append');
+    expect(plan.toWrite.map(p => p.meal_id)).toEqual(['m3']);
+  });
+
+  it('يكتب entity_type للفئة المفتوحة على كل صف', () => {
+    const plan = planMenuImport([], [row('m1', 0)], 'companion', 'append');
+    expect(plan.toWrite[0].entity_type).toBe('companion');
   });
 });

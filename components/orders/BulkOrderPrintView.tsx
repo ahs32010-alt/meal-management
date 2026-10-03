@@ -3,6 +3,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import type { Meal } from '@/lib/types';
+import { customizationCells, customSectionTitle, fetchOrderReports, sumBy } from './order-print-utils';
 
 interface MealCount { meal: Meal; gets?: number; qty?: number; quantity?: number; fixedQty?: number }
 interface BeneficiaryDetail {
@@ -80,6 +81,13 @@ function SectionTable({ title, color, items, numLabel, numKey }: {
                 </tr>
               ))}
         </tbody>
+        {/* المجموع — نفس ما تعرضه صفحة التقرير أسفل كل جدول */}
+        {items.length > 0 && (
+          <tfoot><tr>
+            <td style={{ ...s.td, fontWeight: 700, color: '#334155' }}>المجموع</td>
+            <td style={{ ...s.tdNum, background: '#f8fafc' }}>{sumBy(items, numKey)}</td>
+          </tr></tfoot>
+        )}
       </table>
     </div>
   );
@@ -92,7 +100,7 @@ function CompactGrid({ title, color, items, numKey, columns = 4 }: {
   const rows = Math.ceil(items.length / columns);
   return (
     <div className="print-section" style={{ breakInside: 'avoid', marginBottom: 8 }}>
-      <div style={{ ...s.secHeader, background: color.bg, color: color.text }}>{title}</div>
+      <div style={{ ...s.secHeader, background: color.bg, color: color.text }}>{title} — المجموع: {sumBy(items, numKey)}</div>
       <table style={s.table}>
         <tbody>
           {Array.from({ length: rows }).map((_, ri) => (
@@ -189,7 +197,7 @@ function OrderPage({ report, showFixed, showCustom, isFirst, fitOnePage }: { rep
 
       {showCustom && withCustom.length > 0 && (
         <div className="print-section" style={{ breakInside: 'avoid' }}>
-          <div style={{ ...s.secHeader, fontSize: 12.5, background: PALETTE.bens.bg, color: PALETTE.bens.text }}>تخصيصات المستفيدين</div>
+          <div style={{ ...s.secHeader, fontSize: 12.5, background: PALETTE.bens.bg, color: PALETTE.bens.text }}>{customSectionTitle(order.entity_type)}</div>
           <table style={s.table}>
             <thead><tr>
               <th style={{ ...s.bensTh, textAlign: 'center', width: 36 }}>الكود</th>
@@ -200,17 +208,14 @@ function OrderPage({ report, showFixed, showCustom, isFirst, fitOnePage }: { rep
             </tr></thead>
             <tbody>
               {withCustom.map(detail => {
-                const excludedNames = detail.excludedItems.map(x => x.meal.name).join(' | ');
-                const altParts: string[] = [];
-                detail.excludedItems.forEach(x => { if (x.alternative) altParts.push(x.alternative.name); });
-                detail.fixedItems.forEach(f => { altParts.push(f.quantity > 1 ? `${f.quantity} ${f.meal.name}` : f.meal.name); });
+                const { excluded: excludedNames, extras } = customizationCells(detail);
                 return (
                   <tr key={detail.beneficiary.id}>
                     <td style={{ ...s.bensTd, textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{detail.beneficiary.code}</td>
                     <td style={{ ...s.bensTd, textAlign: 'center' }}>{detail.beneficiary.villa || '—'}</td>
                     <td style={{ ...s.bensTd, fontWeight: 600 }}>{detail.beneficiary.name}</td>
                     <td style={s.bensTd}>{excludedNames || '—'}</td>
-                    <td style={s.bensTd}>{altParts.length ? altParts.join(' | ') : '—'}</td>
+                    <td style={s.bensTd}>{extras || '—'}</td>
                   </tr>
                 );
               })}
@@ -321,30 +326,14 @@ export default function BulkOrderPrintView({ orderIds }: { orderIds: string[] })
   useEffect(() => {
     if (orderIds.length === 0) return;
     let cancelled = false;
-    const results: (FullReport | null)[] = new Array(orderIds.length).fill(null);
-    let done = 0;
-    let errors = 0;
-
-    orderIds.forEach((id, i) => {
-      fetch(`/api/orders/${id}/report`)
-        .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-        .then(data => {
-          if (cancelled) return;
-          results[i] = data;
-        })
-        .catch(() => {
-          if (cancelled) return;
-          errors++;
-        })
-        .finally(() => {
-          if (cancelled) return;
-          done++;
-          setLoaded(done);
-          if (done === orderIds.length) {
-            setReports([...results]);
-            setErrorCount(errors);
-          }
-        });
+    // توازٍ محدود + إعادة المحاولة عند 429 — راجع fetchOrderReports
+    void fetchOrderReports<FullReport>(orderIds, {
+      onProgress: done => setLoaded(done),
+      isCancelled: () => cancelled,
+    }).then(({ results, errors }) => {
+      if (cancelled) return;
+      setReports(results);
+      setErrorCount(errors);
     });
 
     return () => { cancelled = true; };

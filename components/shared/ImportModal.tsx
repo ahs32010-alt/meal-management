@@ -25,7 +25,7 @@ export default function ImportModal({ title, templateHeaders, templateRow, requi
   const allowed = modes ?? ['append', 'replace'];
   const [rows, setRows] = useState<Record<string, string>[] | null>(null);
   const [fileName, setFileName] = useState('');
-  const [mode, setMode] = useState<ImportMode>('append');
+  const [mode, setMode] = useState<ImportMode>(allowed[0] ?? 'append');
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<{ imported: number; errors: string[] } | null>(null);
   const [parseError, setParseError] = useState('');

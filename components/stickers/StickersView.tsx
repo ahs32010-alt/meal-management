@@ -801,8 +801,9 @@ export default function StickersView() {
 
             <div className="no-print text-sm text-slate-500 px-1 mb-3">
               {effectiveDisplayDetails.length} ستيكر
-              {effectiveDisplayDetails.length > stickerDetails.length && (
-                <span className="text-violet-600 mr-2">({effectiveDisplayDetails.length - stickerDetails.length} مفصول)</span>
+              {/* الزيادة بسبب الفصل تُقاس قبل فلتر الإخفاء — وإلا يختفي العدد أو ينقص */}
+              {displayDetails.length > stickerDetails.length && (
+                <span className="text-violet-600 mr-2">({displayDetails.length - stickerDetails.length} مفصول)</span>
               )}
             </div>
 
@@ -904,7 +905,8 @@ export default function StickersView() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
-                تصدير Word ({displayDetails.length} صفحة)
+                {/* العدد = ما يُصدَّر فعلاً (بعد «إخفاء ما ليس له بديل») */}
+                تصدير Word ({effectiveDisplayDetails.length} صفحة)
               </button>
             </div>
 

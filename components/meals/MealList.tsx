@@ -15,6 +15,7 @@ import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import type { ImportMode } from '@/components/shared/ImportModeDialog';
 import { exportXLSX } from '@/lib/xlsx-utils';
+import { MEAL_HEADERS, MEAL_REQUIRED_HEADERS, MEAL_TEMPLATE_ROW, buildMealRow, parseMealRow, type MealPayload } from '@/lib/meal-sheet';
 
 const MealModal = dynamic(() => import('./MealModal'), { ssr: false });
 const ImportModal = dynamic(() => import('@/components/shared/ImportModal'), { ssr: false });
@@ -698,19 +699,9 @@ export default function MealList() {
   };
 
   // ── Export ──────────────────────────────────────────────────────────────
+  // صيغة الملف في lib/meal-sheet.ts — نفسها يقرأها الاستيراد ويبني منها القالب.
   const handleExport = () => {
-    const typeMap: Record<string, string> = { breakfast: 'فطور', lunch: 'غداء', dinner: 'عشاء' };
-    const catMap: Record<ItemCategory, string> = { hot: 'حار', cold: 'بارد', snack: 'سناك' };
-    const rows = meals.map(m => {
-      const cat: ItemCategory = (m.category as ItemCategory | undefined) ?? (m.is_snack ? 'snack' : 'hot');
-      return {
-        'الاسم': m.name,
-        'الاسم الإنجليزي': m.english_name ?? '',
-        'نوع الوجبة': typeMap[m.type] ?? m.type,
-        'سناك': m.is_snack ? 'نعم' : 'لا',
-        'الفئة': catMap[cat],
-      };
-    });
+    const rows = meals.map(buildMealRow);
     const tag = entityType === 'companion' ? 'مرافقون' : 'مستفيدون';
     exportXLSX(rows, `أصناف_${tag}_${new Date().toISOString().slice(0, 10)}.xlsx`, `أصناف ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`);
   };
@@ -719,11 +710,21 @@ export default function MealList() {
   const handleImport = async (rows: Record<string, string>[], mode: ImportMode) => {
     let imported = 0;
     const errors: string[] = [];
-    const typeRevMap: Record<string, string> = { 'فطور': 'breakfast', 'غداء': 'lunch', 'عشاء': 'dinner', breakfast: 'breakfast', lunch: 'lunch', dinner: 'dinner' };
-    const catRevMap: Record<string, ItemCategory> = {
-      'حار': 'hot', 'بارد': 'cold', 'سناك': 'snack',
-      hot: 'hot', cold: 'cold', snack: 'snack',
-    };
+
+    // نتحقق من كل الصفوف أولاً — قبل أي حذف. كان «استبدال» يحذف الأصناف ثم
+    // يكتشف أن الملف كله غير صالح، فتضيع الأصناف (وما يرتبط بها) بلا بديل.
+    const payloads: { payload: MealPayload; label: string }[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const { payload, error } = parseMealRow(rows[i], entityType, `صف ${i + 2}`);
+      if (error) errors.push(error);
+      else if (payload) payloads.push({ payload, label: `صف ${i + 2} (${payload.name})` });
+    }
+    if (mode === 'replace' && errors.length > 0) {
+      return { imported: 0, errors: ['لم يُحذف أي شيء — صحّح الأخطاء التالية ثم أعد الاستيراد:', ...errors] };
+    }
+    if (payloads.length === 0) {
+      return { imported: 0, errors: errors.length > 0 ? errors : ['لم يُعثر على أصناف صالحة في الملف'] };
+    }
 
     // وضع الاستبدال: نحذف كل أصناف هذا النوع أولاً (الحذف متسلسل فيمسح ما يرتبط بها
     // من محظورات/أصناف ثابتة/منيو/عناصر أوامر) ثم نُدرج أصناف الملف فقط.
@@ -736,50 +737,38 @@ export default function MealList() {
       }
     }
 
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const name = row['الاسم']?.trim();
-      if (!name) { errors.push(`صف ${i + 2}: الاسم مطلوب`); continue; }
-      const typeRaw = row['نوع الوجبة']?.trim();
-      const type = typeRevMap[typeRaw];
-      if (!type) { errors.push(`صف ${i + 2} (${name}): نوع الوجبة غير صحيح — القيم المقبولة: فطور، غداء، عشاء`); continue; }
-      const snackRaw = row['سناك']?.trim().toLowerCase();
-      const is_snack = snackRaw === 'نعم' || snackRaw === 'yes' || snackRaw === 'true' || snackRaw === '1';
-
-      // الفئة: لو محددة في الملف نستخدمها، وإلا نستنتجها (سناك→snack، رئيسي→hot افتراضياً)
-      const catRaw = row['الفئة']?.trim();
-      let category: ItemCategory = is_snack ? 'snack' : 'hot';
-      if (catRaw) {
-        const parsed = catRevMap[catRaw];
-        if (parsed) {
-          category = parsed;
-        } else {
-          errors.push(`صف ${i + 2} (${name}): الفئة "${catRaw}" غير صحيحة — القيم المقبولة: حار، بارد، سناك`);
-          continue;
-        }
-      }
-      // اتساق: سناك ↔ category=snack
-      const finalIsSnack = is_snack || category === 'snack';
-      const finalCategory: ItemCategory = finalIsSnack ? 'snack' : (category === 'snack' ? 'hot' : category);
-
-      const payload = { name, english_name: row['الاسم الإنجليزي']?.trim() || null, type, is_snack: finalIsSnack, category: finalCategory, entity_type: entityType };
+    // لو قيد التفرّد غير موجود في القاعدة (الـmigration تخطّاه بسبب مكررات قديمة)
+    // يفشل upsert على كل صف — نرجع لمطابقة يدوية بالمفتاح نفسه.
+    const missingConstraint = (msg: string) => /no unique|on conflict|exclusion constraint/i.test(msg);
+    const saveManually = async (payload: Record<string, unknown>) => {
+      const { data: found, error: findErr } = await supabase.from('meals').select('id')
+        .eq('entity_type', payload.entity_type as string).eq('type', payload.type as string)
+        .eq('is_snack', payload.is_snack as boolean).eq('name', payload.name as string).limit(1);
+      if (findErr) return findErr;
+      const id = (found as { id: string }[] | null)?.[0]?.id;
+      const r = id
+        ? await supabase.from('meals').update(payload).eq('id', id)
+        : await supabase.from('meals').insert(payload);
+      return r.error;
+    };
+    const save = async (payload: Record<string, unknown>) => {
       // الـconflict على (entity_type, type, is_snack, name) عشان الاستيراد يستبدل المكرر
       // داخل نفس الفئة + الوجبة + التصنيف فقط (وما يخلط بين فواكه فطور وفواكه عشاء مثلاً).
-      const { error } = await supabase
-        .from('meals')
-        .upsert(payload, { onConflict: 'entity_type,type,is_snack,name' });
-      if (error) {
-        // لو عمود category غير موجود في DB (ما اتشغّل meals-category-migration.sql)،
-        // نعيد المحاولة بدون category بدل ما يتعطل الاستيراد كاملاً.
-        if (/category|column/i.test(error.message)) {
-          const { category: _omit, ...fallback } = payload;
-          void _omit;
-          const { error: e2 } = await supabase.from('meals').upsert(fallback, { onConflict: 'entity_type,type,is_snack,name' });
-          if (e2) { errors.push(`صف ${i + 2} (${name}): ${e2.message}`); continue; }
-        } else {
-          errors.push(`صف ${i + 2} (${name}): ${error.message}`); continue;
-        }
+      const { error } = await supabase.from('meals').upsert(payload, { onConflict: 'entity_type,type,is_snack,name' });
+      if (error && missingConstraint(error.message)) return saveManually(payload);
+      return error;
+    };
+
+    for (const { payload, label } of payloads) {
+      let error = await save({ ...payload });
+      // لو عمود category غير موجود في DB (ما اتشغّل meals-category-migration.sql)،
+      // نعيد المحاولة بدون category بدل ما يتعطل الاستيراد كاملاً.
+      if (error && /category|column/i.test(error.message)) {
+        const { category: _omit, ...fallback } = payload;
+        void _omit;
+        error = await save(fallback);
       }
+      if (error) { errors.push(`${label}: ${error.message}`); continue; }
       imported++;
     }
     if (imported > 0) {
@@ -787,7 +776,7 @@ export default function MealList() {
         action: 'create',
         entity_type: 'meal',
         entity_name: `استيراد أصناف (${imported}) — ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`,
-        details: { imported, errors_count: errors.length, for_entity: entityType, source: 'excel_import' },
+        details: { imported, errors_count: errors.length, for_entity: entityType, mode, source: 'excel_import' },
       });
     }
     return { imported, errors };
@@ -960,11 +949,11 @@ export default function MealList() {
       {importOpen && (
         <ImportModal
           title="الأصناف"
-          templateHeaders={['الاسم', 'الاسم الإنجليزي', 'نوع الوجبة', 'سناك', 'الفئة']}
-          requiredHeaders={['الاسم', 'نوع الوجبة']}
-          templateRow={['أرز بالدجاج', 'Rice with Chicken', 'غداء', 'لا', 'حار']}
+          templateHeaders={MEAL_HEADERS}
+          requiredHeaders={MEAL_REQUIRED_HEADERS}
+          templateRow={MEAL_TEMPLATE_ROW}
           onImport={handleImport}
-          replaceWarning="سيتم حذف كل الأصناف الحالية لهذه الفئة — وبسبب الربط المتسلسل سيُحذف معها ما يعتمد عليها من محظورات وأصناف ثابتة وعناصر منيو وأوامر."
+          replaceWarning={`سيتم حذف كل أصناف ${ENTITY_TYPE_LABELS_PLURAL[entityType]} الحالية (أصناف الفئة الأخرى لا تتأثر) — وبسبب الربط المتسلسل سيُحذف معها ما يعتمد عليها من محظورات وأصناف ثابتة واستبعادات الأنظمة الغذائية وعناصر منيو وأوامر. لا يُحذف شيء لو في الملف أي خطأ.`}
           onClose={() => setImportOpen(false)}
           onDone={() => { setImportOpen(false); fetchMeals(); }}
         />

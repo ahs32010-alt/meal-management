@@ -1,4 +1,5 @@
 import type { ItemCategory, MealType } from '@/lib/types';
+import { DAYS_ORDER, MEAL_TYPE_LABELS } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import { ALT_MARK, ALT_MARK_RE, CAT_AR, CAT_FROM_AR, CATEGORY_MARK_RE, DAY_FROM_AR, DAY_SHORT } from '@/lib/sheet-marks';
 
@@ -16,6 +17,11 @@ import { ALT_MARK, ALT_MARK_RE, CAT_AR, CAT_FROM_AR, CATEGORY_MARK_RE, DAY_FROM_
  *
  * كل الأعمدة الجديدة **اختيارية عند القراءة**: الملفات القديمة تُقرأ كما كانت
  * تماماً (مفعّل = نعم، الخيارات = لا، بديل = لا).
+ *
+ * وأُضيف لاحقاً عمودان لحقول تحرّرها نافذة المستفيد وكانت تضيع مع أي استبدال:
+ *   • «النظام الغذائي الأساسي» — الأنظمة المسندة (beneficiary_diets) بأسمائها.
+ *   • «تعديلات المنيو لخانات محددة» — قرارات تبويب «المنيو المخصّص»
+ *     (beneficiary_menu_overrides).
  */
 
 // ─── الأعمدة ────────────────────────────────────────────────────────────────
@@ -24,6 +30,15 @@ export const COL_ACTIVE = 'مفعّل';
 
 /** «وجبات غداء وعشاء مخصصة» — علامة فرز لا تُطبع على الستيكر؛ عمود اختياري */
 export const COL_CUSTOM_LD = 'وجبات غداء وعشاء مخصصة';
+
+/**
+ * الأنظمة الغذائية المسندة (diet_systems) بأسمائها، مفصولة بـ" - ".
+ * غير «النظام الغذائي» (diet_type) الذي هو نص حر — التسمية هي نفسها في النافذة.
+ */
+export const COL_DIETS = 'النظام الغذائي الأساسي';
+
+/** قرارات «المنيو المخصّص» على خانة محددة (أسبوع/يوم/وجبة) — عمود اختياري */
+export const COL_MENU_OVERRIDES = 'تعديلات المنيو لخانات محددة';
 
 /** عمود لكل خيار ستيكر، بنفس تسميته في واجهة تخصيص المستفيد */
 export const STICKER_FLAG_COLUMNS = STICKER_FLAGS.map(f => ({ key: f.key, col: f.label }));
@@ -47,13 +62,59 @@ export const FIXED_COLUMNS = MEAL_COLS.flatMap(m => ([
 /** ترتيب أعمدة الملف — التصدير والقالب والاستيراد كلها تقرأ من هنا */
 export const BENEFICIARY_HEADERS: string[] = [
   'الاسم', 'الاسم الإنجليزي', 'الكود', 'الفئة', 'الفيلا', 'النظام الغذائي',
+  COL_DIETS,
   ...EXCLUSION_COLUMNS.map(c => c.col),
   ...FIXED_COLUMNS.map(c => c.col),
+  COL_MENU_OVERRIDES,
   'ملاحظات',
   COL_ACTIVE,
   ...STICKER_FLAG_COLUMNS.map(c => c.col),
   COL_CUSTOM_LD,
 ];
+
+/**
+ * صف المثال في قالب الاستيراد — مبني بالاسم لا بالموضع، فإضافة عمود جديد
+ * لا تُزيح الأمثلة تحت رؤوس غير رؤوسها (كان القالب مصفوفة مواضع يدوية).
+ */
+const TEMPLATE_SAMPLE: Record<string, string> = {
+  'الاسم': 'محمد أحمد',
+  'الاسم الإنجليزي': 'Mohammad Ahmad',
+  'الكود': 'B001',
+  'الفئة': 'عائلة',
+  'الفيلا': '5',
+  'النظام الغذائي': '',
+  // أسماء أنظمة موجودة في صفحة «النظام الغذائي»، مفصولة بـ" - "
+  [COL_DIETS]: '',
+  // محظور؛بديله — والمحظورات مفصولة بـ" - "
+  'محظورات الفطور': 'فول؛كبدة - شكشوكة؛تونة',
+  // أمثلة الأصناف الثابتة:
+  //   فول×2؛سبت احد اربعاء  → كمية 2 (تصنيف افتراضي حار)
+  //   سلطة؛سبت احد@بارد       → فئة بارد بدل الافتراضي
+  //   مكرونة؛سبت↛فول,بيض     → تُلغى لو وُجد "فول" أو "بيض" في نفس الأمر
+  //   تمر؛سبت@بديل            → يُحتسب مع البدائل بدل الأصناف الثابتة
+  'ثابتة الفطور': 'فول×2؛سبت احد اربعاء - سلطة؛سبت احد@بارد - مكرونة؛سبت↛فول,بيض',
+  // أسبوع؛يوم؛وجبة؛إجراء؛الصنف — الإجراء: استبدال (قديم←جديد) / حذف / إضافة
+  [COL_MENU_OVERRIDES]: 'أسبوع1؛سبت؛فطور؛استبدال؛فول←بيض - أسبوع2؛احد؛فطور؛حذف؛شكشوكة - أسبوع3؛خميس؛فطور؛إضافة؛فول×2',
+  'ملاحظات': '',
+  // مفعّل + خيارات الستيكر — أعمدة اختيارية، غيابها يعني مفعّل/لا
+  [COL_ACTIVE]: 'نعم',
+};
+
+export const BENEFICIARY_TEMPLATE_ROW: string[] =
+  BENEFICIARY_HEADERS.map(h => TEMPLATE_SAMPLE[h] ?? (h === COL_CUSTOM_LD || STICKER_FLAG_COLUMNS.some(f => f.col === h) ? 'لا' : ''));
+
+/**
+ * يوحّد رؤوس صف مقروء من ملف: مسافة زائدة أو مزدوجة في رأس العمود كانت
+ * تجعل العمود «غير موجود» فيُسقط بصمت (ImportModal يتسامح معها في فحص
+ * الأعمدة الإلزامية، فيمرّ الملف ثم تُقرأ خلاياه فارغة).
+ */
+export function normalizeSheetRow(row: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[k.replace(/\s+/g, ' ').trim()] = v == null ? '' : String(v);
+  }
+  return out;
+}
 
 // ─── نعم/لا ─────────────────────────────────────────────────────────────────
 
@@ -108,6 +169,20 @@ export interface SheetBeneficiary {
   no_pasta_sandwich?: boolean | null;
   low_carb?: boolean | null;
   custom_ld_meals?: boolean | null;
+  /** أسماء الأنظمة الغذائية المسندة — غيابها = عمود فارغ */
+  diet_names?: string[] | null;
+}
+
+/** قرار «المنيو المخصّص» على خانة واحدة — نفس أعمدة beneficiary_menu_overrides */
+export interface SheetMenuOverride {
+  week_number: number;
+  day_of_week: number;
+  meal_type: MealType;
+  action: 'replace' | 'remove' | 'add';
+  base_meal_id?: string | null;
+  target_meal_id?: string | null;
+  quantity?: number | null;
+  is_alternative?: boolean | null;
 }
 
 function buildExclusionCell(
@@ -169,12 +244,119 @@ function buildFixedCell(
     .join(' - ');
 }
 
+// ─── قرارات المنيو المخصّص ──────────────────────────────────────────────────
+
+const OVERRIDE_ACTION_AR: Record<SheetMenuOverride['action'], string> = {
+  replace: 'استبدال', remove: 'حذف', add: 'إضافة',
+};
+const OVERRIDE_ACTION_FROM_AR: Record<string, SheetMenuOverride['action']> = {
+  'استبدال': 'replace', 'تبديل': 'replace',
+  'حذف': 'remove', 'إزالة': 'remove', 'ازالة': 'remove',
+  'إضافة': 'add', 'اضافة': 'add',
+};
+const MEAL_TYPE_FROM_AR: Record<string, MealType> = {
+  'فطور': 'breakfast', 'الفطور': 'breakfast',
+  'غداء': 'lunch', 'الغداء': 'lunch',
+  'عشاء': 'dinner', 'العشاء': 'dinner',
+};
+const MEAL_TYPE_ORDER: MealType[] = ['breakfast', 'lunch', 'dinner'];
+const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+
+/** `اسم` أو `اسم×2` أو `اسم×2@بديل` */
+function formatOverrideTarget(name: string, quantity: number, isAlt: boolean): string {
+  return `${name}${quantity > 1 ? `×${quantity}` : ''}${isAlt ? ALT_MARK : ''}`;
+}
+
+function buildOverridesCell(overrides: SheetMenuOverride[], mealsById: Map<string, SheetMeal>): string {
+  return [...overrides]
+    .sort((a, b) =>
+      a.week_number - b.week_number ||
+      DAYS_ORDER.indexOf(a.day_of_week) - DAYS_ORDER.indexOf(b.day_of_week) ||
+      MEAL_TYPE_ORDER.indexOf(a.meal_type) - MEAL_TYPE_ORDER.indexOf(b.meal_type))
+    .map(ov => {
+      const base = ov.base_meal_id ? mealsById.get(ov.base_meal_id)?.name : undefined;
+      const target = ov.target_meal_id ? mealsById.get(ov.target_meal_id)?.name : undefined;
+      const qty = ov.quantity ?? 1;
+      const isAlt = ov.is_alternative === true;
+      let body: string | undefined;
+      if (ov.action === 'remove') body = base;
+      else if (ov.action === 'add') body = target ? formatOverrideTarget(target, qty, isAlt) : undefined;
+      else body = base && target ? `${base}←${formatOverrideTarget(target, qty, isAlt)}` : undefined;
+      if (!body) return '';
+      const slot = `أسبوع${ov.week_number}؛${DAY_SHORT[ov.day_of_week]}؛${MEAL_TYPE_LABELS[ov.meal_type]}`;
+      return `${slot}؛${OVERRIDE_ACTION_AR[ov.action]}؛${body}`;
+    })
+    .filter(Boolean)
+    .join(' - ');
+}
+
+export interface ParsedOverrideToken {
+  week_number: number;
+  day_of_week: number;
+  meal_type: MealType;
+  action: SheetMenuOverride['action'];
+  baseName: string | null;
+  targetName: string | null;
+  quantity: number;
+  isAlternative: boolean;
+}
+
+/**
+ * يفكّ رمزاً مثل: `أسبوع2؛سبت؛غداء؛استبدال؛رز←برغل×2@بديل`
+ * يرجّع نص خطأ عربي واضح بدل null — الاستيراد يعرضه كما هو.
+ */
+export function parseOverrideToken(raw: string): ParsedOverrideToken | string {
+  const parts = raw.split('؛').map(s => s.trim());
+  if (parts.length !== 5 || parts.some(p => !p)) {
+    return `الرمز «${raw}» غير مكتمل — الصيغة: أسبوع1؛سبت؛غداء؛استبدال؛قديم←جديد`;
+  }
+  const [weekStr, dayStr, mealStr, actionStr, body] = parts;
+
+  const weekMatch = weekStr.replace(/[٠-٩]/g, d => String(ARABIC_DIGITS.indexOf(d)))
+    .match(/^(?:ال)?[أا]سبوع\s*([1-4])$/);
+  if (!weekMatch) return `الأسبوع «${weekStr}» غير صحيح — اكتب أسبوع1 إلى أسبوع4`;
+  const day = DAY_FROM_AR[dayStr];
+  if (day === undefined) return `اليوم «${dayStr}» غير معروف`;
+  const mealType = MEAL_TYPE_FROM_AR[mealStr];
+  if (!mealType) return `الوجبة «${mealStr}» غير معروفة — اكتب فطور أو غداء أو عشاء`;
+  const action = OVERRIDE_ACTION_FROM_AR[actionStr];
+  if (!action) return `الإجراء «${actionStr}» غير معروف — اكتب استبدال أو حذف أو إضافة`;
+
+  const parseTarget = (s: string) => {
+    let part = s.trim();
+    const isAlternative = ALT_MARK_RE.test(part);
+    if (isAlternative) part = part.replace(ALT_MARK_RE, '').trim();
+    const qtyMatch = part.match(/^(.+?)×(\d+)$/);
+    return {
+      name: (qtyMatch ? qtyMatch[1] : part).trim(),
+      quantity: qtyMatch ? parseInt(qtyMatch[2], 10) : 1,
+      isAlternative,
+    };
+  };
+
+  const base = { week_number: Number(weekMatch[1]), day_of_week: day, meal_type: mealType, action };
+  if (action === 'remove') {
+    return { ...base, baseName: body, targetName: null, quantity: 1, isAlternative: false };
+  }
+  if (action === 'add') {
+    const t = parseTarget(body);
+    if (!t.name) return `الرمز «${raw}» بلا اسم صنف`;
+    return { ...base, baseName: null, targetName: t.name, quantity: t.quantity, isAlternative: t.isAlternative };
+  }
+  const [baseName, targetRaw] = body.split(/[←→]/).map(s => s.trim());
+  if (!baseName || !targetRaw) return `الاستبدال «${raw}» يحتاج الصنفين: قديم←جديد`;
+  const t = parseTarget(targetRaw);
+  return { ...base, baseName, targetName: t.name, quantity: t.quantity, isAlternative: t.isAlternative };
+}
+
 /** صف واحد كامل بترتيب BENEFICIARY_HEADERS */
 export function buildBeneficiaryRow(
   ben: SheetBeneficiary,
   exclusions: SheetExclusion[],
   fixed: SheetFixedMeal[],
   mealsById: Map<string, SheetMeal>,
+  /** اختياري — من لا يمرّره (النسخة الاحتياطية) يحصل على عمود فارغ */
+  overrides: SheetMenuOverride[] = [],
 ): Record<string, string> {
   const row: Record<string, string> = {
     'الاسم': ben.name,
@@ -183,9 +365,11 @@ export function buildBeneficiaryRow(
     'الفئة': ben.category ?? '',
     'الفيلا': ben.villa ?? '',
     'النظام الغذائي': ben.diet_type ?? '',
+    [COL_DIETS]: (ben.diet_names ?? []).filter(Boolean).join(' - '),
   };
   for (const c of EXCLUSION_COLUMNS) row[c.col] = buildExclusionCell(exclusions, mealsById, c.type, c.isSnack);
   for (const c of FIXED_COLUMNS)     row[c.col] = buildFixedCell(fixed, mealsById, c.type, c.isSnack);
+  row[COL_MENU_OVERRIDES] = buildOverridesCell(overrides, mealsById);
   row['ملاحظات'] = ben.notes ?? '';
   // `is_active` غير محدّد = مفعّل (الترقية ما اتشغّلت) — نفس ما تفترضه كل الصفحات
   row[COL_ACTIVE] = formatYesNo(ben.is_active !== false);
@@ -271,6 +455,7 @@ export function verifyBeneficiaryRoundTrip(
     ben: SheetBeneficiary;
     exclusions: SheetExclusion[];
     fixed: SheetFixedMeal[];
+    overrides?: SheetMenuOverride[];
   }>,
   mealsById: Map<string, SheetMeal>,
 ): SheetRoundTripResult {
@@ -285,9 +470,9 @@ export function verifyBeneficiaryRoundTrip(
   const lookup = (name: string, type: MealType, isSnack: boolean) =>
     idByNameKey.get(`${name.trim()}|${type}|${isSnack ? '1' : '0'}`);
 
-  for (const { ben, exclusions, fixed } of bens) {
+  for (const { ben, exclusions, fixed, overrides = [] } of bens) {
     const before = issues.length;
-    const row = buildBeneficiaryRow(ben, exclusions, fixed, mealsById);
+    const row = buildBeneficiaryRow(ben, exclusions, fixed, mealsById, overrides);
     const who = `${ben.name} (${ben.code})`;
 
     // ① التفعيل وخيارات الستيكر
@@ -385,6 +570,37 @@ export function verifyBeneficiaryRoundTrip(
       if (!gotFixed.has(k)) {
         const mealId = k.split('|')[0];
         issues.push(`${who}: الصنف الثابت «${mealsById.get(mealId)?.name ?? mealId}» لو صدّرت الآن ونزّلته ثم رفعته يرجع بقيم مختلفة`);
+      }
+    }
+
+    // ④ الأنظمة الغذائية المسندة
+    const gotDiets = new Set(splitCellTokens(row[COL_DIETS] ?? ''));
+    for (const d of ben.diet_names ?? []) {
+      if (!gotDiets.has(d.trim())) issues.push(`${who}: النظام الغذائي «${d}» لو صدّرت الآن ما راح ينزل في الملف`);
+    }
+
+    // ⑤ قرارات المنيو المخصّص — مفتاح لكل (خانة|إجراء|أساس|هدف|كمية|بديل)
+    const ovKey = (o: { week_number: number; day_of_week: number; meal_type: string; action: string;
+      base: string; target: string; quantity: number; isAlt: boolean }) =>
+      `${o.week_number}|${o.day_of_week}|${o.meal_type}|${o.action}|${o.base}|${o.target}|${o.quantity}|${o.isAlt ? 1 : 0}`;
+    const nameOf = (id?: string | null) => (id ? mealsById.get(id)?.name.trim() ?? '' : '');
+    const gotOv = new Set<string>();
+    for (const raw of splitCellTokens(row[COL_MENU_OVERRIDES] ?? '')) {
+      const t = parseOverrideToken(raw);
+      if (typeof t === 'string') { issues.push(`${who}: ${t}`); continue; }
+      gotOv.add(ovKey({ ...t, base: t.baseName ?? '', target: t.targetName ?? '', isAlt: t.isAlternative }));
+    }
+    for (const ov of overrides) {
+      const isRemove = ov.action === 'remove';
+      const k = ovKey({
+        ...ov,
+        base: ov.action === 'add' ? '' : nameOf(ov.base_meal_id),
+        target: isRemove ? '' : nameOf(ov.target_meal_id),
+        quantity: isRemove ? 1 : ov.quantity ?? 1,
+        isAlt: !isRemove && ov.is_alternative === true,
+      });
+      if (!gotOv.has(k)) {
+        issues.push(`${who}: تعديل المنيو (أسبوع${ov.week_number} ${DAY_SHORT[ov.day_of_week]}) لو صدّرت الآن ونزّلته ثم رفعته يرجع بقيم مختلفة`);
       }
     }
 

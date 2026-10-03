@@ -10,6 +10,7 @@ import { MENU_DAYS, WEEK_NUMBERS, WEEK_TITLES } from '@/lib/menu-utils';
 import type { MenuPeriodReport } from '@/lib/menu-period-report';
 import OrderSelect from '@/components/shared/OrderSelect';
 import FixedExtrasView from '@/components/reports/FixedExtrasView';
+import { periodPrintHref } from '@/components/reports/period-print-url';
 
 // ── Styles ──────────────────────────────────────────────────────────────────
 const MEAL_TYPE_STYLES: Record<string, string> = {
@@ -431,19 +432,7 @@ export default function ReportView({ initialOrderId }: Props) {
           )}
           {mode === 'period' && periodReport && (
             <a
-              href={(() => {
-                const s = JSON.stringify(
-                  Object.fromEntries(
-                    Object.entries(selections)
-                      .filter(([, days]) => (days as Set<number>).size > 0)
-                      .map(([w, days]) => [w, [...(days as Set<number>)]]),
-                  ),
-                );
-                const params = new URLSearchParams({ s });
-                if (periodMealType) params.set('meal', periodMealType);
-                if (periodEntityType) params.set('entity', periodEntityType);
-                return `/reports/period/print?${params}`;
-              })()}
+              href={periodPrintHref(periodReport)}
               target="_blank"
               rel="noopener noreferrer"
               className="btn-primary no-print"
@@ -511,7 +500,8 @@ export default function ReportView({ initialOrderId }: Props) {
                 <div>
                   <p className="text-xs text-slate-500">لديهم تخصيصات</p>
                   <p className="font-bold text-slate-800">
-                    {report.beneficiaryDetails.filter(d => d.excludedItems.length > 0).length}
+                    {/* نفس شرط جدول «ذوي التخصيصات» بالأسفل وقسم التخصيصات في التصدير */}
+                    {report.beneficiaryDetails.filter(d => d.excludedItems.length > 0 || d.fixedItems.length > 0).length}
                   </p>
                 </div>
               </div>

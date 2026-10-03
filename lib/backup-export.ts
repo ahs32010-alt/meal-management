@@ -1,14 +1,17 @@
 'use client';
 
-import type { BackupSnapshot } from '@/lib/backup-snapshot';
-import type { ItemCategory, MealType, EntityType, MenuItem } from '@/lib/types';
+import { BACKUP_TABLES, BACKUP_TABLE_LABELS, type BackupSnapshot } from '@/lib/backup-snapshot';
+import type { ItemCategory, MealType, EntityType, MenuItem, DeliveryOrder } from '@/lib/types';
 import {
   buildBeneficiaryRow,
   type SheetBeneficiary,
   type SheetExclusion,
   type SheetFixedMeal,
   type SheetMeal,
+  type SheetMenuOverride,
 } from '@/lib/beneficiary-sheet';
+import { buildMealRow } from '@/lib/meal-sheet';
+import { buildDeliveryOrderRow } from '@/lib/delivery-order-sheet';
 
 // ─── أنواع مساعدة ───────────────────────────────────────────────────────────
 
@@ -74,6 +77,24 @@ interface OrderCostSnapshotRow { order_id: string; total_cost: number; frozen_at
 interface MealAlternativeRow { meal_id: string; alternative_id: string }
 interface DietColorRow { diet_type: string; color: string }
 
+// ─── الأنظمة الغذائية والإعدادات (أُضيفت للنسخة بلا أوراق مقروءة) ───────────
+interface DietSystemRow { id: string; name: string; description?: string | null }
+interface DietSystemExclusionRow { diet_id: string; meal_id: string; alternative_meal_id?: string | null }
+interface BeneficiaryDietRow { beneficiary_id: string; diet_id: string }
+interface FixedExtraManualRow {
+  meal_id: string; meal_type: MealType; quantity: number;
+  start_date?: string | null; end_date?: string | null;
+}
+interface MenuOverrideRow {
+  beneficiary_id: string; week_number: number; day_of_week: number; meal_type: MealType;
+  action: 'replace' | 'remove' | 'add';
+  base_meal_id?: string | null; target_meal_id?: string | null;
+  quantity?: number | null; is_alternative?: boolean | null;
+}
+interface StickerSettingsRow { diet_order?: string[] | null; show_diet_order?: boolean | null }
+interface DeliveryCreatorRow { id: string; name: string; phone?: string | null }
+type PrintHeaderRow = Record<string, unknown>;
+
 // ─── أنواع منظومة التسليم ──────────────────────────────────────────────────
 interface CityRow { id: string; name: string; created_at?: string }
 interface DeliveryLocationRow { id: string; name: string; city_id?: string | null; created_at?: string }
@@ -83,6 +104,11 @@ interface DeliveryOrderRow {
   /** غائب في النسخ المأخوذة قبل ترقية الفئة — تُقرأ وقتها كمستفيدين */
   entity_type?: string | null;
   delivery_location_id?: string | null;
+  creator_id?: string | null;
+  created_by_name?: string | null;
+  created_by_phone?: string | null;
+  delivery_date?: string | null;
+  delivery_time?: string | null;
   notes?: string | null;
   created_at?: string;
 }
@@ -117,6 +143,9 @@ function buildBeneficiariesSheet(
   exclusions: ExclusionRow[],
   fixed: FixedMealRow[],
   entityType: EntityType,
+  diets: DietSystemRow[] = [],
+  benDiets: BeneficiaryDietRow[] = [],
+  overrides: MenuOverrideRow[] = [],
 ): Record<string, string>[] {
   // نفس الصيغة التي تصدّرها صفحة المستفيدين حرفياً — مصدر واحد في
   // lib/beneficiary-sheet، فما تتباعد ورقة النسخة عن ملف الصفحة مرة أخرى.
@@ -133,30 +162,41 @@ function buildBeneficiariesSheet(
     const list = fixedByBen.get(f.beneficiary_id);
     if (list) list.push(f); else fixedByBen.set(f.beneficiary_id, [f]);
   }
+  const group = <T extends { beneficiary_id: string }>(rows: T[]) => {
+    const m = new Map<string, T[]>();
+    for (const r of rows) {
+      const list = m.get(r.beneficiary_id);
+      if (list) list.push(r); else m.set(r.beneficiary_id, [r]);
+    }
+    return m;
+  };
+  const dietNameById = new Map(diets.map(d => [d.id, d.name] as const));
+  const dietsByBen = group(benDiets);
+  const overridesByBen = group(overrides);
 
   return bens
     .filter(b => (b.entity_type ?? 'beneficiary') === entityType)
     .map(b => buildBeneficiaryRow(
-      b as SheetBeneficiary,
-      (exclByBen.get(b.id) ?? []) as SheetExclusion[],
+      {
+        ...b,
+        diet_names: (dietsByBen.get(b.id) ?? [])
+          .map(d => dietNameById.get(d.diet_id) ?? '').filter(Boolean),
+      } as SheetBeneficiary,
+      // المحظورات المشتقّة من نظام غذائي (diet_id) تُعاد بناؤها من عمود الأنظمة —
+      // كتابتها كمحظور شخصي تجعلها تبقى حتى لو أُزيل النظام. نفس فلتر الصفحة.
+      (exclByBen.get(b.id) ?? []).filter(e => !e.diet_id) as SheetExclusion[],
       (fixedByBen.get(b.id) ?? []) as SheetFixedMeal[],
       mealsById,
+      (overridesByBen.get(b.id) ?? []) as SheetMenuOverride[],
     ));
 }
 
 function buildMealsSheet(meals: MealRow[], entityType: EntityType): Record<string, string>[] {
+  // نفس صيغة صفحة الأصناف حرفياً (lib/meal-sheet) — السناك دائماً «سناك»
+  // حتى لو بقيت له فئة قديمة، فتُستورد الورقة في الصفحة بلا فروق.
   return meals
     .filter(m => (m.entity_type ?? 'beneficiary') === entityType)
-    .map(m => {
-      const cat: ItemCategory = (m.category as ItemCategory | undefined) ?? (m.is_snack ? 'snack' : 'hot');
-      return {
-        'الاسم': m.name,
-        'الاسم الإنجليزي': m.english_name ?? '',
-        'نوع الوجبة': MEAL_TYPE_AR[m.type] ?? m.type,
-        'سناك': m.is_snack ? 'نعم' : 'لا',
-        'الفئة': CAT_AR[cat],
-      };
-    });
+    .map(m => buildMealRow({ ...m, english_name: m.english_name ?? undefined, category: m.category ?? undefined }));
 }
 
 function buildMenuSheets(
@@ -264,8 +304,12 @@ function buildDeliveryOrdersSheet(
   items: DeliveryOrderItemRow[],
   locs: DeliveryLocationRow[],
   cities: CityRow[],
+  creators: DeliveryCreatorRow[] = [],
 ): Record<string, string>[] {
-  const cityById = new Map(cities.map(c => [c.id, c.name] as const));
+  // نفس صيغة صفحة أوامر التسليم (lib/delivery-order-sheet) — كانت الورقة تكتب
+  // «المنشئ» بلا ضمة وبترتيب أعمدة مختلف عن ملف الصفحة.
+  const cityById = new Map(cities.map(c => [c.id, c] as const));
+  const creatorById = new Map(creators.map(c => [c.id, c] as const));
   const locById = new Map(locs.map(l => [l.id, l] as const));
   const itemsByOrder = new Map<string, DeliveryOrderItemRow[]>();
   for (const it of items) {
@@ -273,28 +317,17 @@ function buildDeliveryOrdersSheet(
     arr.push(it);
     itemsByOrder.set(it.delivery_order_id, arr);
   }
-  const mealTypeAr = (mt: string) =>
-    mt === 'all' ? 'فطور + غداء + عشاء' : (MEAL_TYPE_AR[mt as MealType] ?? mt);
 
   return orders.map(o => {
-    const loc = o.delivery_location_id ? locById.get(o.delivery_location_id) : null;
-    const cityName = loc?.city_id ? (cityById.get(loc.city_id) ?? '') : '';
-    const ordItems = (itemsByOrder.get(o.id) ?? []).slice().sort((a, b) => a.position - b.position);
-    const itemsStr = ordItems.map(it => {
-      const mt = mealTypeAr(it.meal_type);
-      return `${it.display_name} (${mt}) ×${it.quantity}`;
-    }).join(' | ');
-    return {
-      'رقم الأمر': o.order_number,
-      'التاريخ': o.date,
-      'الفئة': o.entity_type === 'companion' ? 'المرافقون' : 'المستفيدون',
-      'نوع الوجبة': mealTypeAr(o.meal_type),
-      'موقع التسليم': loc?.name ?? '',
-      'المدينة': cityName,
-      'الأصناف': itemsStr,
-      'الملاحظات': o.notes ?? '',
-      'تاريخ الإنشاء': o.created_at ?? '',
-    };
+    const loc = o.delivery_location_id ? locById.get(o.delivery_location_id) : undefined;
+    return buildDeliveryOrderRow({
+      ...o,
+      delivery_locations: loc
+        ? { ...loc, cities: loc.city_id ? cityById.get(loc.city_id) ?? null : null }
+        : null,
+      delivery_creators: o.creator_id ? creatorById.get(o.creator_id) ?? null : null,
+      delivery_order_items: itemsByOrder.get(o.id) ?? [],
+    } as unknown as DeliveryOrder);
   });
 }
 
@@ -382,18 +415,127 @@ function buildDietColorsSheet(colors: DietColorRow[]): Record<string, string>[] 
   return colors.map(c => ({ 'النظام الغذائي': c.diet_type, 'اللون': c.color }));
 }
 
+// ─── الأنظمة الغذائية / الإضافات اليدوية / تعديلات المنيو / الإعدادات ───────
+// جداول تُحفظ وتُستعاد منذ مدة، لكن ملف Excel كان يخلو منها تماماً.
+
+function buildDietSystemsSheet(
+  diets: DietSystemRow[],
+  dietExcl: DietSystemExclusionRow[],
+  benDiets: BeneficiaryDietRow[],
+  bens: BeneficiaryRow[],
+  meals: MealRow[],
+): Record<string, string>[] {
+  const mealName = new Map(meals.map(m => [m.id, m.name] as const));
+  const benById = new Map(bens.map(b => [b.id, b] as const));
+  return diets.map(d => {
+    const excl = dietExcl
+      .filter(x => x.diet_id === d.id)
+      .map(x => {
+        const name = mealName.get(x.meal_id) ?? `(محذوف: ${x.meal_id})`;
+        const alt = x.alternative_meal_id ? (mealName.get(x.alternative_meal_id) ?? `(محذوف: ${x.alternative_meal_id})`) : '';
+        return alt ? `${name} ← ${alt}` : name;
+      });
+    const members = benDiets
+      .filter(bd => bd.diet_id === d.id)
+      .map(bd => {
+        const b = benById.get(bd.beneficiary_id);
+        return b ? `${b.name} (${b.code})` : `(محذوف: ${bd.beneficiary_id})`;
+      });
+    return {
+      'النظام': d.name,
+      'الوصف': d.description ?? '',
+      'الأصناف المستبعدة (← البديل)': excl.join(' | '),
+      'عدد المستفيدين': String(members.length),
+      'المستفيدون': members.join('، '),
+    };
+  });
+}
+
+function buildFixedExtrasManualSheet(rows: FixedExtraManualRow[], meals: MealRow[]): Record<string, string>[] {
+  const mealName = new Map(meals.map(m => [m.id, m.name] as const));
+  return rows.map(r => ({
+    'الصنف': mealName.get(r.meal_id) ?? `(محذوف: ${r.meal_id})`,
+    'الوجبة': MEAL_TYPE_AR[r.meal_type] ?? r.meal_type,
+    'العدد اليومي': String(r.quantity ?? 0),
+    'من تاريخ': r.start_date ?? '',
+    'إلى تاريخ': r.end_date ?? 'مستمر',
+  }));
+}
+
+const OVERRIDE_ACTION_AR: Record<MenuOverrideRow['action'], string> = {
+  replace: 'استبدال',
+  remove: 'حذف',
+  add: 'إضافة',
+};
+
+function buildMenuOverridesSheet(
+  rows: MenuOverrideRow[],
+  bens: BeneficiaryRow[],
+  meals: MealRow[],
+): Record<string, string>[] {
+  const mealName = new Map(meals.map(m => [m.id, m.name] as const));
+  const benById = new Map(bens.map(b => [b.id, b] as const));
+  const name = (id?: string | null) => (id ? (mealName.get(id) ?? `(محذوف: ${id})`) : '');
+  return rows.map(r => {
+    const b = benById.get(r.beneficiary_id);
+    return {
+      'المستفيد': b?.name ?? `(محذوف: ${r.beneficiary_id})`,
+      'الكود': b?.code ?? '',
+      'الأسبوع': String(r.week_number),
+      'اليوم': DAY_SHORT[r.day_of_week] ?? String(r.day_of_week),
+      'الوجبة': MEAL_TYPE_AR[r.meal_type] ?? r.meal_type,
+      'الإجراء': OVERRIDE_ACTION_AR[r.action] ?? r.action,
+      'الصنف الأساسي': name(r.base_meal_id),
+      'الصنف البديل/المضاف': name(r.target_meal_id),
+      'الكمية': r.action === 'add' ? String(r.quantity ?? 1) : '',
+      'يُحتسب كبديل': r.is_alternative ? 'نعم' : 'لا',
+    };
+  });
+}
+
+function buildDeliveryCreatorsSheet(rows: DeliveryCreatorRow[]): Record<string, string>[] {
+  return rows.map(c => ({ 'الاسم': c.name, 'الجوال': c.phone ?? '' }));
+}
+
+function buildStickerSettingsSheet(rows: StickerSettingsRow[]): Record<string, string>[] {
+  return rows.map(r => ({
+    'ترتيب الأنظمة في الستيكرات': (r.diet_order ?? []).join(' ← '),
+    'إظهار الترتيب': r.show_diet_order === false ? 'لا' : 'نعم',
+  }));
+}
+
+const PRINT_HEADER_AR: Record<string, string> = {
+  company_name_ar: 'اسم الشركة (عربي)',
+  company_name_en: 'اسم الشركة (إنجليزي)',
+  address_line1: 'العنوان ١',
+  address_line2: 'العنوان ٢',
+  cr_number: 'السجل التجاري',
+  vat_number: 'الرقم الضريبي',
+  title_ar: 'العنوان (عربي)',
+  title_en: 'العنوان (إنجليزي)',
+  logo_url: 'رابط الشعار',
+  default_creator_signature_url: 'توقيع المنشئ الافتراضي',
+};
+
+function buildPrintHeaderSheet(rows: PrintHeaderRow[]): Record<string, string>[] {
+  const h = rows[0];
+  if (!h) return [];
+  return Object.entries(PRINT_HEADER_AR).map(([key, label]) => ({
+    'الحقل': label,
+    'القيمة': h[key] == null ? '' : String(h[key]),
+  }));
+}
+
 // ─── التنزيل كـExcel متعدد الأوراق ──────────────────────────────────────────
 
-export async function downloadBackupAsXLSX(
-  snapshot: BackupSnapshot,
-  filename: string,
-): Promise<void> {
-  const XLSX = await import('xlsx');
-  const wb = XLSX.utils.book_new();
-  if (!wb.Workbook) wb.Workbook = {};
-  if (!wb.Workbook.Views) wb.Workbook.Views = [];
-  wb.Workbook.Views[0] = { RTL: true };
+export interface BackupSheet { title: string; rows: Record<string, string>[] }
 
+/**
+ * كل الأوراق المقروءة في ملف Excel للنسخة (عدا أوراق المنيو القابلة لإعادة
+ * الاستيراد، وتُلحق عند التنزيل). دالة نقية — تُختبر بلا متصفح.
+ * الأوراق الفارغة تُحذف.
+ */
+export function buildBackupSheets(snapshot: BackupSnapshot): BackupSheet[] {
   const t = snapshot.tables as unknown as Record<string, unknown[]>;
   const meals = (t.meals ?? []) as unknown as MealRow[];
   const bens = (t.beneficiaries ?? []) as unknown as BeneficiaryRow[];
@@ -410,6 +552,8 @@ export async function downloadBackupAsXLSX(
   const deliveryMeals = (t.delivery_meals ?? []) as unknown as DeliveryMealRow[];
   const deliveryOrders = (t.delivery_orders ?? []) as unknown as DeliveryOrderRow[];
   const deliveryItems = (t.delivery_order_items ?? []) as unknown as DeliveryOrderItemRow[];
+  const creators = (t.delivery_creators ?? []) as unknown as DeliveryCreatorRow[];
+  const printHeader = (t.delivery_print_header ?? []) as unknown as PrintHeaderRow[];
   // منظومة التكاليف + المراجع
   const costUnits   = (t.cost_units ?? []) as unknown as CostUnitRow[];
   const rawMats     = (t.raw_materials ?? []) as unknown as RawMaterialRow[];
@@ -418,6 +562,101 @@ export async function downloadBackupAsXLSX(
   const frozenCosts = (t.order_cost_snapshots ?? []) as unknown as OrderCostSnapshotRow[];
   const mealAlts    = (t.meal_alternatives ?? []) as unknown as MealAlternativeRow[];
   const dietColors  = (t.lunch_dinner_diet_colors ?? []) as unknown as DietColorRow[];
+  // الأنظمة الغذائية والإعدادات
+  const diets       = (t.diet_systems ?? []) as unknown as DietSystemRow[];
+  const dietExcl    = (t.diet_system_exclusions ?? []) as unknown as DietSystemExclusionRow[];
+  const benDiets    = (t.beneficiary_diets ?? []) as unknown as BeneficiaryDietRow[];
+  const fixedExtras = (t.fixed_extras_manual ?? []) as unknown as FixedExtraManualRow[];
+  const overrides   = (t.beneficiary_menu_overrides ?? []) as unknown as MenuOverrideRow[];
+  const stickerSet  = (t.sticker_settings ?? []) as unknown as StickerSettingsRow[];
+
+  const out: BackupSheet[] = [];
+  const add = (title: string, rows: Record<string, string>[]) => {
+    if (rows.length > 0) out.push({ title, rows });
+  };
+
+  // 1) المستفيدون والمرافقون
+  add('المستفيدون', buildBeneficiariesSheet(bens, meals, excls, fixed, 'beneficiary', diets, benDiets, overrides));
+  add('المرافقون',  buildBeneficiariesSheet(bens, meals, excls, fixed, 'companion', diets, benDiets, overrides));
+  add('الأنظمة الغذائية', buildDietSystemsSheet(diets, dietExcl, benDiets, bens, meals));
+  add('تعديلات منيو المستفيدين', buildMenuOverridesSheet(overrides, bens, meals));
+
+  // 2) أصناف كل فئة
+  add('أصناف المستفيدين', buildMealsSheet(meals, 'beneficiary'));
+  add('أصناف المرافقين',  buildMealsSheet(meals, 'companion'));
+
+  // 3) المنيو لكل فئة — جدول مسطّح للقراءة البشرية
+  for (const sheet of buildMenuSheets(menu, meals, 'beneficiary')) {
+    add(`${sheet.title} - مستفيدين`, sheet.rows);
+  }
+  for (const sheet of buildMenuSheets(menu, meals, 'companion')) {
+    add(`${sheet.title} - مرافقين`, sheet.rows);
+  }
+
+  // 4) أوامر التشغيل + الإضافات الثابتة اليدوية
+  add('أوامر التشغيل', buildOrdersSheet(orders, orderItems, meals));
+  add('إضافات ثابتة يدوية', buildFixedExtrasManualSheet(fixedExtras, meals));
+
+  // 5) منظومة أوامر التسليم
+  add('أصناف التسليم',  buildDeliveryMealsSheet(deliveryMeals));
+  add('مواقع التسليم',  buildDeliveryLocationsSheet(deliveryLocs, cities));
+  add('منشئو التسليم',  buildDeliveryCreatorsSheet(creators));
+  add('أوامر التسليم',  buildDeliveryOrdersSheet(deliveryOrders, deliveryItems, deliveryLocs, cities, creators));
+  add('ترويسة طباعة التسليم', buildPrintHeaderSheet(printHeader));
+
+  // 6) منظومة التكاليف
+  add('وحدات القياس',    buildCostUnitsSheet(costUnits));
+  add('المواد الأولية',  buildRawMaterialsSheet(rawMats, costUnits));
+  add('الوصفات',         buildRecipesSheet(recipes, meals, rawMats, costUnits));
+  add('أسعار البيع',     buildPricingSheet(pricing, meals));
+  add('تكاليف مجمّدة',   buildFrozenCostsSheet(frozenCosts, orders));
+
+  // 7) مراجع وإعدادات
+  add('بدائل الأصناف',        buildMealAlternativesSheet(mealAlts, meals));
+  add('ألوان الأنظمة',        buildDietColorsSheet(dietColors));
+  add('إعدادات الستيكرات',    buildStickerSettingsSheet(stickerSet));
+  add('الترجمة الحرفية',      buildTranslitSheet(translit));
+
+  return out;
+}
+
+/** ورقة Meta: تاريخ النسخة + عدد صفوف كل جدول باسمه العربي. */
+export function buildBackupMetaRows(snapshot: BackupSnapshot): Record<string, string>[] {
+  const labels = BACKUP_TABLE_LABELS as Record<string, string>;
+  return [
+    { 'الحقل': 'تاريخ النسخة', 'القيمة': snapshot.taken_at },
+    { 'الحقل': 'الإصدار', 'القيمة': String(snapshot.version) },
+    ...orderedTableNames(snapshot).map(table => ({
+      'الحقل': `عدد ${labels[table] ?? table} (${table})`,
+      'القيمة': String((snapshot.tables as Record<string, unknown[]>)[table]?.length ?? 0),
+    })),
+  ];
+}
+
+/**
+ * أسماء جداول اللقطة بترتيب BACKUP_TABLES (المرجعي قبل التابع) ثم أي جدول
+ * إضافي. لازم: عمود snapshot من نوع jsonb لا يحفظ ترتيب المفاتيح، فترتيب
+ * Object.keys بعد القراءة من القاعدة اعتباطي.
+ */
+function orderedTableNames(snapshot: BackupSnapshot): string[] {
+  const present = Object.keys(snapshot.tables ?? {});
+  const known = (BACKUP_TABLES as readonly string[]).filter(t => present.includes(t));
+  return [...known, ...present.filter(t => !known.includes(t))];
+}
+
+export async function downloadBackupAsXLSX(
+  snapshot: BackupSnapshot,
+  filename: string,
+): Promise<void> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.utils.book_new();
+  if (!wb.Workbook) wb.Workbook = {};
+  if (!wb.Workbook.Views) wb.Workbook.Views = [];
+  wb.Workbook.Views[0] = { RTL: true };
+
+  const t = snapshot.tables as unknown as Record<string, unknown[]>;
+  const meals = (t.meals ?? []) as unknown as MealRow[];
+  const menu = (t.menu_items ?? []) as unknown as MenuRow[];
 
   const addSheet = (title: string, rows: Record<string, string>[]) => {
     if (rows.length === 0) return;
@@ -436,57 +675,15 @@ export async function downloadBackupAsXLSX(
     XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31));
   };
 
-  // 1) المستفيدون والمرافقون
-  addSheet('المستفيدون', buildBeneficiariesSheet(bens, meals, excls, fixed, 'beneficiary'));
-  addSheet('المرافقون',  buildBeneficiariesSheet(bens, meals, excls, fixed, 'companion'));
+  for (const sheet of buildBackupSheets(snapshot)) addSheet(sheet.title, sheet.rows);
 
-  // 2) أصناف كل فئة
-  addSheet('أصناف المستفيدين', buildMealsSheet(meals, 'beneficiary'));
-  addSheet('أصناف المرافقين',  buildMealsSheet(meals, 'companion'));
-
-  // 3) المنيو لكل فئة — جدول مسطّح للقراءة البشرية
-  for (const sheet of buildMenuSheets(menu, meals, 'beneficiary')) {
-    addSheet(`${sheet.title} - مستفيدين`, sheet.rows);
-  }
-  for (const sheet of buildMenuSheets(menu, meals, 'companion')) {
-    addSheet(`${sheet.title} - مرافقين`, sheet.rows);
-  }
-
-  // 3ب) نسخة المنيو بصيغة الشبكة **القابلة لإعادة الاستيراد** من صفحة قائمة
-  //     الطعام مباشرة. الجدول المسطّح أعلاه للقراءة فقط، فلو احتاج المستخدم
-  //     يرجّع المنيو وحده (بلا استعادة كاملة) كان لازم يعيد إدخاله يدوياً.
+  // نسخة المنيو بصيغة الشبكة **القابلة لإعادة الاستيراد** من صفحة قائمة
+  // الطعام مباشرة. الجدول المسطّح للقراءة فقط، فلو احتاج المستخدم يرجّع
+  // المنيو وحده (بلا استعادة كاملة) كان لازم يعيد إدخاله يدوياً.
   await appendImportableMenuSheets(XLSX, wb, menu, meals);
 
-  // 4) أوامر التشغيل
-  addSheet('أوامر التشغيل', buildOrdersSheet(orders, orderItems, meals));
-
-  // 5) منظومة أوامر التسليم
-  addSheet('أصناف التسليم',  buildDeliveryMealsSheet(deliveryMeals));
-  addSheet('مواقع التسليم',  buildDeliveryLocationsSheet(deliveryLocs, cities));
-  addSheet('أوامر التسليم',  buildDeliveryOrdersSheet(deliveryOrders, deliveryItems, deliveryLocs, cities));
-
-  // 6) منظومة التكاليف
-  addSheet('وحدات القياس',    buildCostUnitsSheet(costUnits));
-  addSheet('المواد الأولية',  buildRawMaterialsSheet(rawMats, costUnits));
-  addSheet('الوصفات',         buildRecipesSheet(recipes, meals, rawMats, costUnits));
-  addSheet('أسعار البيع',     buildPricingSheet(pricing, meals));
-  addSheet('تكاليف مجمّدة',   buildFrozenCostsSheet(frozenCosts, orders));
-
-  // 7) مراجع وإعدادات
-  addSheet('بدائل الأصناف',        buildMealAlternativesSheet(mealAlts, meals));
-  addSheet('ألوان الأنظمة',        buildDietColorsSheet(dietColors));
-  addSheet('الترجمة الحرفية',      buildTranslitSheet(translit));
-
   // ورقة Meta للنسخة
-  const metaRows: Record<string, string>[] = [
-    { 'الحقل': 'تاريخ النسخة', 'القيمة': snapshot.taken_at },
-    { 'الحقل': 'الإصدار', 'القيمة': String(snapshot.version) },
-    ...Object.entries(snapshot.tables).map(([table, rows]) => ({
-      'الحقل': `عدد ${table}`,
-      'القيمة': String(rows.length),
-    })),
-  ];
-  addSheet('Meta', metaRows);
+  addSheet('Meta', buildBackupMetaRows(snapshot));
 
   XLSX.writeFile(wb, filename);
 }
@@ -548,16 +745,38 @@ async function appendImportableMenuSheets(
 
 // ─── التنزيل كـSQL ──────────────────────────────────────────────────────────
 
-function toSqlLiteral(val: unknown): string {
+/**
+ * أعمدة من نوع مصفوفة Postgres (text[] / uuid[]) داخل جداول النسخة. تحتاج
+ * صيغة '{a,b}' — الصيغة السابقة كانت تكتبها JSON ('["a","b"]') فيفشل ملف SQL
+ * كاملاً عند أول صنف ثابت فيه «إلا إذا وُجد» أو أول فصل ستيكرات. بقية القيم
+ * الكائنية أعمدة jsonb (snapshot / breakdown) وتبقى JSON.
+ */
+const PG_ARRAY_COLUMNS: Record<string, readonly string[]> = {
+  beneficiary_fixed_meals: ['suppress_if_meal_ids'],
+  sticker_settings: ['diet_order'],
+  sticker_splits: ['split_meal_ids'],
+};
+
+function toPgArrayLiteral(arr: unknown[]): string {
+  const els = arr.map(v =>
+    v == null ? 'NULL' : `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
+  );
+  return `'{${els.join(',').replace(/'/g, "''")}}'`;
+}
+
+export function toSqlLiteral(val: unknown, pgArray = false): string {
   if (val === null || val === undefined) return 'NULL';
+  if (pgArray && Array.isArray(val)) return toPgArrayLiteral(val);
   if (typeof val === 'boolean') return val ? 'true' : 'false';
   if (typeof val === 'number') return isFinite(val) ? String(val) : 'NULL';
   if (typeof val === 'string') return `'${val.replace(/'/g, "''")}'`;
   return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
 }
 
-export function downloadBackupAsSQL(snapshot: BackupSnapshot, filename: string): void {
-  const tables = Object.keys(snapshot.tables) as (keyof typeof snapshot.tables)[];
+/** نص ملف SQL كاملاً — دالة نقية (تُختبر بلا متصفح). */
+export function buildBackupSQL(snapshot: BackupSnapshot): string {
+  const tables = orderedTableNames(snapshot);
+  const all = snapshot.tables as unknown as Record<string, Record<string, unknown>[]>;
   const lines: string[] = [
     '-- ============================================================',
     '-- نسخة احتياطية — نظام إدارة الوجبات',
@@ -569,7 +788,7 @@ export function downloadBackupAsSQL(snapshot: BackupSnapshot, filename: string):
     '',
     'BEGIN;',
     '',
-    '-- تعطيل قيود المفاتيح الخارجية مؤقتاً لتسهيل الإدراج',
+    '-- تعطيل قيود المفاتيح الخارجية والـtriggers مؤقتاً لتسهيل الإدراج',
     "SET session_replication_role = replica;",
     '',
     '-- ─── حذف البيانات القديمة (بترتيب عكسي لتجنب تعارض FKs) ───',
@@ -581,14 +800,17 @@ export function downloadBackupAsSQL(snapshot: BackupSnapshot, filename: string):
   lines.push('');
 
   for (const table of tables) {
-    const rows = snapshot.tables[table] as Record<string, unknown>[];
+    const rows = all[table] ?? [];
     lines.push(`-- ─── جدول: ${table} (${rows.length} صف) ───`);
     if (rows.length === 0) { lines.push(''); continue; }
 
-    const cols = Object.keys(rows[0]);
+    // اتحاد أعمدة كل الصفوف (لا الصف الأول فقط)؛ العمود الغائب عن صف → DEFAULT
+    const cols: string[] = [];
+    for (const row of rows) for (const c of Object.keys(row)) if (!cols.includes(c)) cols.push(c);
+    const arrayCols = PG_ARRAY_COLUMNS[table] ?? [];
     const colList = cols.map(c => `"${c}"`).join(', ');
     const valueGroups = rows.map(row => {
-      const vals = cols.map(c => toSqlLiteral(row[c])).join(', ');
+      const vals = cols.map(c => (c in row ? toSqlLiteral(row[c], arrayCols.includes(c)) : 'DEFAULT')).join(', ');
       return `  (${vals})`;
     });
     lines.push(`INSERT INTO "${table}" (${colList}) VALUES`);
@@ -600,8 +822,11 @@ export function downloadBackupAsSQL(snapshot: BackupSnapshot, filename: string):
   lines.push("SET session_replication_role = DEFAULT;");
   lines.push('');
   lines.push('COMMIT;');
+  return lines.join('\n');
+}
 
-  const blob = new Blob([lines.join('\n')], { type: 'application/sql;charset=utf-8' });
+export function downloadBackupAsSQL(snapshot: BackupSnapshot, filename: string): void {
+  const blob = new Blob([buildBackupSQL(snapshot)], { type: 'application/sql;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

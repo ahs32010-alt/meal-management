@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { MEAL_TYPE_LABELS } from '@/lib/types';
 import type { Meal } from '@/lib/types';
+import { customizationCells, customSectionTitle, sumBy } from './order-print-utils';
 
 interface MealCount { meal: Meal; gets?: number; qty?: number; quantity?: number; fixedQty?: number }
 interface BeneficiaryDetail {
@@ -329,6 +330,13 @@ ${contentHtml}
             </tr>
           ))}
         </tbody>
+        {/* المجموع — نفس ما تعرضه صفحة التقرير أسفل كل جدول */}
+        {items.length > 0 && (
+          <tfoot><tr>
+            <td style={{ ...s.td, fontWeight: 700, color: '#334155' }}>المجموع</td>
+            <td style={{ ...s.tdNum, background: '#f8fafc' }}>{sumBy(items, numKey)}</td>
+          </tr></tfoot>
+        )}
       </table>
     </div>
   );
@@ -347,7 +355,7 @@ ${contentHtml}
     const cellsPerRow = columns;
     return (
       <div className="print-section" style={{ breakInside: 'avoid', marginBottom: 8 }}>
-        <div style={{ ...s.sectionHeader, background: color.bg, color: color.text }}>{title}</div>
+        <div style={{ ...s.sectionHeader, background: color.bg, color: color.text }}>{title} — المجموع: {sumBy(items, numKey)}</div>
         <table style={s.table}>
           <tbody>
             {Array.from({ length: rows }).map((_, rowIdx) => (
@@ -535,7 +543,7 @@ ${contentHtml}
         {showCustomSection && withCustom.length > 0 && (
           <div className="print-section" style={{ breakInside: 'avoid' }}>
             <div style={{ ...s.bensHeader, background: PALETTE.bens.bg, color: PALETTE.bens.text }}>
-              تخصيصات المستفيدين
+              {customSectionTitle(order.entity_type)}
             </div>
             <table style={s.table}>
               <thead>
@@ -549,19 +557,14 @@ ${contentHtml}
               </thead>
               <tbody>
                 {withCustom.map(detail => {
-                  const excludedNames = detail.excludedItems.map(x => x.meal.name).join(' | ');
-                  const altParts: string[] = [];
-                  detail.excludedItems.forEach(x => { if (x.alternative) altParts.push(x.alternative.name); });
-                  detail.fixedItems.forEach(f => {
-                    altParts.push(f.quantity > 1 ? `${f.quantity} ${f.meal.name}` : f.meal.name);
-                  });
+                  const { excluded: excludedNames, extras } = customizationCells(detail);
                   return (
                     <tr key={detail.beneficiary.id}>
                       <td style={{ ...s.bensTd, textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{detail.beneficiary.code}</td>
                       <td style={{ ...s.bensTd, textAlign: 'center' }}>{detail.beneficiary.villa || '—'}</td>
                       <td style={{ ...s.bensTd, fontWeight: 600 }}>{detail.beneficiary.name}</td>
                       <td style={s.bensTd}>{excludedNames || '—'}</td>
-                      <td style={s.bensTd}>{altParts.length ? altParts.join(' | ') : '—'}</td>
+                      <td style={s.bensTd}>{extras || '—'}</td>
                     </tr>
                   );
                 })}

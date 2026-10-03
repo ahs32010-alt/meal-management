@@ -62,7 +62,7 @@ export default function CostsImportExport({
 
   /** قالب فارغ برؤوس الأعمدة وأسطر مثال — الوحدات الحالية تنزل معه للمرجع */
   const handleTemplate = () => {
-    const s = templateSamples();
+    const s = templateSamples(units);
     const sheets: WorkbookSheet[] = [
       { name: SHEETS.guide,     rows: buildGuideRows(), headers: ['كيف تستخدم هذا الملف'] },
       // الوحدات الموجودة فعلاً + أمثلة، عشان يعرف بأي وحدة يكتب
@@ -87,7 +87,7 @@ export default function CostsImportExport({
     try {
       const sheets = await parseWorkbook(file);
       setFileName(file.name);
-      setPlan(planImport(sheets, { units, materials, meals }));
+      setPlan(planImport(sheets, { units, materials, meals, recipes, prices }));
     } catch {
       setApplyError('تعذّرت قراءة الملف — تأكد أنه ملف Excel صالح.');
     }

@@ -345,6 +345,11 @@ export async function buildOrderReport(
     };
   });
 
+  // اسم الصنف في هذا الأمر (display_name) يغلب دائماً: حلقة المستفيدين فوق
+  // تكتب الصنف الخام حين يكون بديلاً أو ثابتاً لأحدهم، فيرجع اسمه الأصلي في
+  // «إحصاء الأصناف» والبدائل حسب ترتيب المستفيدين — بينما الأمر يعرض اسمه المعدّل.
+  Object.entries(displayMealMap).forEach(([id, m]) => { allMealDetails[id] = m; });
+
   // allIds يشمل: كل أصناف الأمر (حتى لو mainQty=0 بسبب استثناء الجميع)
   // + البدائل (altQty) + الأصناف الثابتة (fixedQty)
   const allIds = new Set([

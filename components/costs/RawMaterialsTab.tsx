@@ -5,7 +5,8 @@ import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
-import { exportXLSX } from '@/lib/xlsx-utils';
+import { exportWorkbook } from '@/lib/xlsx-utils';
+import { MATERIAL_REPORT_HEADERS, SHEETS, buildMaterialReportRows } from '@/lib/costs-xlsx';
 import { formatMoney, type CostUnitDef, type RawMaterial } from '@/lib/costs';
 
 const RawMaterialModal = dynamic(() => import('./RawMaterialModal'), { ssr: false });
@@ -80,16 +81,14 @@ export default function RawMaterialsTab({
 
   const handleExport = () => {
     if (filtered.length === 0) return;
-    void exportXLSX(
-      filtered.map(m => ({
-        'المادة': m.name,
-        'وحدة الشراء': unitsById[m.unit_id]?.name ?? '—',
-        'السعر (ريال/وحدة)': m.unit_cost,
-        'مستخدَمة في (وصفات)': usageByMaterial[m.id] ?? 0,
-        'ملاحظات': m.notes ?? '',
-      })),
-      `raw-materials-${new Date().toISOString().slice(0, 10)}.xlsx`,
-      'المواد الأولية',
+    // نفس اسم الورقة ورؤوس أعمدتها في «تصدير الكل» — فالملف يُستورد كما هو
+    void exportWorkbook(
+      [{
+        name: SHEETS.materials,
+        rows: buildMaterialReportRows(filtered, units, usageByMaterial),
+        headers: MATERIAL_REPORT_HEADERS,
+      }],
+      `المواد-الأولية-${new Date().toISOString().slice(0, 10)}.xlsx`,
     );
   };
 

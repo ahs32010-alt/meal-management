@@ -12,15 +12,18 @@
 import {
   convertQuantity,
   type MealPrice,
+  type MealMargin,
+  MARGIN_STATUS_LABELS,
   deriveFactor,
   newCustomFamily,
   parsePositiveNumber,
   round,
   type CostUnitDef,
+  type CostedOrderItem,
   type RawMaterial,
   type RecipeItem,
 } from '@/lib/costs';
-import { MEAL_TYPE_LABELS, type Meal, type MealType, type EntityType } from '@/lib/types';
+import { ENTITY_TYPE_LABELS, MEAL_TYPE_LABELS, type Meal, type MealType, type EntityType } from '@/lib/types';
 
 // ── أسماء الأوراق والأعمدة ──────────────────────────────────────────────────
 
@@ -61,6 +64,18 @@ export const COLS = {
     price:    'سعر بيع الحصة',
   },
 } as const;
+
+/**
+ * الأعمدة اللازمة لقراءة كل ورقة. ورقة فيها صفوف وينقصها عمود منها تُرفض
+ * بخطأ صريح — بدل ما تُتجاهل صفوفها بصمت ويقول الاستيراد «ما فيه تغيير».
+ * أعمدة التمييز (الوجبة/الفئة/سناك) والملاحظات اختيارية.
+ */
+const REQUIRED_COLS: Record<'units' | 'materials' | 'recipes' | 'prices', string[]> = {
+  units:     [COLS.units.name, COLS.units.qty, COLS.units.reference],
+  materials: [COLS.materials.name, COLS.materials.unit, COLS.materials.price],
+  recipes:   [COLS.recipes.meal, COLS.recipes.material, COLS.recipes.qty, COLS.recipes.unit],
+  prices:    [COLS.prices.meal, COLS.prices.price],
+};
 
 export const UNIT_HEADERS     = Object.values(COLS.units);
 export const MATERIAL_HEADERS = Object.values(COLS.materials);
@@ -229,6 +244,8 @@ export function buildGuideRows() {
     line('• أعمدة الوجبة/الفئة/سناك تلزم فقط لو تكرّر اسم الصنف؛ غير كذا اتركها فارغة.'),
     line('• أي صنف يظهر في ورقة «الوصفات» تُستبدل وصفته بالكامل بأسطره في الملف.'),
     line('• الأصناف غير المذكورة في الملف لا تتأثر إطلاقاً.'),
+    line('• الوحدات الموجودة لا يتغيّر تعريفها من الملف — الملف يضيف وحدات جديدة فقط.'),
+    line('• لا تغيّر أسماء الأوراق ولا رؤوس الأعمدة؛ الأعمدة المحسوبة الإضافية تُتجاهل.'),
     line('• لو فيه أي خطأ، يتوقف الاستيراد كاملاً ويعرض لك الأخطاء — ما ينحفظ شي ناقص.'),
   ];
 }
@@ -239,6 +256,12 @@ export interface ImportContext {
   units: CostUnitDef[];
   materials: RawMaterial[];
   meals: Meal[];
+  /**
+   * الوصفات وأسعار البيع الحالية — اختيارية. عند تمريرها تُستبعد الأصناف
+   * والأسعار المطابقة للموجود، فإعادة استيراد ملف مصدَّر بلا تعديل لا تكتب شيئاً.
+   */
+  recipes?: RecipeItem[];
+  prices?: MealPrice[];
 }
 
 export interface NewUnit {
@@ -289,16 +312,64 @@ export interface ImportPlan {
     materialsUnchanged: number;
     mealsPriced: number;
     recipeLines: number;
+    /** وصفات في الملف مطابقة للموجود — لا تُكتب */
+    recipesUnchanged: number;
     sellingPricesSet: number;
     sellingPricesRemoved: number;
+    /** أسعار بيع مطابقة للموجود — لا تُكتب */
+    sellingPricesUnchanged: number;
   };
 }
 
 type Row = Record<string, string>;
 
+/**
+ * يوحّد أسماء الأوراق ورؤوس الأعمدة بقصّ المسافات الزائدة — مسافة زائدة في
+ * رأس عمود عدّله المستخدم كانت تُسقط العمود كاملاً بصمت.
+ */
+function normalizeSheets(sheets: Record<string, Row[]>): Record<string, Row[]> {
+  const out: Record<string, Row[]> = {};
+  for (const [name, rows] of Object.entries(sheets)) {
+    out[norm(name)] = (rows ?? []).map(row => {
+      const r: Row = {};
+      for (const [k, v] of Object.entries(row)) r[norm(k)] = v;
+      return r;
+    });
+  }
+  return out;
+}
+
+/** ملاحظات المقارنة: الفارغ والـnull سواء */
+function notesKey(v: string | null | undefined): string | null {
+  return norm(v) || null;
+}
+
 /** مفتاح الصنف الفريد: اسم + وجبة + فئة + سناك — تحقّقنا أنه بلا تعارض */
 function mealKey(name: string, type: MealType, entity: EntityType, snack: boolean): string {
   return [nameKey(name), type, entity, snack ? '1' : '0'].join('|');
+}
+
+/**
+ * هل تعريف الوحدة في سطر الملف يختلف عن الوحدة الموجودة؟ السطر الفارغ يعني
+ * «وحدة أساسية في مجموعتها»، وغيره يُقارن معامله بعد التحويل للأساس.
+ */
+function unitDefinitionDiffers(
+  existing: CostUnitDef,
+  qtyRaw: string,
+  refRaw: string,
+  unitsByName: Map<string, CostUnitDef>,
+  allUnits: CostUnitDef[],
+): boolean {
+  if (!qtyRaw && !refRaw) {
+    const base = familyBase(existing.family, allUnits);
+    return !!base && base.id !== existing.id;
+  }
+  const ref = unitsByName.get(nameKey(refRaw));
+  const qty = parsePositiveNumber(qtyRaw);
+  if (!ref || qty === null) return true;
+  if (ref.family !== existing.family) return true;
+  const factor = deriveFactor(qty, ref);
+  return Math.abs(factor - existing.factor) > 1e-6 * Math.max(1, existing.factor);
 }
 
 /**
@@ -307,11 +378,38 @@ function mealKey(name: string, type: MealType, entity: EntityType, snack: boolea
  * errors فارغة.
  */
 export function planImport(
-  sheets: Record<string, Row[]>,
+  rawSheets: Record<string, Row[]>,
   ctx: ImportContext,
 ): ImportPlan {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const sheets = normalizeSheets(rawSheets);
+
+  // ── الأوراق والأعمدة ──────────────────────────────────────────────────────
+  const knownSheets = Object.values(SHEETS) as string[];
+  const present = Object.keys(sheets);
+  if (present.length > 0 && !present.some(n => knownSheets.includes(n))) {
+    errors.push(
+      `الملف لا يحتوي أي ورقة معروفة (${[SHEETS.units, SHEETS.materials, SHEETS.recipes, SHEETS.prices]
+        .map(n => `«${n}»`).join('، ')}) — استخدم ملفاً من «تصدير الكل» أو «تنزيل قالب».`,
+    );
+  }
+
+  /** صفوف الورقة لو أعمدتها اللازمة موجودة، وإلا [] مع خطأ واضح */
+  const rowsOf = (key: keyof typeof REQUIRED_COLS): Row[] => {
+    const rows = sheets[SHEETS[key]] ?? [];
+    if (rows.length === 0) return rows;
+    const headers = new Set(rows.flatMap(r => Object.keys(r)));
+    const missing = REQUIRED_COLS[key].filter(c => !headers.has(c));
+    if (missing.length > 0) {
+      errors.push(
+        `ورقة «${SHEETS[key]}» ينقصها ${missing.length > 1 ? 'الأعمدة' : 'العمود'} ` +
+        `${missing.map(c => `«${c}»`).join('، ')} — لا تغيّر أسماء رؤوس الأعمدة.`,
+      );
+      return [];
+    }
+    return rows;
+  };
 
   // ── الوحدات ───────────────────────────────────────────────────────────────
   // نبدأ بخريطة الوحدات الحالية ونضيف عليها الجديدة، عشان المواد والوصفات
@@ -323,16 +421,35 @@ export function planImport(
   for (const u of ctx.units) unitsById.set(u.id, u);
 
   const newUnits: NewUnit[] = [];
-  const unitRows = sheets[SHEETS.units] ?? [];
+  const seenUnit = new Set<string>();
+  const unitRows = rowsOf('units');
 
   unitRows.forEach((row, i) => {
     const ln = `«${SHEETS.units}» سطر ${i + 2}`;
     const name = norm(row[COLS.units.name]);
     if (!name) return;                       // سطر فارغ — نتجاهله بهدوء
-    if (unitsByName.has(nameKey(name))) return;  // موجودة — لا شيء نعمله
+
+    if (seenUnit.has(nameKey(name))) {
+      errors.push(`${ln}: الوحدة «${name}» مكرّرة في الملف.`);
+      return;
+    }
+    seenUnit.add(nameKey(name));
 
     const qtyRaw = norm(row[COLS.units.qty]);
     const refRaw = norm(row[COLS.units.reference]);
+
+    // موجودة — لا تُعدَّل من الملف، لكن ننبّه لو تعريفها في الملف مختلف عشان
+    // ما يظن المستخدم أن تعديله انحفظ
+    const existing = unitsByName.get(nameKey(name));
+    if (existing) {
+      if (!existing.id.startsWith('new:') && unitDefinitionDiffers(existing, qtyRaw, refRaw, unitsByName, ctx.units)) {
+        warnings.push(
+          `${ln}: الوحدة «${existing.name}» موجودة مسبقاً بتعريف مختلف — ` +
+          'تعريف الوحدات الموجودة لا يتغيّر من الملف، وسيُتجاهل هذا السطر.',
+        );
+      }
+      return;
+    }
 
     if (!refRaw && !qtyRaw) {
       // وحدة مستقلة — مجموعة خاصة بها
@@ -367,7 +484,7 @@ export function planImport(
 
   const materials: MaterialUpsert[] = [];
   const seenMaterial = new Set<string>();
-  const materialRows = sheets[SHEETS.materials] ?? [];
+  const materialRows = rowsOf('materials');
 
   materialRows.forEach((row, i) => {
     const ln = `«${SHEETS.materials}» سطر ${i + 2}`;
@@ -389,13 +506,16 @@ export function planImport(
     if (price === null) { errors.push(`${ln}: سعر «${name}» غير صالح.`); return; }
     if (price === 0) warnings.push(`${ln}: سعر «${name}» صفر — تكلفة أي صنف يستخدمها ستكون ناقصة.`);
 
-    const notes = norm(row[COLS.materials.notes]) || null;
     const existing = materialsByName.get(nameKey(name));
+    // عمود الملاحظات اختياري: غيابه من الملف يُبقي الملاحظات الحالية بدل مسحها
+    const notes = COLS.materials.notes in row
+      ? notesKey(row[COLS.materials.notes])
+      : notesKey(existing?.notes);
 
     const changed = !existing
       || existing.unit_id !== unit.id
       || round(existing.unit_cost, 4) !== round(price, 4)
-      || (existing.notes ?? null) !== notes;
+      || notesKey(existing.notes) !== notes;
 
     const upsert: MaterialUpsert = {
       id: existing?.id,
@@ -419,10 +539,14 @@ export function planImport(
   // ── الوصفات ───────────────────────────────────────────────────────────────
   // فهرس الأصناف: بالمفتاح الكامل، وبالاسم وحده لاكتشاف الغموض
   const mealsByFullKey = new Map<string, Meal>();
+  // مفاتيح كاملة متكرّرة (نفس الاسم والوجبة والفئة وسناك) — ما نقدر نميّزها
+  const collidingKeys = new Set<string>();
   const mealsByName = new Map<string, Meal[]>();
   for (const m of ctx.meals) {
     const entity = (m.entity_type as EntityType) ?? 'beneficiary';
-    mealsByFullKey.set(mealKey(m.name, m.type, entity, !!m.is_snack), m);
+    const key = mealKey(m.name, m.type, entity, !!m.is_snack);
+    if (mealsByFullKey.has(key)) collidingKeys.add(key);
+    mealsByFullKey.set(key, m);
     const list = mealsByName.get(nameKey(m.name)) ?? [];
     list.push(m);
     mealsByName.set(nameKey(m.name), list);
@@ -455,7 +579,15 @@ export function planImport(
       );
       return null;
     }
-    const found = mealsByFullKey.get(mealKey(name, type, entity, snack));
+    const fullKey = mealKey(name, type, entity, snack);
+    if (collidingKeys.has(fullKey)) {
+      errors.push(
+        `${ln}: فيه أكثر من صنف «${name}» بنفس الوجبة/الفئة/سناك — غيّر اسم أحدها ` +
+        'في صفحة «الأصناف» ثم أعد الاستيراد.',
+      );
+      return null;
+    }
+    const found = mealsByFullKey.get(fullKey);
     if (!found) {
       errors.push(`${ln}: ما فيه صنف «${name}» بهذه الوجبة/الفئة/سناك.`);
       return null;
@@ -465,7 +597,7 @@ export function planImport(
 
   const byMeal = new Map<string, RecipePlan>();
   const seenPair = new Set<string>();
-  const recipeRows = sheets[SHEETS.recipes] ?? [];
+  const recipeRows = rowsOf('recipes');
 
   recipeRows.forEach((row, i) => {
     const ln = `«${SHEETS.recipes}» سطر ${i + 2}`;
@@ -521,12 +653,77 @@ export function planImport(
     byMeal.set(meal.id, plan);
   });
 
-  const recipes = Array.from(byMeal.values());
+  // الوصفة المطابقة للموجود سطراً بسطر لا تُعاد كتابتها
+  const currentByMeal = new Map<string, RecipeItem[]>();
+  for (const r of ctx.recipes ?? []) {
+    const list = currentByMeal.get(r.meal_id) ?? [];
+    list.push(r);
+    currentByMeal.set(r.meal_id, list);
+  }
+  const lineSig = (materialId: string, unitId: string, qty: number) =>
+    `${materialId}|${unitId}|${round(qty, 4)}`;
+  const recipeUnchanged = (plan: RecipePlan): boolean => {
+    if (!ctx.recipes) return false;
+    const current = currentByMeal.get(plan.meal.id) ?? [];
+    if (current.length !== plan.lines.length) return false;
+    const before = current.map(r => lineSig(r.raw_material_id, r.unit_id, r.quantity)).sort();
+    const after = plan.lines.map(l => lineSig(
+      materialsByName.get(nameKey(l.materialName))?.id ?? '',
+      unitsByName.get(nameKey(l.unitName))?.id ?? '',
+      l.quantity,
+    )).sort();
+    return before.every((s, i) => s === after[i]);
+  };
+
+  const allRecipes = Array.from(byMeal.values());
+  const recipes = allRecipes.filter(r => !recipeUnchanged(r));
+  const recipesUnchanged = allRecipes.length - recipes.length;
+
+  // تغيير وحدة شراء مادة لمجموعة أخرى (وزن ↔ حجم) يكسر أسطر الوصفات الحالية
+  // التي لا يستبدلها هذا الملف — ننبّه بأسماء الأصناف المتأثرة
+  if (ctx.recipes) {
+    const replaced = new Set(allRecipes.map(r => r.meal.id));
+    const mealNameById = new Map(ctx.meals.map(m => [m.id, m.name]));
+    for (const m of materials) {
+      if (!m.id || !m.changed) continue;
+      const newUnit = unitsByName.get(nameKey(m.unitName));
+      if (!newUnit) continue;
+      const broken = ctx.recipes.filter(r => {
+        if (r.raw_material_id !== m.id || replaced.has(r.meal_id)) return false;
+        const lineUnit = unitsById.get(r.unit_id);
+        return !!lineUnit && lineUnit.family !== newUnit.family;
+      });
+      if (broken.length > 0) {
+        const names = Array.from(new Set(broken.map(r => mealNameById.get(r.meal_id) ?? '—')));
+        warnings.push(
+          `وحدة شراء «${m.name}» صارت «${newUnit.name}» من مجموعة مختلفة — ` +
+          `${broken.length} سطر وصفة لن يُحسب (${names.slice(0, 5).join('، ')}${names.length > 5 ? '…' : ''}). ` +
+          `صحّح وحداتها أو أضفها لورقة «${SHEETS.recipes}».`,
+        );
+      }
+    }
+  }
 
   // ── أسعار البيع ───────────────────────────────────────────────────────────
   const prices: PricePlan[] = [];
   const seenPriceMeal = new Set<string>();
-  const priceRows = sheets[SHEETS.prices] ?? [];
+  const priceRows = rowsOf('prices');
+  const currentPrice = new Map<string, number>();
+  for (const p of ctx.prices ?? []) {
+    if (p.selling_price > 0) currentPrice.set(p.meal_id, p.selling_price);
+  }
+  /** السعر المطابق للحالي (أو إزالة سعر غير موجود أصلاً) لا يُكتب */
+  const priceUnchanged = (mealId: string, price: number | null): boolean => {
+    if (!ctx.prices) return false;
+    const cur = currentPrice.get(mealId);
+    if (price === null) return cur === undefined;
+    return cur !== undefined && round(cur, 4) === round(price, 4);
+  };
+  let pricesUnchanged = 0;
+  const pushPrice = (meal: Meal, selling_price: number | null) => {
+    if (priceUnchanged(meal.id, selling_price)) { pricesUnchanged++; return; }
+    prices.push({ meal, selling_price });
+  };
 
   priceRows.forEach((row, i) => {
     const ln = `«${SHEETS.prices}» سطر ${i + 2}`;
@@ -544,14 +741,14 @@ export function planImport(
 
     const raw = norm(row[COLS.prices.price]);
     // فارغ أو صفر = إزالة السعر
-    if (raw === '') { prices.push({ meal, selling_price: null }); return; }
+    if (raw === '') { pushPrice(meal, null); return; }
 
     const price = parsePositiveNumber(raw);
     if (price === null) {
       errors.push(`${ln}: سعر بيع «${mealName}» غير صالح.`);
       return;
     }
-    prices.push({ meal, selling_price: price > 0 ? price : null });
+    pushPrice(meal, price > 0 ? price : null);
   });
 
   return {
@@ -568,19 +765,25 @@ export function planImport(
       materialsUnchanged: materials.filter(m => m.id && !m.changed).length,
       mealsPriced:        recipes.length,
       recipeLines:        recipes.reduce((s, r) => s + r.lines.length, 0),
+      recipesUnchanged,
       sellingPricesSet:     prices.filter(p => p.selling_price !== null).length,
       sellingPricesRemoved: prices.filter(p => p.selling_price === null).length,
+      sellingPricesUnchanged: pricesUnchanged,
     },
   };
 }
 
-/** أسطر نموذجية في القالب الفارغ — تشرح الشكل بالمثال */
-export function templateSamples() {
+/**
+ * أسطر نموذجية في القالب الفارغ — تشرح الشكل بالمثال. الوحدات المثال التي
+ * توجد فعلاً تُحذف (القالب يحمل الوحدات الحالية أصلاً) عشان ما تتكرّر.
+ */
+export function templateSamples(existingUnits: CostUnitDef[] = []) {
+  const exists = new Set(existingUnits.map(u => nameKey(u.name)));
   return {
     units: [
       { [COLS.units.name]: 'رطل',   [COLS.units.qty]: 0.4536, [COLS.units.reference]: 'كجم' },
       { [COLS.units.name]: 'كرتون', [COLS.units.qty]: 24,     [COLS.units.reference]: 'حبة' },
-    ],
+    ].filter(r => !exists.has(nameKey(r[COLS.units.name]))),
     materials: [
       { [COLS.materials.name]: 'زيت',  [COLS.materials.unit]: 'لتر', [COLS.materials.price]: 100, [COLS.materials.notes]: '' },
       { [COLS.materials.name]: 'كبدة', [COLS.materials.unit]: 'كجم', [COLS.materials.price]: 25,  [COLS.materials.notes]: '' },
@@ -615,6 +818,149 @@ export function summarizePlan(plan: ImportPlan): string[] {
   if (s.mealsPriced)        out.push(`${s.mealsPriced} صنف سيُستبدل تسعيره (${s.recipeLines} سطر)`);
   if (s.sellingPricesSet)     out.push(`${s.sellingPricesSet} سعر بيع سيُضبط`);
   if (s.sellingPricesRemoved) out.push(`${s.sellingPricesRemoved} سعر بيع سيُزال`);
-  if (out.length === 0)     out.push('ما فيه أي تغيير في الملف');
+  if (s.recipesUnchanged)       out.push(`${s.recipesUnchanged} وصفة بلا تغيير`);
+  if (s.sellingPricesUnchanged) out.push(`${s.sellingPricesUnchanged} سعر بيع بلا تغيير`);
+  // الأسطر «بلا تغيير» وحدها تعني أن الملف لا يغيّر شيئاً
+  const writes = s.unitsNew + s.materialsNew + s.materialsUpdated + s.mealsPriced
+    + s.sellingPricesSet + s.sellingPricesRemoved;
+  if (writes === 0) out.unshift('ما فيه أي تغيير في الملف');
   return out;
+}
+
+// ── تقارير التبويبات (تصدير فقط) ───────────────────────────────────────────
+
+/** صف «الأصناف والأسعار» كما يحسبه التبويب — نفس الأرقام المعروضة */
+export interface MealReportInput {
+  meal: Meal;
+  itemsCount: number;
+  portionCost: number;
+  hasRecipe: boolean;
+  issueCount: number;
+  margin: MealMargin;
+}
+
+/**
+ * تقرير تبويب الأصناف والأسعار. أعمدة تمييز الصنف وسعر البيع بنفس رؤوس ورقة
+ * «أسعار البيع»، والورقة تحمل نفس الاسم — فالتقرير نفسه يُستورد لتعديل أسعار
+ * البيع، والأعمدة المحسوبة (التكلفة/الربح/الهامش) تُتجاهل عند الاستيراد.
+ */
+export function buildMealReportRows(rows: MealReportInput[]) {
+  return rows.map(r => ({
+    [COLS.prices.meal]:     r.meal.name,
+    [COLS.prices.mealType]: MEAL_TYPE_LABELS[r.meal.type],
+    [COLS.prices.entity]:   ENTITY_LABEL[(r.meal.entity_type as EntityType) ?? 'beneficiary'],
+    [COLS.prices.snack]:    r.meal.is_snack ? YES : NO,
+    'عدد المكوّنات':        r.itemsCount,
+    'تكلفة الحصة':          r.hasRecipe ? round(r.portionCost, 4) : '',
+    [COLS.prices.price]:    r.margin.price !== null ? round(r.margin.price, 4) : '',
+    'الربح للحصة':          r.margin.profit !== null ? round(r.margin.profit, 4) : '',
+    'هامش الربح %':         r.margin.marginPct !== null ? round(r.margin.marginPct, 2) : '',
+    'نسبة التكلفة %':       r.margin.foodCostPct !== null ? round(r.margin.foodCostPct, 2) : '',
+    'حالة التكلفة':         !r.hasRecipe ? 'بلا تكلفة' : r.issueCount > 0 ? 'تسعير ناقص' : 'مسعّر',
+    'حالة الربح':           MARGIN_STATUS_LABELS[r.margin.status],
+  }));
+}
+
+export const MEAL_REPORT_HEADERS = [
+  COLS.prices.meal, COLS.prices.mealType, COLS.prices.entity, COLS.prices.snack,
+  'عدد المكوّنات', 'تكلفة الحصة', COLS.prices.price, 'الربح للحصة',
+  'هامش الربح %', 'نسبة التكلفة %', 'حالة التكلفة', 'حالة الربح',
+];
+
+/**
+ * تقرير المواد الأولية من تبويبها — نفس رؤوس ورقة «المواد الأولية» فيُستورد
+ * مباشرة، مع عمود «مستخدَمة في» للاطلاع (يُتجاهل عند الاستيراد).
+ */
+export function buildMaterialReportRows(
+  materials: RawMaterial[],
+  units: CostUnitDef[],
+  usageByMaterial: Record<string, number>,
+) {
+  const usage = new Map(materials.map(m => [m.name, usageByMaterial[m.id] ?? 0]));
+  return buildMaterialRows(materials, units).map(r => ({
+    ...r,
+    [MATERIAL_USAGE_COL]: usage.get(String(r[COLS.materials.name])) ?? 0,
+  }));
+}
+
+export const MATERIAL_USAGE_COL = 'مستخدَمة في (وصفات)';
+export const MATERIAL_REPORT_HEADERS = [
+  COLS.materials.name, COLS.materials.unit, COLS.materials.price, MATERIAL_USAGE_COL, COLS.materials.notes,
+];
+
+/** أمر تشغيل محسوب — يطابق OrderCostResult في lib/costs-server.ts */
+export interface OrderReportInput {
+  date: string;
+  meal_type: MealType;
+  entity_type: EntityType;
+  frozen: boolean;
+  frozen_at: string | null;
+  frozen_by_name: string | null;
+  total: number;
+  totalPortions: number;
+  avgPortionCost: number;
+  coverage: number;
+  items: CostedOrderItem[];
+  unpricedNames: string[];
+  partialNames: string[];
+  noData: boolean;
+}
+
+export const ORDER_SHEETS = {
+  summary: 'ملخّص الأوامر',
+  items:   'تفصيل الأصناف',
+} as const;
+
+export const ORDER_SUMMARY_HEADERS = [
+  'التاريخ', 'الوجبة', 'الفئة', 'عدد الحصص', 'متوسط تكلفة الحصة', 'إجمالي الأمر',
+  'التغطية %', 'الاعتماد', 'تاريخ الاعتماد', 'اعتمدها', 'أصناف بدون تسعير', 'أصناف تسعيرها ناقص',
+];
+
+export const ORDER_ITEM_HEADERS = [
+  'التاريخ', 'الوجبة', 'الفئة', 'الصنف', 'الكمية', 'تكلفة الحصة', 'الإجمالي', 'الحالة', 'الاعتماد',
+];
+
+const orderStatus = (o: OrderReportInput) => (o.frozen ? 'معتمدة' : 'مباشر');
+
+/**
+ * تقرير تكلفة أوامر التشغيل: ورقة ملخّص بإجمالي كل أمر كما يعرضه التبويب
+ * (لا مجموع أسطر مقرّبة)، وورقة تفصيل الأصناف. الأمر بلا كميات يظهر في
+ * الملخّص بصفر بدل ما يختفي من الملف.
+ */
+export function buildOrderReportRows(orders: OrderReportInput[]) {
+  const sorted = orders.slice().sort((a, b) =>
+    a.date.localeCompare(b.date)
+    || ['breakfast', 'lunch', 'dinner'].indexOf(a.meal_type) - ['breakfast', 'lunch', 'dinner'].indexOf(b.meal_type)
+    || a.entity_type.localeCompare(b.entity_type),
+  );
+
+  // الفئة بنفس تسمية شارة التبويب (مستفيد/مرافق)
+  const summary = sorted.map(o => ({
+    'التاريخ':            o.date,
+    'الوجبة':             MEAL_TYPE_LABELS[o.meal_type],
+    'الفئة':              ENTITY_TYPE_LABELS[o.entity_type],
+    'عدد الحصص':          o.totalPortions,
+    'متوسط تكلفة الحصة':  round(o.avgPortionCost, 2),
+    'إجمالي الأمر':       round(o.total, 2),
+    'التغطية %':          o.noData ? '' : round(o.coverage, 2),
+    'الاعتماد':           o.noData ? 'بلا كميات' : orderStatus(o),
+    'تاريخ الاعتماد':     o.frozen_at ? o.frozen_at.slice(0, 10) : '',
+    'اعتمدها':            o.frozen_by_name ?? '',
+    'أصناف بدون تسعير':   o.unpricedNames.join('، '),
+    'أصناف تسعيرها ناقص': o.partialNames.join('، '),
+  }));
+
+  const items = sorted.flatMap(o => o.items.map(item => ({
+    'التاريخ':     o.date,
+    'الوجبة':      MEAL_TYPE_LABELS[o.meal_type],
+    'الفئة':       ENTITY_TYPE_LABELS[o.entity_type],
+    'الصنف':       item.meal_name,
+    'الكمية':      item.quantity,
+    'تكلفة الحصة': round(item.portion_cost, 4),
+    'الإجمالي':    round(item.total_cost, 2),
+    'الحالة':      item.unpriced ? 'بدون تسعير' : item.partial ? 'تسعير ناقص' : 'مسعّر',
+    'الاعتماد':    orderStatus(o),
+  })));
+
+  return { summary, items };
 }

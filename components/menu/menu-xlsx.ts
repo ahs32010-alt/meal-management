@@ -1,4 +1,4 @@
-import type { Meal, MealType, ItemCategory, MenuItem } from '@/lib/types';
+import type { Meal, MealType, ItemCategory, MenuItem, EntityType } from '@/lib/types';
 import type { MenuImportRow } from '@/lib/menu-import';
 import { CATEGORY_MARK_RE, CAT_FROM_AR } from '@/lib/sheet-marks';
 import {
@@ -6,8 +6,7 @@ import {
   MEAL_SECTIONS,
   WEEK_NUMBERS,
   WEEK_TITLES,
-  MAIN_ROWS_PER_MEAL,
-  SNACK_ROWS_PER_MEAL,
+  SNACK_POSITION_OFFSET,
   buildSlotMap,
   normalizeSlot,
   slotKey,
@@ -44,6 +43,34 @@ const TOTAL_COLS      = NUM_DAY_COLS + 1;
 const COLD_LABEL  = 'بارد';
 const SNACK_LABEL = 'سناك';
 const DAY_COL_LABEL = 'اليوم';
+
+/**
+ * فئة المنيو (مستفيدين/مرافقين) تُكتب في عنوان كل ورقة وفي اسم الملف. بدونها
+ * كان ملف منيو المستفيدين يُرفع على تبويب المرافقين (أو العكس) بلا أي تنبيه،
+ * وأي صنف يحمل نفس الاسم في الفئتين يُستورد للفئة الخطأ.
+ */
+const ENTITY_MENU_LABEL: Record<EntityType, string> = {
+  beneficiary: 'منيو المستفيدين',
+  companion:   'منيو المرافقين',
+};
+/** جذر الكلمة — يطابق «المستفيدين/المستفيدون/مستفيدين» و«المرافقين/مرافقين». */
+const ENTITY_STEM: Record<EntityType, string> = {
+  beneficiary: 'مستفيد',
+  companion:   'مرافق',
+};
+/** شرح رموز الخلية — يُكتب في صف العنوان ليفهم المستخدم ما يعدّله. */
+const CELL_LEGEND = '(×ن = المضاعف، +ن أو -ن = كمية إضافية)';
+
+/** فئة المنيو المذكورة في نص (اسم ورقة أو عنوان) — أو undefined لو لم تُذكر. */
+function entityMentioned(text: string): EntityType | undefined {
+  const n = norm(text);
+  if (n.includes(ENTITY_STEM.companion))   return 'companion';
+  if (n.includes(ENTITY_STEM.beneficiary)) return 'beneficiary';
+  return undefined;
+}
+
+/** أقصى عدد أصناف في القسم الواحد — الـposition للأساسي يجب أن يبقى تحت إزاحة السناك. */
+const MAX_ROWS_PER_SECTION = SNACK_POSITION_OFFSET;
 
 interface SectionLayout {
   startRow: number;
@@ -136,6 +163,8 @@ export interface ParsedCell {
   name:       string;
   multiplier: number;
   extra:      number;
+  /** رسالة خطأ لو اللاحقة مقروءة لكن قيمتها خارج المسموح (مثل ×0 أو ×150) */
+  invalid?:   string;
 }
 
 /**
@@ -152,6 +181,7 @@ export function parseCellText(text: string, isKnownName: (name: string) => boole
   let extra = 0;
   let sawMult = false;
   let sawExtra = false;
+  let invalid: string | undefined;
 
   // نقشّر لاحقتين على الأكثر (مضاعف + كمية إضافية) من نهاية النص
   for (let guard = 0; guard < 2; guard++) {
@@ -163,7 +193,9 @@ export function parseCellText(text: string, isKnownName: (name: string) => boole
     const mult = token.match(MULT_TOKEN);
     if (mult && !sawMult) {
       const n = parseInt(mult[1], 10);
+      // سابقاً كانت القيمة خارج المدى تُستبدل بـ١ بصمت — الآن خطأ واضح
       if (n >= 1 && n <= 100) multiplier = n;
+      else invalid = `المضاعف ×${n} غير مقبول — المسموح من ×1 إلى ×100`;
       sawMult = true;
       base = base.slice(0, m.index).trim();
       continue;
@@ -181,7 +213,7 @@ export function parseCellText(text: string, isKnownName: (name: string) => boole
     break;
   }
 
-  return { name: base, multiplier, extra };
+  return invalid ? { name: base, multiplier, extra, invalid } : { name: base, multiplier, extra };
 }
 
 // ─── Export ─────────────────────────────────────────────────────────────────
@@ -208,7 +240,14 @@ function measureSections(items: MenuItem[]): { hotRows: number; coldRows: number
   };
 }
 
-export function buildMenuWorkbook(XLSX: typeof import('xlsx'), items: MenuItem[]) {
+export interface MenuWorkbookOptions {
+  /** فئة المنيو — تُكتب في عنوان كل ورقة. الافتراضي: من الأصناف نفسها. */
+  entityType?: EntityType;
+  /** قائمة الأصناف — احتياط لاسم الصنف لو ما وصل مع صف المنيو (join ناقص). */
+  meals?: Meal[];
+}
+
+export function buildMenuWorkbook(XLSX: typeof import('xlsx'), items: MenuItem[], opts: MenuWorkbookOptions = {}) {
   const wb = XLSX.utils.book_new();
   if (!wb.Workbook) wb.Workbook = {};
   if (!wb.Workbook.Views) wb.Workbook.Views = [];
@@ -217,18 +256,28 @@ export function buildMenuWorkbook(XLSX: typeof import('xlsx'), items: MenuItem[]
   const { hotRows, coldRows, snackRows } = measureSections(items);
   const sections = buildSectionLayout(hotRows, coldRows, snackRows);
   const totalRows = 2 + MEAL_SECTIONS.length * (hotRows + coldRows + snackRows);
+  const entityType = opts.entityType ?? items.find(i => i.entity_type)?.entity_type;
+  const mealNameById = new Map((opts.meals ?? []).map(m => [m.id, m.name] as const));
+  const nameOf = (it: MenuItem) => it.meals?.name ?? mealNameById.get(it.meal_id) ?? '';
 
   for (const week of WEEK_NUMBERS) {
-    const sheet = buildWeekSheet(XLSX, items.filter(i => i.week_number === week), week, sections, totalRows);
+    const title = [WEEK_TITLES[week], entityType ? ENTITY_MENU_LABEL[entityType] : '', CELL_LEGEND]
+      .filter(Boolean).join(' — ');
+    const sheet = buildWeekSheet(XLSX, items.filter(i => i.week_number === week), week, sections, totalRows, title, nameOf);
     XLSX.utils.book_append_sheet(wb, sheet, WEEK_TITLES[week]);
   }
   return wb;
 }
 
-export async function exportMenuXLSX(items: MenuItem[], _meals: Meal[]) {
+/**
+ * التصدير — ومع منيو فارغ يُنتج **قالباً** بنفس التخطيط تماماً (العناوين
+ * والأقسام)، فالقالب والتصدير ملف واحد يُقرأ بنفس الكود.
+ */
+export async function exportMenuXLSX(items: MenuItem[], meals: Meal[], entityType?: EntityType) {
   const XLSX = await import('xlsx');
-  const wb = buildMenuWorkbook(XLSX, items);
-  XLSX.writeFile(wb, `قائمة_الطعام_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  const wb = buildMenuWorkbook(XLSX, items, { entityType, meals });
+  const entityPart = entityType ? `${ENTITY_MENU_LABEL[entityType].replace(/\s+/g, '_')}_` : '';
+  XLSX.writeFile(wb, `قائمة_الطعام_${entityPart}${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 function buildWeekSheet(
@@ -237,11 +286,13 @@ function buildWeekSheet(
   week: number,
   sections: SectionLayout[],
   totalRows: number,
+  title: string,
+  nameOf: (it: MenuItem) => string,
 ) {
   const matrix: (string | null)[][] = Array.from({ length: totalRows }, () => Array(TOTAL_COLS).fill(null));
 
   // Row 0: title
-  matrix[0][0] = WEEK_TITLES[week as 1 | 2 | 3 | 4];
+  matrix[0][0] = title;
 
   // Row 1: day headers
   COL_DAYS.forEach((d, idx) => { matrix[1][idx] = d.label; });
@@ -264,7 +315,7 @@ function buildWeekSheet(
       for (let r = 0; r < inSection.length && r < s.rows; r++) {
         const item = inSection[r];
         matrix[s.startRow + r][colIdx] = formatCellText(
-          item.meals?.name ?? '',
+          nameOf(item),
           item.multiplier ?? 1,
           item.extra_quantity ?? 0,
         );
@@ -339,7 +390,7 @@ export interface ParsedMenuImport {
  *   • بداية كل قسم تُعرف من عمود «اليوم» (الفطور/بارد/سناك…)، فيقبل الملف
  *     أقساماً بأي ارتفاع — بما فيها الملفات القديمة ثابتة الأحجام.
  */
-function readSheetLayout(matrix: string[][]): { dayCols: { col: number; day: number }[]; sections: SectionLayout[] } | null {
+function readSheetLayout(matrix: string[][]): { headerRow: number; dayCols: { col: number; day: number }[]; sections: SectionLayout[] } | null {
   const dayByLabel = new Map(MENU_DAYS.map(d => [norm(d.label), d.value]));
 
   let headerRow = -1;
@@ -403,7 +454,7 @@ function readSheetLayout(matrix: string[][]): { dayCols: { col: number; day: num
     meal_type: s.meal_type as MealType,
   }));
 
-  return { dayCols, sections };
+  return { headerRow, dayCols, sections };
 }
 
 /** مُحلِّل قابل للاختبار — يفصل قراءة الملف عن منطق التحويل. */
@@ -411,6 +462,7 @@ export function parseMenuWorkbook(
   XLSX: typeof import('xlsx'),
   wb: import('xlsx').WorkBook,
   meals: Meal[],
+  opts: { entityType?: EntityType } = {},
 ): ParsedMenuImport {
   const errors: string[] = [];
   const rows: ImportedRow[] = [];
@@ -432,12 +484,24 @@ export function parseMenuWorkbook(
   const isSnackMeal = (m: Meal) => m.is_snack === true || m.category === 'snack';
 
   // ورقة → أسبوع. نقبل الاسم المطابق تماماً، أو اسماً يحوي عنوان الأسبوع
-  // (مثل «الأسبوع الأول مستفيدين» في ملف النسخة الاحتياطية)، أو رقم الأسبوع.
+  // (مثل «الأسبوع الأول مستفيدين» في ملف النسخة الاحتياطية)، أو رقم الأسبوع
+  // وحده («1» / «أسبوع 1» / «Week 1»). سابقاً كان أي رقم في أي موضع يكفي، فورقة
+  // مثل «Sheet1» أو «ملاحظات 2» تُقرأ أسبوعاً — وفي وضع الاستبدال تمسحه.
   const weekOfSheet = (sheetName: string): number | undefined => {
     const n = norm(sheetName);
+    const num = latinDigits(n).match(/^(?:ال)?(?:أسبوع|اسبوع|week)?\s*([1-4])$/i);
     return WEEK_NUMBERS.find(w => norm(WEEK_TITLES[w]) === n)
         ?? WEEK_NUMBERS.find(w => n.includes(norm(WEEK_TITLES[w])))
-        ?? WEEK_NUMBERS.find(w => n.includes(String(w)));
+        ?? (num ? WEEK_NUMBERS.find(w => w === Number(num[1])) : undefined);
+  };
+
+  // ملف النسخة الاحتياطية فيه منيو الفئتين (أوراق بلاحقة «مستفيدين»/«مرافقين»)
+  // — نأخذ أوراق الفئة المفتوحة فقط ونتجاهل الأخرى بدل رفض الملف كاملاً.
+  const otherEntitySheets: string[] = [];
+  const isOtherEntity = (text: string) => {
+    if (!opts.entityType) return false;
+    const e = entityMentioned(text);
+    return e !== undefined && e !== opts.entityType;
   };
 
   // ورقتان لنفس الأسبوع تعني ملفاً فيه منيو الفئتين معاً — دمجهما يخلط
@@ -446,6 +510,7 @@ export function parseMenuWorkbook(
   for (const sheetName of wb.SheetNames) {
     const w = weekOfSheet(sheetName);
     if (w === undefined) continue;
+    if (isOtherEntity(sheetName)) { otherEntitySheets.push(sheetName); continue; }
     const prev = sheetByWeek.get(w);
     if (prev) {
       errors.push(`الورقتان "${prev}" و"${sheetName}" تخصّان ${WEEK_TITLES[w as 1 | 2 | 3 | 4]} — أبقِ ورقة واحدة لكل أسبوع`);
@@ -466,6 +531,17 @@ export function parseMenuWorkbook(
     const layout = readSheetLayout(matrix);
     const dayCols = layout?.dayCols ?? COL_DAYS.map((d, col) => ({ col, day: d.value }));
     const sections = layout?.sections ?? LEGACY_SECTIONS;
+
+    // عنوان الورقة (ما فوق صف الأيام) يذكر فئة المنيو — لو كانت الفئة الأخرى
+    // نرفض بدل أن نكتب منيو المستفيدين فوق منيو المرافقين.
+    const titleText = matrix.slice(0, layout?.headerRow ?? 1).flat().join(' ');
+    if (isOtherEntity(titleText)) {
+      const e = entityMentioned(titleText)!;
+      errors.push(
+        `الورقة "${sheetName}" تخصّ ${ENTITY_MENU_LABEL[e]} — افتح تبويب «${ENTITY_MENU_LABEL[e]}» ثم استورد الملف`
+      );
+      continue;
+    }
     touchedWeeks.add(week);
 
     // خانة = (يوم | نوع وجبة). نجمع أصنافها بترتيب الأقسام (حار ثم بارد ثم سناك)
@@ -494,8 +570,12 @@ export function parseMenuWorkbook(
             text = norm(text.replace(catMatch[0], ''));
           }
 
-          const { name, multiplier, extra } = parseCellText(text, isKnownName);
+          const { name, multiplier, extra, invalid } = parseCellText(text, isKnownName);
           if (!name) continue;
+          if (invalid) {
+            errors.push(`${where}: "${name}" — ${invalid}`);
+            continue;
+          }
 
           const exact = mealByNameType.get(`${norm(name)}|${s.meal_type}|${category === 'snack' ? '1' : '0'}`);
           const candidates = (exact && exact.length > 0) ? exact : mealByName.get(norm(name));
@@ -516,6 +596,13 @@ export function parseMenuWorkbook(
             continue;
           }
 
+          // الأساسي: الفئة (حار/بارد) تُؤخذ من الصنف نفسه كما في الشاشة؛ القسم
+          // احتياط فقط لو الصنف بلا فئة. وإلا صنف بارد في قسم الحار يُكتب «حار»
+          // ثم يُصلَّح عند الفتح — أي «تعديل» وهمي في كل رفع.
+          if (category !== 'snack' && (meal.category === 'hot' || meal.category === 'cold')) {
+            category = meal.category;
+          }
+
           const slot = bySlot.get(`${day}|${s.meal_type}`) ?? { day, meal_type: s.meal_type, mains: [], snacks: [] };
           (category === 'snack' ? slot.snacks : slot.mains).push({ meal, category, multiplier, extra, where });
           bySlot.set(`${day}|${s.meal_type}`, slot);
@@ -530,7 +617,7 @@ export function parseMenuWorkbook(
 
       const emit = (list: Pending[], cap: number, isSnack: boolean) => {
         if (list.length > cap) {
-          errors.push(`${slotWhere}: عدد أصناف ${isSnack ? 'السناك' : 'الوجبة'} (${list.length}) أكبر من السعة (${cap})`);
+          errors.push(`${slotWhere}: عدد أصناف ${isSnack ? 'السناك' : 'الوجبة'} (${list.length}) أكبر من الحد الأقصى (${cap})`);
           return;
         }
         list.forEach((p, i) => {
@@ -555,9 +642,16 @@ export function parseMenuWorkbook(
         seen.add(k);
       }
 
-      emit(slot.mains,  MAIN_ROWS_PER_MEAL,  false);
-      emit(slot.snacks, SNACK_ROWS_PER_MEAL, true);
+      // لا سقف عند ٨/٤: الشاشة والتصدير يتّسعان لأي عدد، فالسقف القديم كان
+      // يرفض ملفاً صدّرناه نحن. الحد الوحيد أن يبقى position الأساسي تحت ١٠٠.
+      emit(slot.mains,  MAX_ROWS_PER_SECTION, false);
+      emit(slot.snacks, MAX_ROWS_PER_SECTION, true);
     }
+  }
+
+  if (touchedWeeks.size === 0 && otherEntitySheets.length > 0 && opts.entityType) {
+    const other: EntityType = opts.entityType === 'beneficiary' ? 'companion' : 'beneficiary';
+    errors.push(`الملف يخصّ ${ENTITY_MENU_LABEL[other]} — افتح تبويب «${ENTITY_MENU_LABEL[other]}» ثم استورد الملف`);
   }
 
   return {
@@ -567,11 +661,11 @@ export function parseMenuWorkbook(
   };
 }
 
-export async function importMenuXLSX(file: File, meals: Meal[]): Promise<ParsedMenuImport> {
+export async function importMenuXLSX(file: File, meals: Meal[], entityType?: EntityType): Promise<ParsedMenuImport> {
   const XLSX = await import('xlsx');
   const buffer = await file.arrayBuffer();
   const wb = XLSX.read(new Uint8Array(buffer), { type: 'array' });
-  return parseMenuWorkbook(XLSX, wb, meals);
+  return parseMenuWorkbook(XLSX, wb, meals, { entityType });
 }
 
 // ─── تحقّق الدورة ────────────────────────────────────────────────────────────
@@ -595,7 +689,7 @@ export function verifyMenuRoundTrip(
 ): RoundTripResult {
   const issues: string[] = [];
 
-  const wb = buildMenuWorkbook(XLSX, items);
+  const wb = buildMenuWorkbook(XLSX, items, { meals });
   const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
   const reread = XLSX.read(new Uint8Array(buf), { type: 'array' });
   const parsed = parseMenuWorkbook(XLSX, reread, meals);

@@ -11,7 +11,13 @@ import {
   COL_NOTES,
   COL_ORDER_NO,
   COL_PHONE,
+  COL_DEL_TIME,
   DELIVERY_ORDER_HEADERS,
+  DELIVERY_ORDER_TEMPLATE_ROW,
+  buildDeliveryUpdateBody,
+  creatorRefKey,
+  normalizeDate,
+  normalizeTime,
   DELIVERY_ORDER_REQUIRED_HEADERS,
   buildDeliveryOrderRow,
   formatDeliveryItems,
@@ -207,5 +213,95 @@ describe('رفض الصفوف المعطوبة', () => {
     const { payload, errors } = parseDeliveryOrderRow({ ...base(), [COL_ITEMS]: '' }, REFS, 'صف 3');
     expect(payload).toBeNull();
     expect(errors.some(e => e.includes(COL_ITEMS))).toBe(true);
+  });
+});
+
+describe('القالب ووضع التحديث', () => {
+  it('صف القالب بطول الرؤوس وكل قيمة تحت عمودها', () => {
+    expect(DELIVERY_ORDER_TEMPLATE_ROW).toHaveLength(DELIVERY_ORDER_HEADERS.length);
+    const row = Object.fromEntries(DELIVERY_ORDER_HEADERS.map((h, i) => [h, DELIVERY_ORDER_TEMPLATE_ROW[i]]));
+    expect(row[COL_ENTITY]).toBe('المستفيدون');
+    expect(row[COL_MEAL_TYPE]).toBe('غداء');
+    expect(row[COL_LOCATION]).toBe('مقر الشركة');
+  });
+
+  it('القالب نفسه يُستورد بلا أخطاء وبلا رقم أمر', () => {
+    const row = Object.fromEntries(DELIVERY_ORDER_HEADERS.map((h, i) => [h, DELIVERY_ORDER_TEMPLATE_ROW[i]]));
+    const { payload, errors, orderNumber } = parseDeliveryOrderRow(row, REFS, 'صف 2');
+    expect(errors).toEqual([]);
+    expect(orderNumber).toBeNull();
+    expect(payload!.items).toHaveLength(2);
+  });
+
+  it('يُرجع رقم الأمر منفصلاً عن الحِمل لمطابقة «تحديث الموجود»', () => {
+    const { payload, orderNumber } = parseDeliveryOrderRow(buildDeliveryOrderRow(ORDER), REFS, 'صف 2');
+    expect(orderNumber).toBe('DO-0007');
+    expect(payload).not.toHaveProperty('order_number');
+  });
+
+  it('الكمية صفر تعبر الدورة (النافذة تسمح بها)', () => {
+    const order = { ...ORDER, delivery_order_items: [{ ...ORDER.delivery_order_items![0], quantity: 0 }] } as unknown as DeliveryOrder;
+    const { payload, errors } = parseDeliveryOrderRow(buildDeliveryOrderRow(order), REFS, 'صف 2');
+    expect(errors).toEqual([]);
+    expect(payload!.items[0].quantity).toBe(0);
+  });
+
+  it('وقت القاعدة HH:MM:SS يعبر، ووقت غير مفهوم يُرفض برسالة عربية', () => {
+    const ok = parseDeliveryOrderRow({ ...buildDeliveryOrderRow(ORDER), [COL_DEL_TIME]: '12:30:00' }, REFS, 'صف 2');
+    expect(ok.payload!.delivery_time).toBe('12:30:00');
+    const bad = parseDeliveryOrderRow({ ...buildDeliveryOrderRow(ORDER), [COL_DEL_TIME]: 'الظهر' }, REFS, 'صف 2');
+    expect(bad.payload).toBeNull();
+    expect(bad.errors[0]).toContain('وقت التسليم');
+  });
+
+  it('normalizeTime يقبل الساعة برقم واحد وص/م', () => {
+    expect(normalizeTime('9:05')).toBe('09:05');
+    expect(normalizeTime('1:30 م')).toBe('13:30');
+    expect(normalizeTime('12:00 AM')).toBe('00:00');
+    expect(normalizeTime('')).toBeNull();
+    expect(normalizeTime('25:00')).toBeUndefined();
+  });
+
+  it('normalizeDate لا يزيح اليوم بسبب التوقيت', () => {
+    expect(normalizeDate('2026-08-17')).toBe('2026-08-17');
+    expect(normalizeDate('17/08/2026')).toBe('2026-08-17');
+    expect(normalizeDate('Aug 17, 2026')).toBe('2026-08-17');
+  });
+
+  it('المُنشئ يُطابق بالاسم والجوال معاً عند تكرار الاسم', () => {
+    const refs: DeliveryImportRefs = {
+      ...REFS,
+      creatorIdByName: new Map([['أحمد', 'cr-1']]),
+      creatorIdByNameAndPhone: new Map([[creatorRefKey('أحمد', '0500000000'), 'cr-1'], [creatorRefKey('أحمد', '0511111111'), 'cr-2']]),
+    };
+    const row = { ...buildDeliveryOrderRow(ORDER), [COL_PHONE]: '0511111111' };
+    expect(parseDeliveryOrderRow(row, refs, 'صف 2').payload).toMatchObject({ creator_id: 'cr-2' });
+  });
+
+  it('حِمل التحديث يحفظ التوقيعات وربط أمر التشغيل', () => {
+    const existing = {
+      ...ORDER,
+      source_order_id: 'src-1',
+      creator_signature_url: 'https://x/c.png',
+      receiver_signature_url: 'https://x/r.png',
+      delivery_order_items: [
+        { ...ORDER.delivery_order_items![1], receiver_signature_url: 'https://x/i1.png' },
+        { ...ORDER.delivery_order_items![0], receiver_signature_url: 'https://x/i2.png' },
+      ],
+    } as unknown as DeliveryOrder;
+    const { payload } = parseDeliveryOrderRow(buildDeliveryOrderRow(existing), REFS, 'صف 2');
+    const body = buildDeliveryUpdateBody(existing, payload!);
+    expect(body).toMatchObject({ source_order_id: 'src-1', creator_signature_url: 'https://x/c.png', receiver_signature_url: 'https://x/r.png' });
+    expect(body.items.map(i => i.receiver_signature_url)).toEqual(['https://x/i1.png', 'https://x/i2.png']);
+  });
+});
+
+describe('توافق ورقة النسخة الاحتياطية', () => {
+  it('يقرأ رأسَي المُنشئ بلا ضمّة كما تكتبهما النسخة الاحتياطية', () => {
+    const row = buildDeliveryOrderRow(ORDER);
+    delete row[COL_CREATOR];
+    delete row[COL_PHONE];
+    const { payload } = parseDeliveryOrderRow({ ...row, 'المنشئ': 'خالد', 'جوال المنشئ': '0555555555' }, REFS, 'صف 2');
+    expect(payload).toMatchObject({ created_by_name: 'خالد', created_by_phone: '0555555555' });
   });
 });

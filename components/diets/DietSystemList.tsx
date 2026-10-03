@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { listDiffDetails } from '@/lib/activity-diff';
@@ -10,6 +11,11 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import type { DietSystem, Meal } from '@/lib/types';
 import ExclusionSectionsEditor, { type ExclusionEntry } from '@/components/shared/ExclusionSectionsEditor';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
+import type { ImportMode } from '@/components/shared/ImportModeDialog';
+import { exportXLSX } from '@/lib/xlsx-utils';
+import { DIET_HEADERS, DIET_REQUIRED_HEADERS, DIET_TEMPLATE_ROW, buildDietRows, dietNameKey, parseDietRows } from '@/lib/diet-sheet';
+
+const ImportModal = dynamic(() => import('@/components/shared/ImportModal'), { ssr: false });
 
 const MIGRATION_HINT =
   'جداول «النظام الغذائي» غير موجودة بعد — شغّل الملف supabase/diet-systems-migration.sql في Supabase SQL Editor ثم حدّث الصفحة.';
@@ -27,6 +33,7 @@ export default function DietSystemList() {
   const canAdd = can(currentUser, 'diets', 'add');
   const canEdit = can(currentUser, 'diets', 'edit');
   const canDelete = can(currentUser, 'diets', 'delete');
+  const isAdmin = currentUser?.is_admin === true;
 
   const [diets, setDiets] = useState<DietSystem[]>([]);
   const [meals, setMeals] = useState<Meal[]>([]);
@@ -36,6 +43,7 @@ export default function DietSystemList() {
   const [editing, setEditing] = useState<DietSystem | 'new' | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<DietSystem | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const load = useCallback(async () => {
     setError('');
@@ -44,9 +52,17 @@ export default function DietSystemList() {
         .from('diet_systems')
         .select('id, name, description, created_at, exclusions:diet_system_exclusions(id, meal_id, alternative_meal_id), beneficiary_diets(beneficiary_id)')
         .order('name'),
-      fetchAllRows((from, to) =>
-        supabase.from('meals').select('id, name, english_name, type, is_snack, created_at')
-          .order('type').order('is_snack').order('name').order('id').range(from, to)),
+      // entity_type يميّز صنف المستفيدين عن صنف المرافقين بنفس الاسم في ملف
+      // التصدير/الاستيراد — ونرجع بدونه لو ترقية المرافقين ما اتشغّلت.
+      (async () => {
+        const read = (cols: string) => fetchAllRows((from, to) =>
+          supabase.from('meals').select(cols)
+            .order('type').order('is_snack').order('name').order('id').range(from, to));
+        const r = await read('id, name, english_name, type, is_snack, entity_type, created_at');
+        return r.error && /entity_type|column/i.test(r.error.message)
+          ? read('id, name, english_name, type, is_snack, created_at')
+          : r;
+      })(),
       fetchAllRows((from, to) =>
         supabase.from('beneficiaries').select('id, name, code, entity_type').order('name').order('id').range(from, to)),
     ]);
@@ -74,6 +90,77 @@ export default function DietSystemList() {
     void load();
   };
 
+  // ── التصدير ───────────────────────────────────────────────────────────────
+  // صيغة الملف في lib/diet-sheet.ts — نفسها يقرأها الاستيراد ويبني منها القالب.
+  const handleExport = () => {
+    void exportXLSX(buildDietRows(diets, meals), `الأنظمة_الغذائية_${new Date().toISOString().slice(0, 10)}.xlsx`, 'الأنظمة الغذائية');
+  };
+
+  // ── الاستيراد ─────────────────────────────────────────────────────────────
+  //   • إضافة  — أنظمة جديدة + استبعادات جديدة فقط، الموجود لا يُلمس.
+  //   • تحديث  — كالإضافة + تحديث الوصف والبدائل للأنظمة الموجودة بالاسم.
+  //   • استبدال — استبعادات كل نظام في الملف تصير مطابقة للملف تماماً، والأنظمة
+  //     الغائبة عن الملف تُحذف. الأنظمة الموجودة تُحدَّث في مكانها (لا تُحذف
+  //     وتُعاد) فيبقى إسنادها للمستفيدين.
+  const handleImport = async (rows: Record<string, string>[], mode: ImportMode) => {
+    const { diets: parsed, errors } = parseDietRows(rows, meals);
+    if (errors.length > 0) return { imported: 0, errors: ['لم يُحفظ أي شيء — صحّح الأخطاء التالية ثم أعد الاستيراد:', ...errors] };
+    if (parsed.length === 0) return { imported: 0, errors: ['لم يُعثر على أنظمة في الملف'] };
+
+    const existingByKey = new Map(diets.map(d => [dietNameKey(d.name), d]));
+    const out: string[] = [];
+    let imported = 0;
+
+    for (const pd of parsed) {
+      const existing = existingByKey.get(dietNameKey(pd.name));
+      let dietId = existing?.id;
+      if (!existing) {
+        const { data, error: e } = await supabase.from('diet_systems')
+          .insert({ name: pd.name, description: pd.description ?? null }).select('id').single();
+        if (e || !data) { out.push(`${pd.name}: ${e?.message ?? 'تعذّر إنشاء النظام'}`); continue; }
+        dietId = (data as { id: string }).id;
+      } else if (mode !== 'append' && pd.description !== undefined && (existing.description ?? null) !== pd.description) {
+        const { error: e } = await supabase.from('diet_systems').update({ description: pd.description }).eq('id', existing.id);
+        if (e) { out.push(`${pd.name}: ${e.message}`); continue; }
+      }
+
+      if (existing && mode === 'replace') {
+        const keep = new Set(pd.exclusions.map(x => x.meal_id));
+        const removed = (existing.exclusions ?? []).map(x => x.meal_id).filter(id => !keep.has(id));
+        if (removed.length > 0) {
+          const { error: e } = await supabase.from('diet_system_exclusions').delete().eq('diet_id', existing.id).in('meal_id', removed);
+          if (e) { out.push(`${pd.name}: ${e.message}`); continue; }
+        }
+      }
+      if (pd.exclusions.length > 0) {
+        const { error: e } = await supabase.from('diet_system_exclusions').upsert(
+          pd.exclusions.map(x => ({ diet_id: dietId, meal_id: x.meal_id, alternative_meal_id: x.alternative_meal_id })),
+          { onConflict: 'diet_id,meal_id', ignoreDuplicates: mode === 'append' },
+        );
+        if (e) { out.push(`${pd.name}: ${e.message}`); continue; }
+      }
+      imported++;
+    }
+
+    if (mode === 'replace' && out.length === 0) {
+      const keep = new Set(parsed.map(p => dietNameKey(p.name)));
+      for (const d of diets.filter(x => !keep.has(dietNameKey(x.name)))) {
+        const { error: e } = await supabase.from('diet_systems').delete().eq('id', d.id);
+        if (e) out.push(`تعذّر حذف النظام «${d.name}»: ${e.message}`);
+      }
+    }
+
+    if (imported > 0) {
+      void logActivity({
+        action: 'create',
+        entity_type: 'diet_system',
+        entity_name: `استيراد أنظمة غذائية (${imported})`,
+        details: { imported, errors_count: out.length, mode, source: 'excel_import' },
+      });
+    }
+    return { imported, errors: out };
+  };
+
   if (currentUser && !canView) {
     return <div className="p-6"><div className="card p-8 text-center text-slate-500">لا تملك صلاحية عرض هذه الصفحة</div></div>;
   }
@@ -87,6 +174,24 @@ export default function DietSystemList() {
             أنشئ النظام وحدّد أصنافه المستبعدة، ثم اختره للمستفيد من خانة «النظام الغذائي الأساسي» في صفحته — تنطبق الاستبعادات على منيوه تلقائياً.
           </p>
         </div>
+        <div className="flex items-center gap-2">
+        {/* الاستيراد للأدمن فقط — نفس صفحة الأصناف؛ التصدير لكل من يرى الصفحة */}
+        {isAdmin && !error && (
+          <button onClick={() => setImportOpen(true)} disabled={loading} className="btn-secondary text-sm">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            استيراد
+          </button>
+        )}
+        {!error && (
+          <button onClick={handleExport} disabled={loading || diets.length === 0} className="btn-secondary text-sm">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            تصدير
+          </button>
+        )}
         {canAdd && !error && (
           <button className="btn-primary" onClick={() => setEditing('new')}>
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -95,6 +200,7 @@ export default function DietSystemList() {
             نظام جديد
           </button>
         )}
+        </div>
       </div>
 
       {error && <div className="bg-amber-50 border border-amber-200 text-amber-800 px-5 py-4 rounded-xl text-sm">{error}</div>}
@@ -195,6 +301,21 @@ export default function DietSystemList() {
         onConfirm={() => { if (confirmDelete) void handleDelete(confirmDelete); }}
         onCancel={() => setConfirmDelete(null)}
       />
+
+      {importOpen && (
+        <ImportModal
+          title="الأنظمة الغذائية"
+          templateHeaders={DIET_HEADERS}
+          requiredHeaders={DIET_REQUIRED_HEADERS}
+          templateRow={DIET_TEMPLATE_ROW}
+          modes={['append', 'update', 'replace']}
+          updateHint="تحديث وصف الأنظمة الموجودة (بالاسم) وبدائل أصنافها، وإضافة الجديد — بلا حذف"
+          replaceWarning="استبعادات كل نظام في الملف ستصير مطابقة للملف تماماً، وكل نظام غير موجود في الملف سيُحذف — ومعه إسناده للمستفيدين واستبعاداته من منيوهم (المحظورات الشخصية لا تتأثر). لا يُحفظ شيء لو في الملف أي خطأ."
+          onImport={handleImport}
+          onClose={() => setImportOpen(false)}
+          onDone={() => { setImportOpen(false); void load(); }}
+        />
+      )}
 
       {editing && (
         <DietModal

@@ -127,7 +127,10 @@ function CompactGrid({ title, color, items, numKey, columns = 4 }: {
   const rows = Math.ceil(items.length / columns);
   return (
     <div style={{ breakInside: 'avoid', marginBottom: 8 }}>
-      <div style={{ ...s.sectionHeader, background: color.bg, color: color.text }}>{title}</div>
+      {/* المجموع في العنوان — نفس ما تعرضه صفحة التقرير */}
+      <div style={{ ...s.sectionHeader, background: color.bg, color: color.text }}>
+        {title} — المجموع: {items.reduce((sum, x) => sum + ((x[numKey] as number) || 0), 0)}
+      </div>
       <table style={s.table}>
         <tbody>
           {Array.from({ length: rows }).map((_, rowIdx) => (
