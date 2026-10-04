@@ -28,7 +28,7 @@ import {
   SizeFields, customLdFilterSuffix, matchesCustomLdFilter, type CustomLdFilter,
   colorFilterSuffix, matchesColorFilter, type ColorFilter, type LdSettings,
 } from './ld-settings';
-import { TIER_LABELS, colorsInUse, sortByTierAndDiet, stickerColorKey, stickerTier } from './ld-diet-order';
+import { TIER_LABELS, colorsInUse, sortByTierAndDiet, stickerColorKey, stickerTier, tierDietGroups } from './ld-diet-order';
 import { LD_CATEGORY, type LdMealCustomization } from './ld-types';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
@@ -65,7 +65,7 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   const [pdfMode, setPdfMode] = useState<PdfMode>('single');
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
-  const { headerUrl, dietColors, hiddenColors } = settings;
+  const { headerUrl, dietColors, dietOrder, hiddenColors } = settings;
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
@@ -210,8 +210,13 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   const visibleRows = useMemo(() => {
     const filtered = colorFiltered.filter(r => !hiddenColors.includes(stickerColorKey(dietOfRow(r), dietColors)));
     // ترتيب ثابت دائماً: كل الأنظمة ← Ⓡ ← وجبات مخصصة (الأنظمة أبجدياً والعادي أولاً)
-    return sortByTierAndDiet(filtered, r => r.ben, dietTypes);
-  }, [colorFiltered, hiddenColors, dietColors, dietTypes]);
+    return sortByTierAndDiet(filtered, r => r.ben, dietOrder);
+  }, [colorFiltered, hiddenColors, dietColors, dietOrder]);
+  // نفس مجموعات الفرز للوحة الترتيب — من القائمة كاملة قبل إخفاء الألوان
+  const tierGroups = useMemo(
+    () => tierDietGroups(customFiltered, r => r.ben, dietOrder),
+    [customFiltered, dietOrder],
+  );
   // مفتاح المجموعة = المرتبة + النظام: صاحب الوجبات المخصصة ينفصل عن نفس نظامه في المراتب الأعلى
   const groupKeyOf = (r: (typeof visibleRows)[number]) => `${stickerTier(r.ben)}|${dietOfRow(r)}`;
   const groupCounts = useMemo(() => {
@@ -354,7 +359,7 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
             <HiddenColorsControl colors={colorChips} settings={settings} />
             {/* الترتيب والألوان قسمان منفصلان؛ الترتيب يُخفى من الإعدادات */}
             <div className={`grid gap-4 items-start max-w-5xl ${settings.showDietOrder ? 'lg:grid-cols-2' : 'max-w-2xl'}`}>
-              {settings.showDietOrder && <DietOrderPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />}
+              {settings.showDietOrder && <DietOrderPanel groups={tierGroups} settings={settings} />}
               <DietColorsPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />
             </div>
           </>

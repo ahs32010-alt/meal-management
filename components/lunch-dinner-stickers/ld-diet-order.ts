@@ -112,15 +112,53 @@ export function stickerTier(b: TierInput): StickerTier {
   return 0;
 }
 
+// ── ترتيب الأنظمة داخل كل مرتبة ──────────────────────────────────────────────
+// الترتيب المحفوظ مفاتيحه «مرتبة|نظام» — نفس النظام قد يظهر في أكثر من مرتبة
+// (عادي بلا Ⓡ، عادي بـⓇ، عادي بوجبات مخصصة) ولكل مرتبة ترتيبها المستقل.
+
+export const tierKey = (tier: StickerTier, diet: string) => `${tier}|${diet}`;
+const dietOfKey = (key: string) => key.slice(key.indexOf('|') + 1);
+
+/** الترتيب الافتراضي: النظام العادي أولاً، ثم أبجدياً. */
+export function defaultDietOrder(diets: string[]): string[] {
+  return [...diets].sort((a, b) =>
+    a === NORMAL_DIET ? -1 : b === NORMAL_DIET ? 1 : a.localeCompare(b, 'ar'));
+}
+
 /**
- * فرز بالمرتبة أولاً، ثم بترتيب الأنظمة داخل المرتبة، ثم الترتيب الأصلي.
- * النظام العادي أول نظام دائماً داخل كل مرتبة.
+ * الأنظمة الموجودة في كل مرتبة (٣ مجموعات) بالترتيب الفعلي مع عدد ستيكراتها —
+ * هي نفسها ما تعرضه لوحة الترتيب وما يُفرز به، فلا يختلفان أبداً.
+ * من ليس له نظام لا يظهر هنا، ويأتي آخر مرتبته.
  */
-export function sortByTierAndDiet<T>(items: T[], getBen: (item: T) => TierInput, order: string[]): T[] {
-  const normalFirst = [NORMAL_DIET, ...order.filter(d => d !== NORMAL_DIET)];
-  const byDiet = sortByDietOrder(items, i => getBen(i).diet_type?.trim() ?? NO_DIET, normalFirst);
-  return byDiet
-    .map((item, i) => ({ item, i, t: stickerTier(getBen(item)) }))
-    .sort((a, b) => (a.t === b.t ? a.i - b.i : a.t - b.t))
+export function tierDietGroups<T>(
+  items: T[], getBen: (item: T) => TierInput, saved: string[],
+): { diet: string; count: number }[][] {
+  const counts = [new Map<string, number>(), new Map<string, number>(), new Map<string, number>()];
+  for (const it of items) {
+    const b = getBen(it);
+    const diet = b.diet_type?.trim() ?? NO_DIET;
+    if (!diet) continue;
+    const m = counts[stickerTier(b)];
+    m.set(diet, (m.get(diet) ?? 0) + 1);
+  }
+  return counts.map((m, t) => {
+    const keys = defaultDietOrder([...m.keys()]).map(d => tierKey(t as StickerTier, d));
+    return effectiveDietOrder(keys, saved).map(k => ({ diet: dietOfKey(k), count: m.get(dietOfKey(k)) ?? 0 }));
+  });
+}
+
+/** فرز بالمرتبة أولاً، ثم بترتيب الأنظمة داخل المرتبة، ثم الترتيب الأصلي. */
+export function sortByTierAndDiet<T>(items: T[], getBen: (item: T) => TierInput, saved: string[]): T[] {
+  const rank = new Map<string, number>();
+  tierDietGroups(items, getBen, saved).forEach((g, t) =>
+    g.forEach((x, i) => rank.set(tierKey(t as StickerTier, x.diet), i)));
+  return items
+    .map((item, i) => {
+      const b = getBen(item);
+      const t = stickerTier(b);
+      const diet = b.diet_type?.trim() ?? NO_DIET;
+      return { item, i, t, r: diet ? rank.get(tierKey(t, diet)) ?? Infinity : Infinity };
+    })
+    .sort((a, b) => a.t - b.t || a.r - b.r || a.i - b.i)
     .map(x => x.item);
 }

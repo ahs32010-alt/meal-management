@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
-import { effectiveDietOrder, moveDiet, moveDietTo, NO_DIET } from './ld-diet-order';
+import { TIER_LABELS, moveDiet, moveDietTo, NO_DIET, tierKey, type StickerTier } from './ld-diet-order';
 import ColorPicker from '@/components/shared/ColorPicker';
 
 export const HEADER_KEY = 'ldStickerHeaderUrl';
@@ -264,30 +264,29 @@ function Collapsible({ title, icon, hint, defaultOpen = false, children }: {
 
 // ── ترتيب الأنظمة الغذائية ────────────────────────────────────────────────────
 /**
- * ترتيب فرز الستيكرات حسب النظام الغذائي — مستقل عن الألوان. السحب والإفلات
- * من ⋮⋮ أو أزرار: للأعلى، خطوة، خطوة، للأسفل. مشترك لكل المستخدمين.
+ * ترتيب الستيكرات كما تُعرض وتُصدَّر: ٣ أقسام ثابتة (الأنظمة ← Ⓡ ← وجبات مخصصة)،
+ * وداخل كل قسم تُرتَّب الأنظمة بالسحب من ⋮⋮ أو بالأزرار. القسم يحدّده المستفيد
+ * (خيار Ⓡ / الوجبات المخصصة) لا النظام، فالنقل بين الأقسام غير ممكن من هنا.
+ * مشترك لكل المستخدمين.
  */
-export function DietOrderPanel({ dietTypes, settings, counts, defaultOpen }: {
-  dietTypes: string[];
+export function DietOrderPanel({ groups, settings, defaultOpen }: {
+  /** الأنظمة في كل قسم بالترتيب الفعلي — من tierDietGroups */
+  groups: { diet: string; count: number }[][];
   settings: LdSettings;
-  /** عدد الستيكرات لكل نظام */
-  counts?: Map<string, number>;
   defaultOpen?: boolean;
 }) {
   const { dietColors, dietOrder, setDietOrder, sharedSettings } = settings;
-  const ordered = effectiveDietOrder(dietTypes, dietOrder);
-  const move = (diet: string, delta: -1 | 1) => setDietOrder(moveDiet(dietTypes, dietOrder, diet, delta));
-  const moveTo = (diet: string, idx: number) => setDietOrder(moveDietTo(dietTypes, dietOrder, diet, idx));
   const [dragging, setDragging] = useState<string | null>(null);
-  const [dropAt, setDropAt] = useState<number | null>(null);
+  const [dropAt, setDropAt] = useState<string | null>(null);
 
-  if (dietTypes.length === 0) return null;
+  const total = groups.reduce((n, g) => n + g.length, 0);
+  if (total === 0) return null;
   const iconBtn = 'p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-25 disabled:pointer-events-none';
 
   return (
     <Collapsible
       title="ترتيب الأنظمة الغذائية"
-      hint={`${dietTypes.length} نظام`}
+      hint={groups.map((g, t) => `${TIER_LABELS[t]} ${g.length}`).join(' · ')}
       defaultOpen={defaultOpen}
       icon={
         <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -297,52 +296,76 @@ export function DietOrderPanel({ dietTypes, settings, counts, defaultOpen }: {
     >
       <div className="flex items-center justify-between gap-2 py-2">
         <p className="text-[11px] text-slate-500">
-          اسحب النظام من <b>⋮⋮</b> لمكانه، أو استخدم الأزرار. الستيكرات تُعرض وتُصدَّر بهذا الترتيب، ومن ليس له نظام في الآخر.
+          نفس ترتيب الستيكرات بالضبط. رتّب الأنظمة داخل كل قسم بالسحب من <b>⋮⋮</b> أو بالأزرار، ومن ليس له نظام في آخر قسمه.
           {!sharedSettings && <span className="text-amber-600"> (محفوظ على هذا الجهاز فقط — شغّل supabase/sticker-settings-migration.sql ليصير مشتركاً)</span>}
         </p>
         {dietOrder.length > 0 && (
           <button type="button" onClick={() => setDietOrder([])}
             className="text-[11px] text-slate-400 hover:text-slate-700 underline whitespace-nowrap">
-            ترتيب أبجدي
+            الترتيب الافتراضي
           </button>
         )}
       </div>
-      <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg">
-        {ordered.map((diet, idx) => {
-          const color = dietColors[diet];
-          const count = counts?.get(diet);
+      <div className="space-y-3">
+        {groups.map((group, t) => {
+          const tier = t as StickerTier;
+          const keys = group.map(g => tierKey(tier, g.diet));
+          const move = (key: string, delta: -1 | 1) => setDietOrder(moveDiet(keys, dietOrder, key, delta));
+          const moveTo = (key: string, idx: number) => setDietOrder(moveDietTo(keys, dietOrder, key, idx));
+          const sectionCount = group.reduce((n, g) => n + g.count, 0);
           return (
-            <div
-              key={diet}
-              draggable
-              onDragStart={e => { setDragging(diet); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', diet); }}
-              onDragEnd={() => { setDragging(null); setDropAt(null); }}
-              onDragOver={e => { if (dragging) { e.preventDefault(); setDropAt(idx); } }}
-              onDrop={e => { e.preventDefault(); if (dragging) moveTo(dragging, idx); setDragging(null); setDropAt(null); }}
-              className={`flex items-center gap-2 px-2 py-1.5 transition-colors ${dragging === diet ? 'opacity-40' : ''} ${
-                dropAt === idx && dragging && dragging !== diet ? 'bg-emerald-50 ring-2 ring-inset ring-emerald-300' : ''}`}
-            >
-              <span className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 select-none px-0.5 text-lg leading-none" title="اسحب لتغيير الترتيب">⋮⋮</span>
-              <span className="w-6 text-center text-xs font-bold text-slate-400 shrink-0">{idx + 1}</span>
-              <span className="flex items-center gap-2 font-medium text-sm flex-1 min-w-0 text-slate-700">
-                <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: color || '#ffffff' }} />
-                <span className="truncate" title={diet}>{diet}</span>
-                {count !== undefined && <span className="text-[11px] text-slate-400 font-normal shrink-0">({count})</span>}
-              </span>
-              <span className="flex items-center shrink-0">
-                <button type="button" onClick={() => moveTo(diet, 0)} disabled={idx === 0} title="للأعلى" aria-label={`نقل ${diet} للأعلى`} className={iconBtn}>
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 11l7-7 7 7M5 19l7-7 7 7" /></svg>
-                </button>
-                <button type="button" onClick={() => move(diet, -1)} disabled={idx === 0} title="خطوة لأعلى" aria-label={`تحريك ${diet} لأعلى`} className={iconBtn}>
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" /></svg>
-                </button>
-                <button type="button" onClick={() => move(diet, 1)} disabled={idx === ordered.length - 1} title="خطوة لأسفل" aria-label={`تحريك ${diet} لأسفل`} className={iconBtn}>
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
-                </button>
-                <button type="button" onClick={() => moveTo(diet, ordered.length - 1)} disabled={idx === ordered.length - 1} title="للأسفل" aria-label={`نقل ${diet} للأسفل`} className={iconBtn}>
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 13l-7 7-7-7M19 5l-7 7-7-7" /></svg>
-                </button>
-              </span>
+            <div key={t}>
+              <div className="flex items-center gap-2 px-2 py-1.5 rounded-t-lg bg-emerald-50 border border-emerald-100 border-b-0">
+                <span className="text-xs font-extrabold text-emerald-700">{t + 1}.</span>
+                <span className="text-xs font-extrabold text-emerald-800">{TIER_LABELS[t]}</span>
+                <span className="text-[11px] text-emerald-600">({sectionCount} ستيكر)</span>
+              </div>
+              {group.length === 0 ? (
+                <div className="px-3 py-2 text-[11px] text-slate-400 border border-slate-100 rounded-b-lg">لا يوجد أحد في هذا القسم.</div>
+              ) : (
+                <div className="divide-y divide-slate-100 border border-slate-100 rounded-b-lg">
+                  {group.map(({ diet, count }, idx) => {
+                    const key = tierKey(tier, diet);
+                    const color = dietColors[diet];
+                    // السحب داخل نفس القسم فقط
+                    const canDrop = dragging !== null && keys.includes(dragging) && dragging !== key;
+                    return (
+                      <div
+                        key={key}
+                        draggable
+                        onDragStart={e => { setDragging(key); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', key); }}
+                        onDragEnd={() => { setDragging(null); setDropAt(null); }}
+                        onDragOver={e => { if (canDrop) { e.preventDefault(); setDropAt(key); } }}
+                        onDrop={e => { e.preventDefault(); if (canDrop) moveTo(dragging!, idx); setDragging(null); setDropAt(null); }}
+                        className={`flex items-center gap-2 px-2 py-1.5 transition-colors ${dragging === key ? 'opacity-40' : ''} ${
+                          dropAt === key && canDrop ? 'bg-emerald-50 ring-2 ring-inset ring-emerald-300' : ''}`}
+                      >
+                        <span className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 select-none px-0.5 text-lg leading-none" title="اسحب لتغيير الترتيب">⋮⋮</span>
+                        <span className="w-6 text-center text-xs font-bold text-slate-400 shrink-0">{idx + 1}</span>
+                        <span className="flex items-center gap-2 font-medium text-sm flex-1 min-w-0 text-slate-700">
+                          <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: color || '#ffffff' }} />
+                          <span className="truncate" title={diet}>{diet}</span>
+                          <span className="text-[11px] text-slate-400 font-normal shrink-0">({count})</span>
+                        </span>
+                        <span className="flex items-center shrink-0">
+                          <button type="button" onClick={() => moveTo(key, 0)} disabled={idx === 0} title="لأول القسم" aria-label={`نقل ${diet} لأول القسم`} className={iconBtn}>
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 11l7-7 7 7M5 19l7-7 7 7" /></svg>
+                          </button>
+                          <button type="button" onClick={() => move(key, -1)} disabled={idx === 0} title="خطوة لأعلى" aria-label={`تحريك ${diet} لأعلى`} className={iconBtn}>
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" /></svg>
+                          </button>
+                          <button type="button" onClick={() => move(key, 1)} disabled={idx === group.length - 1} title="خطوة لأسفل" aria-label={`تحريك ${diet} لأسفل`} className={iconBtn}>
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
+                          </button>
+                          <button type="button" onClick={() => moveTo(key, group.length - 1)} disabled={idx === group.length - 1} title="لآخر القسم" aria-label={`نقل ${diet} لآخر القسم`} className={iconBtn}>
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 13l-7 7-7-7M19 5l-7 7-7-7" /></svg>
+                          </button>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })}

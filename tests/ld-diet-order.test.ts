@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { colorsInUse, effectiveDietOrder, moveDiet, moveDietTo, sortByDietOrder, sortByTierAndDiet, stickerColorKey } from '@/components/lunch-dinner-stickers/ld-diet-order';
+import { colorsInUse, effectiveDietOrder, moveDiet, moveDietTo, sortByDietOrder, sortByTierAndDiet, stickerColorKey, tierDietGroups } from '@/components/lunch-dinner-stickers/ld-diet-order';
 
 describe('effectiveDietOrder', () => {
   it('puts saved diets first and appends new ones in incoming order', () => {
@@ -74,6 +74,32 @@ describe('sortByTierAndDiet', () => {
       b(9, 'نظام غذائي عادي'),
     ];
     const out = sortByTierAndDiet(items, x => x, []).map(x => x.n);
-    expect(out).toEqual([5, 9, 1, 7, 6, 4, 8, 2, 3]);
+    expect(out).toEqual([5, 9, 1, 7, 6, 8, 4, 2, 3]);
+  });
+
+  it('saved per-tier order wins, and each tier is ordered independently', () => {
+    const items = [
+      b(1, 'نظام غذائي عادي'),
+      b(2, 'نظام غذائي سكري'),
+      b(3, 'نظام غذائي عادي', { low_carb: true }),
+      b(4, 'نظام غذائي سكري', { low_carb: true }),
+    ];
+    // في المرتبة الأولى: السكري قبل العادي — والمرتبة الثانية تبقى افتراضية
+    const out = sortByTierAndDiet(items, x => x, ['0|نظام غذائي سكري']).map(x => x.n);
+    expect(out).toEqual([2, 1, 3, 4]);
+  });
+});
+
+describe('tierDietGroups', () => {
+  it('lists diets per tier with counts, normal first by default, skipping no-diet', () => {
+    const g = tierDietGroups([
+      { diet_type: 'نظام غذائي سكري' }, { diet_type: 'نظام غذائي عادي' }, { diet_type: 'نظام غذائي عادي' },
+      { diet_type: '' }, { diet_type: 'نظام غذائي عادي', custom_ld_meals: true },
+    ], x => x, []);
+    expect(g).toEqual([
+      [{ diet: 'نظام غذائي عادي', count: 2 }, { diet: 'نظام غذائي سكري', count: 1 }],
+      [],
+      [{ diet: 'نظام غذائي عادي', count: 1 }],
+    ]);
   });
 });

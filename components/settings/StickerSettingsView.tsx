@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Beneficiary } from '@/lib/types';
 import { fetchStickerBeneficiaries } from '@/components/lunch-dinner-stickers/ld-fetch';
 import { DietOrderPanel, useLdStickerSettings } from '@/components/lunch-dinner-stickers/ld-settings';
+import { tierDietGroups } from '@/components/lunch-dinner-stickers/ld-diet-order';
 
 /**
  * إعدادات ستيكرات الغداء والعشاء (للأدمن): ترتيب الأنظمة الغذائية، وإظهار
@@ -18,16 +19,8 @@ export default function StickerSettingsView() {
     void fetchStickerBeneficiaries(false).then(r => setBens(r.data));
   }, []);
 
-  const dietTypes = useMemo(() => {
-    const set = new Set<string>();
-    bens.forEach(b => { const d = b.diet_type?.trim(); if (d) set.add(d); });
-    return [...set].sort((a, b) => a.localeCompare(b, 'ar'));
-  }, [bens]);
-  const counts = useMemo(() => {
-    const m = new Map<string, number>();
-    bens.forEach(b => { const d = b.diet_type?.trim(); if (d) m.set(d, (m.get(d) ?? 0) + 1); });
-    return m;
-  }, [bens]);
+  // نفس أقسام الفرز في صفحة الستيكرات: الأنظمة ← Ⓡ ← وجبات مخصصة
+  const groups = useMemo(() => tierDietGroups(bens, b => b, settings.dietOrder), [bens, settings.dietOrder]);
 
   return (
     <div className="space-y-4 max-w-2xl">
@@ -70,9 +63,7 @@ export default function StickerSettingsView() {
         </div>
       </div>
 
-      {dietTypes.length > 0 && (
-        <DietOrderPanel dietTypes={dietTypes} settings={settings} counts={counts} defaultOpen />
-      )}
+      <DietOrderPanel groups={groups} settings={settings} defaultOpen />
     </div>
   );
 }
