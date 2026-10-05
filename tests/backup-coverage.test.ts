@@ -21,6 +21,7 @@ const INTENTIONALLY_EXCLUDED = [
   'app_users',           // المستخدمون والصلاحيات لا تتأثر بالاستعادة
   'activity_log',        // السجل لا يتأثر
   'pending_actions',     // طابور موافقات لحظي
+  'backup_job_log',      // سجل تشغيلات النسخة الليلية نفسها — لا يُستعاد
   'telegram_link_codes', // ربط حسابات تيليجرام بالمستخدمين — يتبع app_users
   'telegram_links',
   'telegram_pending',

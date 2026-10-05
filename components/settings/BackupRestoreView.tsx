@@ -6,7 +6,7 @@ import { logActivity } from '@/lib/activity-log';
 import { useCurrentUser } from '@/lib/use-current-user';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import {
-  AUTO_BACKUP_RETENTION,
+  AUTO_BACKUP_RETENTION_DAYS,
   BACKUP_TABLE_LABELS,
   type BackupRow,
   type BackupSummary,
@@ -141,6 +141,37 @@ export default function BackupRestoreView() {
   }, [supabase]);
 
   useEffect(() => { fetchBackups(); }, [fetchBackups]);
+
+  /**
+   * صحّة النسخة الليلية: آخر تشغيل في backup_job_log (backup-daily-7days-migration)
+   * + عمر آخر نسخة تلقائية. فشلت المهمة شهراً كاملاً بصمت قبل هذا التنبيه.
+   */
+  const [jobHealth, setJobHealth] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    if (loading) return;
+    void (async () => {
+      const fmt = (iso: string) => new Date(iso).toLocaleString('ar-SA-u-nu-latn', { dateStyle: 'medium', timeStyle: 'short' });
+      const lastAuto = backups.find(b => b.trigger_type === 'auto_daily');
+      const ageH = lastAuto ? (Date.now() - new Date(lastAuto.created_at).getTime()) / 3_600_000 : Infinity;
+      const { data } = await supabase
+        .from('backup_job_log').select('ran_at, ok, message').order('ran_at', { ascending: false }).limit(1);
+      const last = (data ?? [])[0] as { ran_at: string; ok: boolean; message: string | null } | undefined;
+      if (last && !last.ok) {
+        setJobHealth({ ok: false, text: `⚠️ فشلت النسخة الليلية الأخيرة (${fmt(last.ran_at)}): ${last.message ?? 'خطأ غير معروف'}` });
+      } else if (ageH > 26) {
+        setJobHealth({
+          ok: false,
+          text: lastAuto
+            ? `⚠️ آخر نسخة تلقائية قبل ${Math.floor(ageH / 24)} يوم (${fmt(lastAuto.created_at)}) — النسخة الليلية لا تعمل.`
+            : '⚠️ لا توجد أي نسخة تلقائية — النسخة الليلية لا تعمل.',
+        });
+      } else if (last) {
+        setJobHealth({ ok: true, text: `✓ النسخة الليلية تعمل — آخر تشغيل ${fmt(last.ran_at)}.` });
+      } else {
+        setJobHealth(null);
+      }
+    })();
+  }, [loading, backups, supabase]);
 
   // ── Run backup (manual or auto) ──────────────────────────────────────────
   const runBackup = useCallback(async (triggerType: BackupTriggerType, notes?: string) => {
@@ -384,8 +415,13 @@ export default function BackupRestoreView() {
             <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
               النسخة التلقائية اليومية تعمل عبر <span className="font-semibold text-slate-700">pg_cron</span> في الوقت المحدّد أدناه (تقدر تغيّره).
               ولو ما تشغّلت لأي سبب، يتم أخذ نسخة فالبَك تلقائياً عند فتح هذا التبويب.
-              يُحتفظ بآخر {AUTO_BACKUP_RETENTION} نسخ تلقائية فقط؛ اليدوية و&quot;قبل الاستعادة&quot; لا تُحذف تلقائياً.
+              يُحتفظ بالنسخ التلقائية لآخر {AUTO_BACKUP_RETENTION_DAYS} أيام فقط والأقدم تُحذف تلقائياً؛ اليدوية و&quot;قبل الاستعادة&quot; لا تُحذف.
             </p>
+            {jobHealth && (
+              <p className={`text-xs mt-2 px-3 py-2 rounded-lg border ${jobHealth.ok ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                {jobHealth.text}
+              </p>
+            )}
           </div>
           <button
             type="button"

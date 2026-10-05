@@ -165,9 +165,10 @@ export interface BackupRow {
   notes: string | null;
 }
 
-// عدد النسخ التلقائية التي نحتفظ بها (يُحذف ما زاد).
+// مدة الاحتفاظ بالنسخ التلقائية بالأيام — الأقدم تُحذف (نفس سياسة
+// create_daily_backup في backup-daily-7days-migration.sql).
 // النسخ اليدوية و pre_restore لا تُحذف تلقائياً (تُترك للمستخدم).
-export const AUTO_BACKUP_RETENTION = 3;
+export const AUTO_BACKUP_RETENTION_DAYS = 7;
 
 // ─── إنشاء snapshot ──────────────────────────────────────────────────────────
 
@@ -354,18 +355,8 @@ export async function saveBackup(
 }
 
 async function pruneOldAutoBackups(supabase: SupabaseClient): Promise<void> {
-  const { data } = await supabase
-    .from('backups')
-    .select('id, created_at')
-    .eq('trigger_type', 'auto_daily')
-    .order('created_at', { ascending: false });
-
-  const list = (data ?? []) as { id: string; created_at: string }[];
-  if (list.length <= AUTO_BACKUP_RETENTION) return;
-
-  const toDelete = list.slice(AUTO_BACKUP_RETENTION).map(b => b.id);
-  if (toDelete.length === 0) return;
-  await supabase.from('backups').delete().in('id', toDelete);
+  const cutoff = new Date(Date.now() - AUTO_BACKUP_RETENTION_DAYS * 86_400_000).toISOString();
+  await supabase.from('backups').delete().eq('trigger_type', 'auto_daily').lt('created_at', cutoff);
 }
 
 // ─── فحص آخر نسخة احتياطية ───────────────────────────────────────────────────
