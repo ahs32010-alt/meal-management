@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import type { Meal } from '@/lib/types';
+import ConfirmDialog from '@/components/shared/ConfirmDialog';
 
 /**
  * محرّر المحظورات مقسّماً على الوجبات (فطور/غداء/عشاء + سناكاتها) — لكل صنف
@@ -12,6 +14,9 @@ export interface ExclusionEntry {
   meal_id: string;
   alternative_meal_id: string;
 }
+
+/** طلب تأكيد قبل عملية جماعية (استبعاد الكل / إلغاء الكل) */
+type ConfirmRequest = { title: string; message: string; confirmLabel: string; run: () => void };
 
 // ─── Meal type exclusion section ────────────────────────────────────────────
 type SectionColorKey = 'amber' | 'amber-snack' | 'emerald' | 'emerald-snack' | 'blue' | 'blue-snack';
@@ -27,13 +32,14 @@ const SECTION_STYLES: Record<SectionColorKey, { header: string; badge: string; c
 
 export function MealTypeSection({
   label, color, items, sectionMeals, excludedIds, allMeals,
-  onAdd, onRemove, onSetAlt, mealById, isSnack,
+  onAdd, onRemove, onSetAlt, mealById, isSnack, onConfirm,
 }: {
   label: string; color: SectionColorKey; isSnack?: boolean;
   items: ExclusionEntry[]; sectionMeals: Meal[]; excludedIds: string[]; allMeals: Meal[];
   onAdd: (m: Meal) => void; onRemove: (id: string) => void;
   onSetAlt: (mealId: string, altId: string) => void;
   mealById: (id: string) => Meal | undefined;
+  onConfirm: (req: ConfirmRequest) => void;
 }) {
   const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState('');
@@ -64,6 +70,23 @@ export function MealTypeSection({
           )}
         </div>
         {!picking && availableMeals.length > 0 && (
+          <div className="flex items-center gap-1.5">
+          {/* استبعاد كل أصناف الوجبة دفعة وحدة — والبدائل تنحط بعدين صنف صنف */}
+          <button
+            type="button"
+            onClick={() => {
+              onConfirm({
+                title: `استبعاد كل أصناف ${label}؟`,
+                message: `بيتم استبعاد ${availableMeals.length} صنف بلا بديل، وبعدها تقدر تحدّد البديل لكل صنف.`,
+                confirmLabel: 'نعم، استبعد الكل',
+                run: () => availableMeals.forEach(onAdd),
+              });
+            }}
+            title="استبعاد كل أصناف هذه الوجبة"
+            className={`px-3 py-1.5 border border-dashed rounded-lg text-xs font-medium transition-colors ${s.addBtn}`}
+          >
+            استبعاد الكل
+          </button>
           <button
             type="button"
             onClick={openPicker}
@@ -74,6 +97,7 @@ export function MealTypeSection({
             </svg>
             إضافة
           </button>
+          </div>
         )}
         {picking && (
           <button type="button" onClick={closePicker} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded">
@@ -173,8 +197,44 @@ export default function ExclusionSectionsEditor({ meals, items, onAdd, onRemove,
   const byId = new Map(meals.map(m => [m.id, m]));
   const mealById = (id: string) => byId.get(id);
   const excludedIds = items.map(e => e.meal_id);
+  const notExcluded = meals.filter(m => !excludedIds.includes(m.id));
+  const [pending, setPending] = useState<ConfirmRequest | null>(null);
+  const clearAll = () => setPending({
+    title: 'إلغاء كل المحظورات؟',
+    message: `بيتم إلغاء حظر ${items.length} صنف مع بدائلها.`,
+    confirmLabel: 'نعم، ألغِ الكل',
+    run: () => items.forEach(ex => onRemove(ex.meal_id)),
+  });
   return (
     <>
+      {/* استبعاد كل الأصناف دفعة وحدة، وبعدها يُحدَّد البديل لكل صنف */}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {items.length > 0 && (
+          <button
+            type="button"
+            onClick={clearAll}
+            className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium text-slate-500 hover:bg-slate-100 transition-colors"
+          >
+            إلغاء كل المحظورات
+          </button>
+        )}
+        {notExcluded.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setPending({
+                title: 'استبعاد كل الأصناف؟',
+                message: `بيتم استبعاد ${notExcluded.length} صنف بلا بديل، وبعدها تقدر تحدّد البديل لكل صنف تبيه.`,
+                confirmLabel: 'نعم، استبعد الكل',
+                run: () => notExcluded.forEach(onAdd),
+              });
+            }}
+            className="px-3 py-1.5 border border-red-300 bg-red-50 rounded-lg text-xs font-semibold text-red-600 hover:bg-red-100 transition-colors"
+          >
+            استبعاد كل الأصناف ({notExcluded.length})
+          </button>
+        )}
+      </div>
       {SECTIONS.map(sec => (
         <MealTypeSection
           key={sec.key}
@@ -192,8 +252,24 @@ export default function ExclusionSectionsEditor({ meals, items, onAdd, onRemove,
           onRemove={onRemove}
           onSetAlt={onSetAlt}
           mealById={mealById}
+          onConfirm={setPending}
         />
       ))}
+
+      {/* بورتال للـbody وفوق طبقة النافذة (z-50) عشان ما ينحجب داخلها */}
+      {pending && createPortal(
+        <div className="relative z-[60]">
+          <ConfirmDialog
+            isOpen
+            title={pending.title}
+            message={pending.message}
+            confirmLabel={pending.confirmLabel}
+            onConfirm={() => { pending.run(); setPending(null); }}
+            onCancel={() => setPending(null)}
+          />
+        </div>,
+        document.body,
+      )}
     </>
   );
 }
