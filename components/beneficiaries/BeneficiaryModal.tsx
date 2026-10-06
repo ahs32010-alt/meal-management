@@ -536,6 +536,15 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   // فيفتح «المنيو المخصّص» ويجده مقصوصاً من فوق (الشرح وتبويبات الأسابيع مخفية).
   const bodyRef = useRef<HTMLFormElement>(null);
   useEffect(() => { bodyRef.current?.scrollTo({ top: 0 }); }, [activeTab]);
+  // ⚠️ كروم على ويندوز: سحب التاتش باد يمين/يسار لما يوصل التمرير الأفقي لطرفه
+  // يُفسَّر كإيماءة «رجوع» فيطلع من الصفحة وتضيع التعديلات غير المحفوظة.
+  // نعطّل الإيماءة طول ما النافذة مفتوحة ونرجّع القيمة الأصلية عند الإغلاق.
+  useEffect(() => {
+    const els = [document.documentElement, document.body];
+    const prev = els.map(el => el.style.overscrollBehaviorX);
+    els.forEach(el => { el.style.overscrollBehaviorX = 'none'; });
+    return () => els.forEach((el, i) => { el.style.overscrollBehaviorX = prev[i]; });
+  }, []);
   const { user: currentUser } = useCurrentUser();
   // المسار: الزر يظهر/يخفى من القسم الأول (canAdd/canEdit)، ولو يظهر،
   // نسأل القسم الثاني: هل هذا الإجراء يحتاج موافقة لهذا المستخدم؟
@@ -1035,11 +1044,12 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      {/* تبويب المنيو يعرض شبكة الأسبوع كاملة (٧ أعمدة) فيحتاج عرضاً أكبر —
+    <div className={`fixed inset-0 bg-black/50 z-50 flex items-center justify-center ${activeTab === 'menu' ? 'p-0' : 'p-4'}`}>
+      {/* تبويب المنيو يعرض شبكة الأسبوع كاملة (٧ أعمدة) فيأخذ الشاشة كاملة —
+          على لابتوبات ويندوز (تكبير ١٢٥٪/١٥٠٪) كان الجدول ينقص ويحتاج تمرير أفقي.
           بقية التبويبات تبقى بنفس عرضها القديم بالضبط. */}
-      <div className={`bg-white rounded-2xl w-full max-h-[93vh] overflow-hidden shadow-2xl flex flex-col transition-[max-width] duration-200 ${
-        activeTab === 'menu' ? 'max-w-[min(1200px,96vw)]' : 'max-w-2xl'
+      <div className={`bg-white w-full overflow-hidden shadow-2xl flex flex-col ${
+        activeTab === 'menu' ? 'h-full max-w-none rounded-none' : 'max-h-[93vh] max-w-2xl rounded-2xl'
       }`}>
         <div className="shrink-0 flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <h2 className="text-lg font-bold text-slate-800">
@@ -1050,7 +1060,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
 
         {/* shrink-0: الشريط عليه overflow-x-auto فحدّه الأدنى صفر — بدونها ينضغط
             ويختفي كلياً لما يطول محتوى التبويب. */}
-        <div className="shrink-0 flex border-b border-slate-100 px-4 overflow-x-auto">
+        <div className="shrink-0 flex border-b border-slate-100 px-4 overflow-x-auto overscroll-x-contain">
           {(['info', 'exclusions', 'fixed', 'menu'] as Tab[]).map(tab => (
             <button key={tab} type="button" onClick={() => setActiveTab(tab)}
               className={`px-4 py-3 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${activeTab === tab ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
@@ -1059,7 +1069,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           ))}
         </div>
 
-        <form ref={bodyRef} onSubmit={handleSubmit} className="flex-1 min-h-0 overflow-y-auto">
+        <form ref={bodyRef} onSubmit={handleSubmit} className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
 
           {/* ── Tab: Info ── */}
           {activeTab === 'info' && (

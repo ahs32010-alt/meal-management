@@ -117,7 +117,7 @@ function Cell({ row, onEdit }: { row: PersonalMenuRow | null; onEdit?: () => voi
     return wrap(
       <div className="flex items-center gap-1 px-2 py-1.5">
         {icon}
-        <span className="flex-1 text-right text-sm font-semibold text-red-600 truncate">
+        <span className="flex-1 min-w-0 text-right text-sm font-semibold text-red-600 truncate">
           {row.originalMeal?.name ?? '—'}
         </span>
         <span className="shrink-0 text-[9px] font-bold text-red-600 bg-white border border-red-200 rounded px-1 leading-tight">
@@ -161,7 +161,7 @@ function Cell({ row, onEdit }: { row: PersonalMenuRow | null; onEdit?: () => voi
     return wrap(
       <div className="flex items-center gap-1 px-2 py-1.5">
         {icon}
-        <span className={`flex-1 text-right text-sm font-semibold truncate ${
+        <span className={`flex-1 min-w-0 text-right text-sm font-semibold truncate ${
           cancelled ? 'text-slate-400 line-through' : isAdded ? 'text-violet-800' : 'text-teal-800'
         }`}>
           {row.meal?.name ?? '—'}
@@ -183,7 +183,7 @@ function Cell({ row, onEdit }: { row: PersonalMenuRow | null; onEdit?: () => voi
   return wrap(
     <div className="flex items-center gap-1 px-2 py-1.5">
       {icon}
-      <span className="flex-1 text-right text-sm font-medium text-slate-800 truncate">{row.meal?.name ?? '—'}</span>
+      <span className="flex-1 min-w-0 text-right text-sm font-medium text-slate-800 truncate">{row.meal?.name ?? '—'}</span>
     </div>,
     'min-h-[34px]',
     row.meal?.name ?? '',
@@ -753,7 +753,7 @@ export default function BeneficiaryMenuTab({
       )}
 
       {/* تبويبات الأسابيع — نفس صفحة قائمة الطعام */}
-      <div className="flex items-center gap-1 border-b border-slate-200 overflow-x-auto">
+      <div className="flex items-center gap-1 border-b border-slate-200 overflow-x-auto overscroll-x-contain">
         {WEEK_NUMBERS.map(w => (
           <button
             key={w}
@@ -780,8 +780,10 @@ export default function BeneficiaryMenuTab({
         </div>
       ) : (
         /* ── نفس جدول صفحة قائمة الطعام: أعمدة الأيام × صفوف الوجبات ── */
-        <div className="border border-slate-200 rounded-xl overflow-x-auto">
-          <table className="w-full text-center min-w-[900px]">
+        <div className="border border-slate-200 rounded-xl overflow-x-auto overscroll-x-contain">
+          {/* table-fixed: الأعمدة السبعة تتقاسم عرض الشاشة بالتساوي والأسماء الطويلة تنقص (…)
+            مع tooltip — فما يحتاج المستخدم يسحب يمين/يسار إلا على شاشة أصغر من 720px. */}
+          <table className="w-full table-fixed text-center min-w-[720px]">
             <thead>
               <tr className="bg-slate-50">
                 {MENU_DAYS.map(d => (

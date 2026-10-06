@@ -22,6 +22,17 @@ import {
   ExclIcon,
   TYPE_META,
 } from './widgets';
+import {
+  AttentionPanel,
+  RecentPeopleCard,
+  RecentMealsCard,
+  RecentActivityCard,
+  type RecentPerson,
+  type RecentMeal,
+  type RecentActivity,
+  type InactivePerson,
+  type LastBackup,
+} from './DashboardFeeds';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type MealTypeFilter = 'all' | MealType;
@@ -84,6 +95,12 @@ export default function DashboardHome() {
   const [stats, setStats] = useState({ beneficiaries: 0, companions: 0, meals: 0, orders: 0, exclusions: 0 });
   const [todaysOrders, setTodaysOrders] = useState<OrderSummary[]>([]);
   const [recentOrders, setRecentOrders] = useState<OrderSummary[]>([]);
+  const [recentPeople, setRecentPeople] = useState<RecentPerson[]>([]);
+  const [recentMeals, setRecentMeals] = useState<RecentMeal[]>([]);
+  const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([]);
+  const [weekAdds, setWeekAdds] = useState({ people: 0, meals: 0 });
+  const [inactive, setInactive] = useState<InactivePerson[]>([]);
+  const [lastBackup, setLastBackup] = useState<LastBackup | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
@@ -135,6 +152,30 @@ export default function DashboardHome() {
 
     setTodaysOrders((todayRes.data ?? []).map(mapRow));
     setRecentOrders((recentRes.data ?? []).map(mapRow));
+
+    // ── آخر الإضافات + التنبيهات — كل طلب مستقل، وفشل أي واحد (عمود ناقص
+    //    قبل migration، أو صلاحية) يفضّي قسمه بس بدون ما يكسر بقية اللوحة.
+    const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
+    const [peopleRes, mealsRes, actRes, peopleWeek, mealsWeek, inactiveRes, backupRes] = await Promise.all([
+      supabase.from('beneficiaries').select('id, name, code, entity_type, is_active, created_at')
+        .order('created_at', { ascending: false }).limit(6),
+      supabase.from('meals').select('id, name, type, is_snack, entity_type, created_at')
+        .order('created_at', { ascending: false }).limit(6),
+      supabase.from('activity_log').select('id, user_name, user_email, action, entity_type, entity_name, details, created_at')
+        .order('created_at', { ascending: false }).limit(8),
+      supabase.from('beneficiaries').select('id', { count: 'exact', head: true }).gte('created_at', weekAgo),
+      supabase.from('meals').select('id', { count: 'exact', head: true }).gte('created_at', weekAgo),
+      supabase.from('beneficiaries').select('id, name, entity_type').eq('is_active', false).order('name').limit(50),
+      supabase.from('backups').select('created_at, trigger_type').order('created_at', { ascending: false }).limit(1),
+    ]);
+    setRecentPeople(((peopleRes.data ?? []) as any[]).map(r => ({
+      ...r, entity_type: r.entity_type ?? 'beneficiary', is_active: r.is_active !== false,
+    })));
+    setRecentMeals(((mealsRes.data ?? []) as any[]).map(r => ({ ...r, entity_type: r.entity_type ?? 'beneficiary' })));
+    setRecentActivity((actRes.data ?? []) as RecentActivity[]);
+    setWeekAdds({ people: peopleWeek.count ?? 0, meals: mealsWeek.count ?? 0 });
+    setInactive(((inactiveRes.data ?? []) as any[]).map(r => ({ ...r, entity_type: r.entity_type ?? 'beneficiary' })));
+    setLastBackup((backupRes.data?.[0] as LastBackup | undefined) ?? null);
     setLastRefresh(new Date());
     setLoading(false);
   }, [supabase]);
@@ -290,6 +331,7 @@ export default function DashboardHome() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'meals' }, () => scheduleRefresh(true))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'beneficiaries' }, () => scheduleRefresh(false))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'exclusions' }, () => scheduleRefresh(true))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_log' }, () => scheduleRefresh(false))
       .subscribe();
     return () => {
       if (refreshTimer.current) {
@@ -403,6 +445,23 @@ export default function DashboardHome() {
         {canView('beneficiaries') && (
           <StatCard href="/beneficiaries" label="إجمالي المحظورات" value={stats.exclusions} color="rose" icon={<ExclIcon />} />
         )}
+      </div>
+
+      {/* ── يحتاج انتباهك: أشياء تتطلب إجراء، مو مجرد أرقام ── */}
+      <AttentionPanel
+        missingMealTypes={canView('orders')
+          ? (['breakfast', 'lunch', 'dinner'] as MealType[]).filter(t => !todaysOrders.some(o => o.meal_type === t))
+          : null}
+        canAddOrders={canAdd('orders')}
+        inactive={canView('beneficiaries') ? inactive : null}
+        lastBackup={currentUser?.is_admin ? lastBackup : undefined}
+      />
+
+      {/* ── آخر الإضافات والتحديثات ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {canView('beneficiaries') && <RecentPeopleCard people={recentPeople} addedThisWeek={weekAdds.people} />}
+        {canView('meals') && <RecentMealsCard meals={recentMeals} addedThisWeek={weekAdds.meals} />}
+        {canView('settings') && <RecentActivityCard rows={recentActivity} />}
       </div>
 
       {/* ── Analytics Card ── */}

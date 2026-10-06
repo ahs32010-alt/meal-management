@@ -10,6 +10,7 @@ import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
 import { enqueueGenericDelete, enqueueGenericUpdate } from '@/lib/pending-actions';
 import { useMyPending } from '@/lib/use-my-pending';
+import { useEditParam } from '@/lib/use-edit-param';
 import type { Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -290,10 +291,14 @@ export default function MealList() {
   // عشان يبقى محدد بين الجلسات (راحة للمستخدم).
   const [entityType, setEntityType] = useState<EntityType>(() => {
     if (typeof window === 'undefined') return 'beneficiary';
+    // رابط من لوحة التحكم (‎?edit=<id>&entity=companion‎) يحدد التبويب الصحيح
+    const fromUrl = new URLSearchParams(window.location.search).get('entity');
+    if (fromUrl === 'beneficiary' || fromUrl === 'companion') return fromUrl;
     return (window.localStorage.getItem('mealsEntityType') as EntityType | null) ?? 'beneficiary';
   });
   const [meals, setMeals] = useState<Meal[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fresh, setFresh] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [bulkAddTarget, setBulkAddTarget] = useState<{ mealType: MealType; isSnack: boolean } | null>(null);
@@ -365,6 +370,7 @@ export default function MealList() {
       console.error('Fetch meals error:', err);
     } finally {
       setLoading(false);
+      setFresh(true);
     }
   }, [supabase, entityType]);
 
@@ -439,11 +445,13 @@ export default function MealList() {
     setModalOpen(true);
   };
 
-  const handleEdit = (meal: Meal) => {
+  const handleEdit = useCallback((meal: Meal) => {
     setEditingMeal(meal);
     setModalDefaults({ type: meal.type, isSnack: meal.is_snack });
     setModalOpen(true);
-  };
+  }, []);
+  // رابط ‎?edit=<id>‎ (من لوحة التحكم) يفتح نافذة التعديل مباشرة
+  useEditParam(meals, fresh, handleEdit);
 
   // تبديل فئة الصنف من قائمة الأصناف مباشرة (بدون فتح المودال).
   // التحديث متفائل — نغيّر محلياً أولاً، ولو فشل في الـDB نرجّع القيمة.

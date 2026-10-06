@@ -35,6 +35,7 @@ import { useCurrentUser } from '@/lib/use-current-user';
 import { can, needsApproval } from '@/lib/permissions';
 import { enqueueDelete } from '@/lib/pending-actions';
 import { useMyPending } from '@/lib/use-my-pending';
+import { useEditParam } from '@/lib/use-edit-param';
 import type { Beneficiary, Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
 import { DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -106,6 +107,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
   const [meals, setMeals] = useState<Meal[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fresh, setFresh] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   // كل الأصناف بلا فلترة فئة — تُستخدم فقط في بناء/فحص ملف Excel
@@ -289,6 +291,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       console.error('Fetch error:', err);
     } finally {
       setLoading(false);
+      setFresh(true);
     }
   }, [supabase, entityType]);
 
@@ -342,10 +345,12 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     });
   };
 
-  const handleEdit = (b: Beneficiary) => {
+  const handleEdit = useCallback((b: Beneficiary) => {
     setEditingBeneficiary(b);
     setIsModalOpen(true);
-  };
+  }, []);
+  // رابط ‎?edit=<id>‎ (من لوحة التحكم) يفتح نافذة التعديل مباشرة
+  useEditParam(beneficiaries, fresh, handleEdit);
 
   const handleAdd = () => {
     setEditingBeneficiary(null);

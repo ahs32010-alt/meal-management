@@ -73,6 +73,11 @@ export default function SettingsView() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState<Tab>('translit');
+  // رابط ‎?tab=activity‎ أو ‎?tab=backup‎ (من لوحة التحكم) يفتح التبويب مباشرة
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t === 'activity' || t === 'backup') setTab(t);
+  }, []);
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.is_admin === true;
 
