@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
-import type { Beneficiary, Meal, ItemCategory, EntityType } from '@/lib/types';
+import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
 import {
   MEAL_TYPE_LABELS,
   DAY_LABELS,
@@ -20,7 +20,24 @@ interface Props {
   entityType: EntityType;
 }
 
-type Mode = 'exclusion' | 'unexclude' | 'fixed' | 'unfixed';
+type Mode = 'exclusion' | 'unexclude' | 'fixed' | 'unfixed' | 'cancelMeals';
+
+/** نطاق «إلغاء وجبات»: كل الأصناف، أو الأساسية بس، أو السناكات بس */
+type CancelScope = 'all' | 'mains' | 'snacks';
+const CANCEL_SCOPE_LABELS: Record<CancelScope, string> = {
+  all: 'كل الأصناف',
+  mains: 'الأصناف الأساسية فقط',
+  snacks: 'السناكات فقط',
+};
+const MEAL_TYPES_ORDER: MealType[] = ['breakfast', 'lunch', 'dinner'];
+
+/** دفعات الكتابة — مئات المستفيدين × عشرات الأصناف تطلع آلاف الصفوف */
+const WRITE_CHUNK = 500;
+function chunk<T>(arr: T[], size = WRITE_CHUNK): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 
 const CATEGORY_THEME: Record<ItemCategory, { icon: string; bg: string; textOn: string }> = {
   hot:   { icon: '🔥', bg: 'bg-red-500',   textOn: 'text-white' },
@@ -177,6 +194,12 @@ export default function BulkCustomization({ entityType }: Props) {
     [{ mealId: '', days: new Set<number>() }]
   );
 
+  // إلغاء وجبات — «إلغاء» يحظر كل أصناف الوجبات المختارة بلا بديل، و«إرجاع» يشيلها
+  const [cancelAction, setCancelAction] = useState<'cancel' | 'restore'>('cancel');
+  const [cancelTypes, setCancelTypes] = useState<Set<MealType>>(new Set());
+  const [cancelScope, setCancelScope] = useState<CancelScope>('all');
+  const [cancelFixedToo, setCancelFixedToo] = useState(true);
+
   // ── Apply state ─────────────────────────────────────────────────────────────
   const [applying, setApplying] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -316,6 +339,17 @@ export default function BulkCustomization({ entityType }: Props) {
     setActiveCategories(new Set());
   };
 
+  // الأصناف اللي يشملها «إلغاء وجبات» حسب الوجبات والنطاق المختار
+  const cancelTargetMeals = useMemo(() => meals.filter(m =>
+    cancelTypes.has(m.type) &&
+    (cancelScope === 'all' || (cancelScope === 'snacks') === m.is_snack)
+  ), [meals, cancelTypes, cancelScope]);
+
+  const cancelSummary = useMemo(() => {
+    const types = MEAL_TYPES_ORDER.filter(t => cancelTypes.has(t)).map(t => MEAL_TYPE_LABELS[t]).join(' و');
+    return `${CANCEL_SCOPE_LABELS[cancelScope]} في ${types || '—'}`;
+  }, [cancelTypes, cancelScope]);
+
   // ── Validation ─────────────────────────────────────────────────────────────
   const canApply = useMemo(() => {
     if (selectedIds.size === 0) return false;
@@ -323,11 +357,18 @@ export default function BulkCustomization({ entityType }: Props) {
     if (mode === 'unexclude')  return unexclMealIds.some(Boolean);
     if (mode === 'fixed')      return fixedEntries.some(e => !!e.mealId && e.days.size > 0 && e.qty > 0);
     if (mode === 'unfixed')    return unfixedEntries.some(e => !!e.mealId);
+    if (mode === 'cancelMeals') return cancelTargetMeals.length > 0;
     return false;
-  }, [selectedIds.size, mode, exclEntries, unexclMealIds, fixedEntries]);
+  }, [selectedIds.size, mode, exclEntries, unexclMealIds, fixedEntries, unfixedEntries, cancelTargetMeals.length]);
 
   const confirmMessage = useMemo(() => {
     const target = `${selectedIds.size} ${entityLabel}${selectedIds.size === 1 ? '' : 'اً'}`;
+    if (mode === 'cancelMeals') {
+      return cancelAction === 'cancel'
+        ? `سيتم إلغاء ${cancelSummary} (${cancelTargetMeals.length} صنف) لـ${target} — تُحظر بلا بديل` +
+          `${cancelFixedToo ? '، وتُحذف أصنافهم الثابتة في هذه الوجبات' : ''}. متابعة؟`
+        : `سيتم إرجاع ${cancelSummary} (${cancelTargetMeals.length} صنف) لـ${target} — يُشال الحظر بلا بديل عنها. متابعة؟`;
+    }
     if (mode === 'exclusion') {
       const valid = exclEntries.filter(e => !!e.mealId);
       const names = valid.map(e => {
@@ -357,7 +398,7 @@ export default function BulkCustomization({ entityType }: Props) {
       return `"${m?.name ?? ''}" (${e.days.size} يوم × ${e.qty}${e.isAlternative ? ' — صنف بديل' : ''})`;
     }).join('، ');
     return `سيتم تثبيت ${names} لـ${target}. لو الشخص عنده أياً منها في نفس الأيام تتحدّث الكمية فقط. متابعة؟`;
-  }, [mode, selectedIds.size, entityLabel, exclEntries, unexclMealIds, fixedEntries, meals]);
+  }, [mode, selectedIds.size, entityLabel, exclEntries, unexclMealIds, fixedEntries, unfixedEntries, meals, cancelAction, cancelSummary, cancelTargetMeals.length, cancelFixedToo]);
 
   // ── Apply ──────────────────────────────────────────────────────────────────
   const handleApply = async () => {
@@ -366,7 +407,84 @@ export default function BulkCustomization({ entityType }: Props) {
     try {
       const ids = Array.from(selectedIds);
 
-      if (mode === 'unexclude') {
+      if (mode === 'cancelMeals') {
+        const mealIds = cancelTargetMeals.map(m => m.id);
+        const types = MEAL_TYPES_ORDER.filter(t => cancelTypes.has(t));
+        const peopleLabel = `${ids.length} ${entityLabel}${ids.length === 1 ? '' : 'اً'}`;
+
+        if (cancelAction === 'cancel') {
+          // محظور بلا بديل لكل صنف × كل شخص — نفس آلية «إضافة محظور» فيظهر في
+          // تبويب المحظورات لكل مستفيد، ويُطبَّق في الأوامر والستيكرات والتقارير.
+          const rows = ids.flatMap(bid => mealIds.map(mid => ({
+            beneficiary_id: bid, meal_id: mid, alternative_meal_id: null,
+          })));
+          for (const part of chunk(rows)) {
+            const { error } = await supabase.from('exclusions').upsert(part, { onConflict: 'beneficiary_id,meal_id' });
+            if (error) throw error;
+          }
+          // الأصناف الثابتة تنضاف فوق المنيو، فلو بقيت ما «تنلغي» الوجبة فعلاً
+          let fixedDeleted = 0;
+          if (cancelFixedToo) {
+            for (const idsPart of chunk(ids, 100)) {
+              for (const mealsPart of chunk(mealIds, 100)) {
+                const { data, error } = await supabase.from('beneficiary_fixed_meals').delete()
+                  .in('beneficiary_id', idsPart).in('meal_id', mealsPart).in('meal_type', types)
+                  .select('id');
+                if (error) throw error;
+                fixedDeleted += (data ?? []).length;
+              }
+            }
+          }
+          void logActivity({
+            action: 'create',
+            entity_type: entityType,
+            entity_name: `تخصيص جماعي — إلغاء ${cancelSummary} (${ids.length})`,
+            details: {
+              scope: 'bulk_cancel_meals', count: ids.length, meal_types: types, cancel_scope: cancelScope,
+              meal_ids: mealIds, fixed_deleted: fixedDeleted, for_entity: entityType, beneficiary_ids: ids,
+            },
+          });
+          setResult({
+            ok: true,
+            message: `تم إلغاء ${cancelSummary} (${mealIds.length} صنف) لـ${peopleLabel}` +
+              (cancelFixedToo ? ` — وحُذف ${fixedDeleted} صنف ثابت.` : '.'),
+          });
+        } else {
+          // نشيل بس المحظورات الشخصية «بلا بديل» — اللي لها بديل أو جاية من
+          // نظام غذائي تبقى كما هي.
+          const affected = new Set<string>();
+          let removed = 0;
+          for (const idsPart of chunk(ids, 100)) {
+            for (const mealsPart of chunk(mealIds, 100)) {
+              const del = (personalOnly: boolean) => {
+                const q = supabase.from('exclusions').delete()
+                  .in('beneficiary_id', idsPart).in('meal_id', mealsPart).is('alternative_meal_id', null);
+                return (personalOnly ? q.is('diet_id', null) : q).select('id, beneficiary_id');
+              };
+              let { data, error } = await del(true);
+              if (error && /diet_id/i.test(error.message)) ({ data, error } = await del(false));
+              if (error) throw error;
+              (data ?? []).forEach((r: { beneficiary_id: string }) => affected.add(r.beneficiary_id));
+              removed += (data ?? []).length;
+            }
+          }
+          void logActivity({
+            action: 'delete',
+            entity_type: entityType,
+            entity_name: `تخصيص جماعي — إرجاع ${cancelSummary} (${affected.size})`,
+            details: {
+              scope: 'bulk_restore_meals', count: affected.size, removed, meal_types: types, cancel_scope: cancelScope,
+              meal_ids: mealIds, for_entity: entityType, beneficiary_ids: ids,
+            },
+          });
+          setResult({
+            ok: true,
+            message: removed === 0
+              ? 'لا أحد من المختارين كانت هذه الوجبات ملغاة عنده.'
+              : `تم إرجاع ${cancelSummary} لـ${affected.size} ${entityLabel}${affected.size === 1 ? '' : 'اً'} (${removed} صنف).`,
+          });
+        }
+      } else if (mode === 'unexclude') {
         const validMealIds = unexclMealIds.filter(Boolean);
         const allAffected = new Set<string>();
         for (const mealId of validMealIds) {
@@ -764,11 +882,12 @@ export default function BulkCustomization({ entityType }: Props) {
               { m: 'unexclude', label: 'حذف محظور',      active: 'border-amber-500 bg-amber-50 text-amber-700' },
               { m: 'fixed',     label: 'إضافة صنف ثابت', active: 'border-emerald-500 bg-emerald-50 text-emerald-700' },
               { m: 'unfixed',   label: 'حذف صنف ثابت',   active: 'border-rose-500 bg-rose-50 text-rose-700' },
+              { m: 'cancelMeals', label: 'إلغاء / إرجاع وجبات كاملة', active: 'border-slate-700 bg-slate-100 text-slate-800' },
             ] as { m: Mode; label: string; active: string }[]).map(({ m, label, active: activeCls }) => (
               <button
                 key={m}
                 onClick={() => { setMode(m); setResult(null); }}
-                className={`py-2.5 rounded-xl border-2 font-semibold text-xs sm:text-sm transition-all ${
+                className={`py-2.5 rounded-xl border-2 font-semibold text-xs sm:text-sm transition-all ${m === 'cancelMeals' ? 'col-span-2 ' : ''}${
                   mode === m ? activeCls : 'border-slate-200 text-slate-500 hover:border-slate-300'
                 }`}
               >
@@ -1094,6 +1213,110 @@ export default function BulkCustomization({ entityType }: Props) {
             </div>
           )}
 
+          {/* Cancel whole meals form */}
+          {mode === 'cancelMeals' && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-1 bg-slate-100 rounded-xl p-1">
+                {([
+                  { a: 'cancel',  label: 'إلغاء الأصناف' },
+                  { a: 'restore', label: 'إرجاعها' },
+                ] as const).map(({ a, label }) => (
+                  <button
+                    key={a}
+                    type="button"
+                    onClick={() => { setCancelAction(a); setResult(null); }}
+                    className={`py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors ${
+                      cancelAction === a
+                        ? a === 'cancel' ? 'bg-white text-red-700 shadow-sm' : 'bg-white text-emerald-700 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div>
+                <p className="text-xs font-bold text-slate-500 mb-1.5">الوجبات <span className="text-red-500">*</span></p>
+                <div className="grid grid-cols-3 gap-2">
+                  {MEAL_TYPES_ORDER.map(t => {
+                    const on = cancelTypes.has(t);
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setCancelTypes(prev => {
+                          const next = new Set(prev);
+                          if (next.has(t)) next.delete(t); else next.add(t);
+                          return next;
+                        })}
+                        className={`py-2 rounded-lg border-2 text-sm font-semibold transition-colors ${
+                          on ? 'border-slate-700 bg-slate-700 text-white' : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                        }`}
+                      >
+                        {on ? '✓ ' : ''}{MEAL_TYPE_LABELS[t]}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-bold text-slate-500 mb-1.5">وش ينلغي؟</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {(Object.keys(CANCEL_SCOPE_LABELS) as CancelScope[]).map(sc => (
+                    <button
+                      key={sc}
+                      type="button"
+                      onClick={() => setCancelScope(sc)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                        cancelScope === sc ? 'bg-slate-700 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                      }`}
+                    >
+                      {CANCEL_SCOPE_LABELS[sc]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {cancelAction === 'cancel' && (
+                <label className="flex items-start gap-2 text-xs text-slate-600 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={cancelFixedToo}
+                    onChange={e => setCancelFixedToo(e.target.checked)}
+                    className="w-4 h-4 mt-0.5 accent-slate-700"
+                  />
+                  <span>
+                    احذف كمان <span className="font-semibold">أصنافهم الثابتة</span> في هذي الوجبات
+                    <span className="block text-slate-400">بدونها الأصناف الثابتة تظل تنضاف فوق المنيو</span>
+                  </span>
+                </label>
+              )}
+
+              {cancelTypes.size > 0 && (
+                <div className="border border-slate-200 rounded-lg px-3 py-2 bg-slate-50/60">
+                  <p className="text-xs font-semibold text-slate-700">
+                    يشمل {cancelTargetMeals.length} صنف — {cancelSummary}
+                  </p>
+                  {cancelTargetMeals.length > 0 && (
+                    <p className="text-[11px] text-slate-400 mt-1 leading-relaxed line-clamp-2">
+                      {cancelTargetMeals.map(m => m.name).join('، ')}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className={`rounded-lg px-3 py-2 text-xs leading-relaxed border ${
+                cancelAction === 'cancel' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              }`}>
+                {cancelAction === 'cancel'
+                  ? '💡 كل صنف من هذي الأصناف ينضاف كمحظور بلا بديل للمختارين، فما ينحسب لهم في أوامر التشغيل والستيكرات والتقارير، ويظهر في تبويب المحظورات لكل واحد. لو عنده بديل لصنف منها، يُلغى البديل. ⚠️ الأصناف اللي تنضاف لاحقاً للنظام ما تنلغي تلقائياً — طبّق مرة ثانية بعد إضافتها.'
+                  : '💡 يشيل الحظر «بلا بديل» عن هذي الأصناف للمختارين فترجع تنحسب لهم. المحظورات اللي لها بديل أو جاية من نظام غذائي ما تتأثر. الأصناف الثابتة المحذوفة ما ترجع تلقائياً.'}
+              </div>
+            </div>
+          )}
+
           {/* Apply button */}
           <button
             type="button"
@@ -1109,7 +1332,7 @@ export default function BulkCustomization({ entityType }: Props) {
               ? 'جاري التطبيق...'
               : selectedIds.size === 0
                 ? 'حدد الأشخاص أولاً'
-                : !((mode === 'exclusion' && exclEntries.some(e => !!e.mealId)) || (mode === 'unexclude' && unexclMealIds.some(Boolean)) || (mode === 'fixed' && fixedEntries.some(e => !!e.mealId && e.days.size > 0)) || (mode === 'unfixed' && unfixedEntries.some(e => !!e.mealId)))
+                : !canApply
                   ? 'أكمل تفاصيل التخصيص'
                   : `تطبيق على ${selectedIds.size} ${entityLabel}${selectedIds.size === 1 ? '' : 'اً'}`}
           </button>
