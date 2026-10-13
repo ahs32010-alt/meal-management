@@ -9,6 +9,7 @@ import { MEAL_TYPE_LABELS, MEAL_TYPE_EN, CATEGORY_ORDER, CATEGORY_LABELS, ENTITY
 import { formatDate, formatDateFull } from '@/lib/date-utils';
 import { transliterate } from '@/lib/transliterate';
 import OrderSelect from '@/components/shared/OrderSelect';
+import LdOrderPicker from '@/components/lunch-dinner-stickers/LdOrderPicker';
 import {
   GROUP_COLORS,
   CATEGORY_THEME,
@@ -502,7 +503,26 @@ function StickerSplitter({
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
-export default function StickersView() {
+/**
+ * `variant`:
+ *   • breakfast   (الافتراضي) → صفحة ستيكرات الفطور كما هي
+ *   • lunchDinner → نفس الستيكر والآلية بالضبط داخل تبويب «حسب الوجبة» في صفحة
+ *     الغداء والعشاء: أوامر الغداء/العشاء فقط + اختيار «الوجبة» أو «السناك».
+ */
+type StickerKind = 'all' | 'meal' | 'snack';
+const KIND_OPTIONS: { key: StickerKind; label: string }[] = [
+  { key: 'all',   label: 'الكل' },
+  { key: 'meal',  label: '🍽️ الوجبة' },
+  { key: 'snack', label: '🍪 السناك' },
+];
+const kindSuffix = (k: StickerKind) => (k === 'meal' ? '_الوجبة' : k === 'snack' ? '_السناك' : '');
+/** هل التصنيف من النوع المختار؟ الوجبة = حار/بارد، السناك = سناك. */
+const matchesKind = (k: StickerKind, c: ItemCategory) =>
+  k === 'all' || (k === 'snack' ? c === 'snack' : c !== 'snack');
+
+export default function StickersView({ variant = 'breakfast' }: { variant?: 'breakfast' | 'lunchDinner' } = {}) {
+  const isLd = variant === 'lunchDinner';
+  const [kind, setKind] = useState<StickerKind>('all');
   const [orders, setOrders] = useState<DailyOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState('');
   const [report, setReport] = useState<ReportData | null>(null);
@@ -520,18 +540,22 @@ export default function StickersView() {
 
   useEffect(() => {
     const loadOrders = async () => {
-      const cached = readSnapshot<DailyOrder[]>('stickers:orders');
+      const snapKey = isLd ? 'stickers:orders:ld' : 'stickers:orders';
+      const cached = readSnapshot<DailyOrder[]>(snapKey);
       if (cached) { setOrders(cached); setLoadingOrders(false); }
       // قراءة على دفعات — بدونها يقصّ PostgREST القائمة عند ١٠٠٠ أمر بصمت
       // فتختفي أوامر من قائمة الاختيار بلا أي مؤشّر.
       const fetchOrders = (withEntity: boolean) =>
-        fetchAllRows((from, to) =>
-          supabase
+        fetchAllRows((from, to) => {
+          const q = supabase
             .from('daily_orders')
-            .select(`id, date, meal_type${withEntity ? ', entity_type' : ''}, created_at`)
+            .select(`id, date, meal_type${withEntity ? ', entity_type' : ''}, created_at`);
+          // نسخة الغداء/العشاء تقتصر على أوامرها — الفطور يقرأ الكل كما كان
+          return (isLd ? q.in('meal_type', ['lunch', 'dinner']) : q)
             .order('date', { ascending: false })
             .order('id')
-            .range(from, to));
+            .range(from, to);
+        });
       const first = await fetchOrders(true);
       let data: unknown = first.data;
       if (first.error && /entity_type|column/i.test(first.error.message)) {
@@ -540,12 +564,12 @@ export default function StickersView() {
       }
       if (data) {
         setOrders(data as DailyOrder[]);
-        writeSnapshot('stickers:orders', data as DailyOrder[]);
+        writeSnapshot(snapKey, data as DailyOrder[]);
       }
       setLoadingOrders(false);
     };
     loadOrders();
-  }, [supabase]);
+  }, [supabase, isLd]);
 
   useEffect(() => {
     supabase.from('custom_transliterations').select('word, transliteration')
@@ -609,9 +633,14 @@ export default function StickersView() {
     setLoading(false);
   };
 
-  const stickerDetails = report?.beneficiaryDetails.filter(d =>
-    d.excludedItems.length > 0 || (d.fixedItems ?? []).length > 0
-  ) ?? [];
+  // نوع الستيكر (الغداء/العشاء فقط): نُبقي أصناف النوع المختار ثم نكمل بنفس الآلية
+  const stickerDetails = (report?.beneficiaryDetails ?? [])
+    .map(d => kind === 'all' ? d : {
+      ...d,
+      excludedItems: d.excludedItems.filter(i => matchesKind(kind, i.category)),
+      fixedItems: (d.fixedItems ?? []).filter(f => matchesKind(kind, f.category)),
+    })
+    .filter(d => d.excludedItems.length > 0 || (d.fixedItems ?? []).length > 0);
   const mealTypeAr = report ? MEAL_TYPE_LABELS[report.order.meal_type] : '';
   const mealTypeEn = report ? MEAL_TYPE_EN[report.order.meal_type] : '';
 
@@ -684,7 +713,7 @@ export default function StickersView() {
 
   const handleExportWord = async () => {
     if (!report || effectiveDisplayDetails.length === 0) return;
-    const fn = `ستيكرات_${new Date(report.order.date).toISOString().slice(0, 10)}_${mealTypeAr}`;
+    const fn = `ستيكرات_${new Date(report.order.date).toISOString().slice(0, 10)}_${mealTypeAr}${kindSuffix(kind)}`;
     const { exportStickersWord } = await import('./word-export');
     exportStickersWord(
       effectiveDisplayDetails, mealTypeAr, mealTypeEn, fn, customDict,
@@ -702,7 +731,7 @@ export default function StickersView() {
       alert('أدخل أبعاداً صالحة (2 إلى 30 سم لكل بُعد)');
       return;
     }
-    const fn = `ستيكرات_${new Date(report.order.date).toISOString().slice(0, 10)}_${mealTypeAr}_${w}x${h}سم`;
+    const fn = `ستيكرات_${new Date(report.order.date).toISOString().slice(0, 10)}_${mealTypeAr}${kindSuffix(kind)}_${w}x${h}سم`;
     try {
       const { exportStickersPerPageDocx } = await import('./word-export');
       await exportStickersPerPageDocx(
@@ -717,15 +746,115 @@ export default function StickersView() {
     }
   };
 
+  // كرت التصدير حسب المقاس — في الفطور تحت لوحة الفصل كما كان، وفي الغداء/العشاء
+  // فوق الستيكرات مباشرة (مثل تبويب «ثابتة») عشان يكون أول شي يبان.
+  const sizeCard = (
+    <div className="card p-5 no-print">
+      <div className="flex items-center gap-2 mb-3">
+        <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
+          <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 4v4M16 4v4M4 10h16" />
+          </svg>
+        </div>
+        <div className="flex-1">
+          <h3 className="font-bold text-slate-800 text-sm">الستيكرات حسب المقاس</h3>
+          <p className="text-xs text-slate-500">ملف Word فيه كل ستيكر في صفحة منفصلة بالمقاس اللي تحدده — للطباعة على طابعة الملصقات مباشرة</p>
+        </div>
+      </div>
+
+      <div className="flex items-end gap-3 flex-wrap">
+        <div>
+          <label className="label text-xs">العرض (سم)</label>
+          <input
+            type="number"
+            min={2}
+            max={30}
+            step="0.1"
+            value={sizeWidth}
+            onChange={e => setSizeWidth(e.target.value)}
+            className="input-field w-28"
+            placeholder="10"
+          />
+        </div>
+        <div>
+          <label className="label text-xs">الطول (سم)</label>
+          <input
+            type="number"
+            min={2}
+            max={30}
+            step="0.1"
+            value={sizeHeight}
+            onChange={e => setSizeHeight(e.target.value)}
+            className="input-field w-28"
+            placeholder="10"
+          />
+        </div>
+
+        {/* Preset shortcuts */}
+        <div className="flex items-center gap-1 flex-wrap">
+          {[
+            { w: '10', h: '10' },
+            { w: '10', h: '15' },
+            { w: '8',  h: '5'  },
+            { w: '6',  h: '4'  },
+          ].map(p => (
+            <button
+              key={`${p.w}x${p.h}`}
+              type="button"
+              onClick={() => { setSizeWidth(p.w); setSizeHeight(p.h); }}
+              className="px-2.5 py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+            >
+              {p.w}×{p.h}
+            </button>
+          ))}
+        </div>
+
+        <button
+          onClick={handleExportPerPage}
+          disabled={effectiveDisplayDetails.length === 0}
+          className="btn-primary text-sm disabled:opacity-50"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          </svg>
+          {/* العدد = ما يُصدَّر فعلاً (بعد «إخفاء ما ليس له بديل») */}
+          تصدير Word ({effectiveDisplayDetails.length} صفحة)
+        </button>
+      </div>
+
+      <p className="text-[11px] text-slate-400 mt-3">
+        💡 افتح الملف في Word ثم اطبعه — كل ستيكر في صفحة منفصلة بمقاس {sizeWidth || '—'}×{sizeHeight || '—'} سم.
+        الخط يتكيّف تلقائياً مع المقاس المختار.
+      </p>
+    </div>
+  );
+
   return (
-    <div className="p-6 space-y-5">
+    <div className={isLd ? 'space-y-5' : 'p-6 space-y-5'}>
       {/* Header */}
       <div className="flex items-center justify-between no-print">
         <div className="flex items-center gap-2 flex-wrap">
+          {isLd ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-semibold text-slate-600">نوع الستيكر:</span>
+              <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
+                {KIND_OPTIONS.map(o => (
+                  <button key={o.key} type="button" onClick={() => setKind(o.key)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-colors ${
+                      kind === o.key ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                    }`}>
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
           <div>
             <h1 className="text-2xl font-bold text-slate-800">ستيكرات الفطور</h1>
             <p className="text-slate-500 text-sm mt-0.5">طباعة ستيكر لكل عنده استبعاد</p>
           </div>
+          )}
           {report && (() => {
             const e: EntityType = report.order.entity_type === 'companion' ? 'companion' : 'beneficiary';
             return <span className={`badge ${ENTITY_BADGE_STYLES[e]}`}>{ENTITY_TYPE_LABELS_PLURAL[e]}</span>;
@@ -760,6 +889,19 @@ export default function StickersView() {
 
       {/* Order selector */}
       <div className="card p-4 no-print">
+        {isLd ? (
+          <LdOrderPicker
+          orders={orders}
+          value={selectedOrderId}
+          loading={loadingOrders}
+          onChange={id => {
+            setSelectedOrderId(id);
+            // مسح الاختيار يمسح الستيكرات معه، لا يترك ستيكرات أمر ملغى معروضة
+            if (id) loadReport(id);
+            else { setReport(null); setSplits({}); setError(''); }
+          }}
+        />
+        ) : (
         <OrderSelect
           orders={orders}
           value={selectedOrderId}
@@ -772,6 +914,7 @@ export default function StickersView() {
             else { setReport(null); setSplits({}); setError(''); }
           }}
         />
+        )}
       </div>
 
       {loading && (
@@ -788,6 +931,8 @@ export default function StickersView() {
       {/* Sticker grid */}
       {report && !loading && stickerDetails.length > 0 && (
         <>
+          {isLd && sizeCard}
+
           <div id="stickers-content">
             {/* Print-only header */}
             <div className="sticker-print-header">
@@ -836,85 +981,7 @@ export default function StickersView() {
           />
 
           {/* ── Size-based Word export ─────────────────────────────────────── */}
-          <div className="card p-5 no-print">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
-                <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 4v4M16 4v4M4 10h16" />
-                </svg>
-              </div>
-              <div className="flex-1">
-                <h3 className="font-bold text-slate-800 text-sm">الستيكرات حسب المقاس</h3>
-                <p className="text-xs text-slate-500">ملف Word فيه كل ستيكر في صفحة منفصلة بالمقاس اللي تحدده — للطباعة على طابعة الملصقات مباشرة</p>
-              </div>
-            </div>
-
-            <div className="flex items-end gap-3 flex-wrap">
-              <div>
-                <label className="label text-xs">العرض (سم)</label>
-                <input
-                  type="number"
-                  min={2}
-                  max={30}
-                  step="0.1"
-                  value={sizeWidth}
-                  onChange={e => setSizeWidth(e.target.value)}
-                  className="input-field w-28"
-                  placeholder="10"
-                />
-              </div>
-              <div>
-                <label className="label text-xs">الطول (سم)</label>
-                <input
-                  type="number"
-                  min={2}
-                  max={30}
-                  step="0.1"
-                  value={sizeHeight}
-                  onChange={e => setSizeHeight(e.target.value)}
-                  className="input-field w-28"
-                  placeholder="10"
-                />
-              </div>
-
-              {/* Preset shortcuts */}
-              <div className="flex items-center gap-1 flex-wrap">
-                {[
-                  { w: '10', h: '10' },
-                  { w: '10', h: '15' },
-                  { w: '8',  h: '5'  },
-                  { w: '6',  h: '4'  },
-                ].map(p => (
-                  <button
-                    key={`${p.w}x${p.h}`}
-                    type="button"
-                    onClick={() => { setSizeWidth(p.w); setSizeHeight(p.h); }}
-                    className="px-2.5 py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
-                  >
-                    {p.w}×{p.h}
-                  </button>
-                ))}
-              </div>
-
-              <button
-                onClick={handleExportPerPage}
-                disabled={effectiveDisplayDetails.length === 0}
-                className="btn-primary text-sm disabled:opacity-50"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                {/* العدد = ما يُصدَّر فعلاً (بعد «إخفاء ما ليس له بديل») */}
-                تصدير Word ({effectiveDisplayDetails.length} صفحة)
-              </button>
-            </div>
-
-            <p className="text-[11px] text-slate-400 mt-3">
-              💡 افتح الملف في Word ثم اطبعه — كل ستيكر في صفحة منفصلة بمقاس {sizeWidth || '—'}×{sizeHeight || '—'} سم.
-              الخط يتكيّف تلقائياً مع المقاس المختار.
-            </p>
-          </div>
+          {!isLd && sizeCard}
         </>
       )}
     </div>

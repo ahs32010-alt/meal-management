@@ -101,6 +101,8 @@ interface ParaOpts {
   title?: { mealTypeAr: string; mealTypeEn: string };
   // Font scale — 1.0 for grid, larger for per-page based on sticker size
   scale?: number;
+  /** معامل المسافات بين الفقرات — يُصغَّر مع الخط في المقاسات الصغيرة (الافتراضي 1) */
+  spacingScale?: number;
   orderInfo?: { date: string; mealTypeAr: string; weekNumber?: number | null; dayOfWeek?: number | null };
 }
 
@@ -112,13 +114,15 @@ const AR_DAYS: Record<number, string> = {
 function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[] {
   const k = opts.scale ?? 1;
   const fs = (pt: number) => sz(pt * k);
+  const sk = opts.spacingScale ?? 1;
+  const sp = (tw: number) => Math.round(tw * sk);
   const out: Paragraph[] = [];
 
   const center = (children: TextRun[], spaceAfter = 60, spaceBefore = 0): Paragraph =>
     new Paragraph({
       alignment: AlignmentType.CENTER,
       bidirectional: true,
-      spacing: { after: spaceAfter, before: spaceBefore, line: 240 },
+      spacing: { after: sp(spaceAfter), before: sp(spaceBefore), line: 240 },
       keepLines: true,
       keepNext: true,
       children,
@@ -139,7 +143,7 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
       new Paragraph({
         alignment: AlignmentType.CENTER,
         bidirectional: true,
-        spacing: { after: 40, before: 0, line: 240 },
+        spacing: { after: sp(40), before: sp(0), line: 240 },
         keepLines: true,
         keepNext: true,
         shading: { type: ShadingType.CLEAR, fill: 'F8FAFC', color: 'auto' },
@@ -163,7 +167,7 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
       new Paragraph({
         alignment: AlignmentType.CENTER,
         bidirectional: true,
-        spacing: { after: 80, before: 0, line: 240 },
+        spacing: { after: sp(80), before: sp(0), line: 240 },
         keepLines: true,
         keepNext: true,
         shading: { type: ShadingType.CLEAR, fill: fillColor, color: 'auto' },
@@ -199,7 +203,7 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
       new Paragraph({
         alignment: AlignmentType.CENTER,
         bidirectional: false,
-        spacing: { after: 80, before: 0, line: 240 },
+        spacing: { after: sp(80), before: sp(0), line: 240 },
         keepLines: true,
         keepNext: true,
         children: [
@@ -229,7 +233,7 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
       new Paragraph({
         alignment: AlignmentType.LEFT,
         bidirectional: false,
-        spacing: { after: 40, before: 40, line: 240 },
+        spacing: { after: sp(40), before: sp(40), line: 240 },
         keepLines: true,
         keepNext: true,
         shading: { type: ShadingType.CLEAR, fill: 'FFF1F2', color: 'auto' },
@@ -246,7 +250,7 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
       new Paragraph({
         alignment: AlignmentType.LEFT,
         bidirectional: false,
-        spacing: { after: 40, before: 0, line: 240 },
+        spacing: { after: sp(40), before: sp(0), line: 240 },
         keepLines: true,
         keepNext: true,
         shading: { type: ShadingType.CLEAR, fill: 'EFF6FF', color: 'auto' },
@@ -265,7 +269,7 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
       new Paragraph({
         alignment: AlignmentType.CENTER,
         bidirectional: true,
-        spacing: { after: 0, before: 60, line: 240 },
+        spacing: { after: sp(0), before: sp(60), line: 240 },
         keepLines: true,
         // Last paragraph in the sticker — don't keepNext so it ends cleanly
         border: { top: DASHED },
@@ -383,6 +387,51 @@ export async function exportStickersWord(
 
 // ─── Per-page export (one sticker per page, custom size) ────────────────────
 
+const mmToPt = (mm: number) => (mm * 72) / 25.4;
+
+/**
+ * تقدير ارتفاع الستيكر (بالنقاط) بمقياس معيّن — تقدير محافظ لنفس فقرات
+ * `buildStickerParagraphs`: عدد الأسطر بعد الالتفاف × ارتفاع السطر + المسافات.
+ */
+function estimateStickerHeightPt(
+  s: StickerData, opts: ParaOpts, k: number, spacingScale: number, availWPt: number,
+): number {
+  // [حجم الخط, النص, المسافة قبل+بعد بالـtwip]
+  const paras: [number, string, number][] = [];
+  if (opts.orderInfo) paras.push([7, `00/00/0000 | ${opts.orderInfo.mealTypeAr} | أسبوع 0 | الأربعاء`, 40]);
+  if (opts.title || s.groupIndex > 0 || s.category) {
+    paras.push([9, `${opts.title?.mealTypeAr ?? ''} ${opts.title?.mealTypeEn ?? ''} سناك ★ ستيكر`, 80]);
+  }
+  paras.push([11, `Code: ${s.ben.code}   ${s.ben.villa ? `Villa: ${s.ben.villa}` : ''}`, 60]);
+  paras.push([14, s.ben.name, 30]);
+  if (s.ben.english_name) paras.push([10, s.ben.english_name, 80]);
+  if (s.excludedNames) paras.push([9.5, `مستبعد: ${s.excludedNames}`, 40]);
+  if (s.altNames) paras.push([9.5, `بديل: ${s.altNames}`, 80]);
+  if (s.excludedTranslit) paras.push([9, ` NO: ${s.excludedTranslit} `, 80]);
+  if (s.altTranslit) paras.push([9, ` YES: ${s.altTranslit} `, 40]);
+  if (s.fixedItems) paras.push([8, `إضافات: ${s.fixedItems}`, 60]);
+
+  return paras.reduce((h, [pt, text, spaceTw]) => {
+    const f = pt * k;
+    const charW = f * 0.6;                     // عرض الحرف التقريبي (محافظ)
+    const lines = Math.max(1, Math.ceil((text.length * charW) / availWPt));
+    return h + lines * f * 1.5 + (spaceTw * spacingScale) / 20;
+  }, 0) + 4; // + حدّ «إضافات» وهامش أمان
+}
+
+/** أكبر مقياس (≤ الأساسي) يخلّي الستيكر كامل داخل صفحة واحدة. */
+function fitScale(s: StickerData, opts: ParaOpts, baseScale: number, availWPt: number, availHPt: number): number {
+  const fits = (k: number) =>
+    estimateStickerHeightPt(s, opts, k, Math.min(1, k / baseScale), availWPt) <= availHPt * 0.92;
+  if (fits(baseScale)) return baseScale;
+  let lo = 0.1, hi = baseScale;
+  for (let i = 0; i < 20; i++) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+
 export async function exportStickersPerPageDocx(
   displayDetails: Array<ReportData['beneficiaryDetails'][0] & { groupIndex: number; category: ItemCategory | null }>,
   mealTypeAr: string,
@@ -396,12 +445,19 @@ export async function exportStickersPerPageDocx(
   dayOfWeek?: number | null,
 ) {
   const minDim = Math.min(widthCm, heightCm);
-  // مقياس محافظ يضمن أن كل ستيكر في صفحة واحدة فقط (بلا فيض/تداخل)
-  const scale = Math.max(0.7, Math.min(1.5, minDim / 11));
+  // المقياس الأساسي حسب المقاس (كما كان)…
+  const baseScale = Math.max(0.7, Math.min(1.5, minDim / 11));
   const orderInfo = orderDate ? { date: orderDate, mealTypeAr, weekNumber, dayOfWeek } : undefined;
+  // الهوامش تصغر في المقاسات الصغيرة حتى لا تأكل الصفحة
+  const marginMm = Math.min(4, minDim * 10 * 0.08);
+  const availWPt = mmToPt(widthCm * 10 - 2 * marginMm);
+  const availHPt = mmToPt(heightCm * 10 - 2 * marginMm);
 
   const sections = displayDetails.map(d => {
     const data = prepareSticker(d, d.groupIndex, d.category, customDict);
+    // …ثم نصغّره لكل ستيكر حتى يدخل كامل في صفحة واحدة — مهما صغر المقاس
+    const scale = fitScale(data, { title: { mealTypeAr, mealTypeEn }, orderInfo }, baseScale, availWPt, availHPt);
+    const spacingScale = Math.min(1, scale / baseScale);
     return {
       properties: {
         page: {
@@ -411,10 +467,10 @@ export async function exportStickersPerPageDocx(
             orientation: PageOrientation.PORTRAIT,
           },
           margin: {
-            top:    convertMillimetersToTwip(4),
-            bottom: convertMillimetersToTwip(4),
-            left:   convertMillimetersToTwip(4),
-            right:  convertMillimetersToTwip(4),
+            top:    convertMillimetersToTwip(marginMm),
+            bottom: convertMillimetersToTwip(marginMm),
+            left:   convertMillimetersToTwip(marginMm),
+            right:  convertMillimetersToTwip(marginMm),
             header: 0,
             footer: 0,
             gutter: 0,
@@ -422,7 +478,7 @@ export async function exportStickersPerPageDocx(
         },
         verticalAlign: VerticalAlign.CENTER,
       },
-      children: buildStickerParagraphs(data, { title: { mealTypeAr, mealTypeEn }, scale, orderInfo }),
+      children: buildStickerParagraphs(data, { title: { mealTypeAr, mealTypeEn }, scale, spacingScale, orderInfo }),
     };
   });
 

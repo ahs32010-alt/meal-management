@@ -3,7 +3,8 @@
 /**
  * صفحة ستيكرات الغداء والعشاء — تبويبان:
  *   • «ثابتة»      → ستيكر لكل مستفيد بلا ارتباط بأمر تشغيل (السلوك القديم)
- *   • «حسب الوجبة» → ستيكرات أمر تشغيل معيّن، وفي آخر كل ستيكر محظور/بديل ذلك اليوم
+ *   • «حسب الوجبة» → نفس ستيكرات الفطور بالضبط (شكلاً وآلية) لأوامر الغداء/العشاء،
+ *                      مع اختيار الوجبة أو السناك
  *
  * إعدادات الهيدر وألوان الأنظمة الغذائية تُحمَّل هنا مرّة واحدة وتُمرَّر للتبويبين
  * حتى يبقى الستيكر واحداً في الشكل مهما تنقّلت بينهما.
@@ -11,7 +12,7 @@
 
 import { useState } from 'react';
 import LdFixedTab from './LdFixedTab';
-import LdByMealTab from './LdByMealTab';
+import StickersView from '@/components/stickers/StickersView';
 import { useLdStickerSettings } from './ld-settings';
 
 type Tab = 'fixed' | 'byMeal';
@@ -66,7 +67,7 @@ export default function LunchDinnerStickersView() {
       )}
       {visited.has('byMeal') && (
         <div hidden={tab !== 'byMeal'}>
-          <LdByMealTab settings={settings} />
+          <StickersView variant="lunchDinner" />
         </div>
       )}
     </div>
