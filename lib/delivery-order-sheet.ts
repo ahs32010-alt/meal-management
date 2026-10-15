@@ -102,6 +102,24 @@ export function stripExtraPrefix(name: string): string {
   return p ? name.slice(p.length) : name;
 }
 
+/** ترتيب أقسام الوجبات في أمر التسليم — نافذةً وطباعةً */
+export const DELIVERY_MEAL_ORDER: DeliveryMealType[] = ['breakfast', 'lunch', 'dinner', 'all'];
+
+/** ألوان رأس قسم كل وجبة (للطباعة؛ النافذة تستخدم مقابلها في Tailwind) */
+export const DELIVERY_MEAL_COLORS: Record<DeliveryMealType, { bg: string; text: string }> = {
+  breakfast: { bg: '#fef3c7', text: '#92400e' },
+  lunch:     { bg: '#d1fae5', text: '#065f46' },
+  dinner:    { bg: '#e0e7ff', text: '#3730a3' },
+  all:       { bg: '#f1f5f9', text: '#334155' },
+};
+
+/** يقسّم البنود حسب الوجبة بالترتيب الثابت، ويُسقط الأقسام الفارغة */
+export function groupByMeal<T>(items: T[], mealOf: (x: T) => DeliveryMealType): { mealType: DeliveryMealType; items: T[] }[] {
+  return DELIVERY_MEAL_ORDER
+    .map(mealType => ({ mealType, items: items.filter(x => mealOf(x) === mealType) }))
+    .filter(g => g.items.length > 0);
+}
+
 const ITEM_SEP = ' | ';
 
 export function formatDeliveryItem(name: string, mealType: string, quantity: number): string {

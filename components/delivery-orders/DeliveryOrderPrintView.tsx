@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import type { DeliveryOrder, DeliveryPrintHeader } from '@/lib/types';
 import { DELIVERY_MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
 import { APP_FONT_STACK } from '@/lib/fonts';
-import { isExtraItemName, stripExtraPrefix } from '@/lib/delivery-order-sheet';
+import { DELIVERY_MEAL_COLORS, groupByMeal, isExtraItemName, stripExtraPrefix } from '@/lib/delivery-order-sheet';
 
 function arabicDate(dateStr: string) {
   const d = new Date(dateStr);
@@ -63,8 +63,12 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
   const items = allItems.filter(it => !isExtraItemName(it.display_name));
   const extras = allItems.filter(it => isExtraItemName(it.display_name));
   const EXTRA_COLS = 4;
-  // اسم الوجبة بجانب الصنف فقط لو الإضافات من أكثر من وجبة
-  const extrasMixed = new Set(extras.map(it => it.meal_type)).size > 1;
+  const sumQty = (list: { quantity: number }[]) => list.reduce((a, it) => a + it.quantity, 0);
+  const mealHeadStyle = (mt: keyof typeof DELIVERY_MEAL_COLORS): React.CSSProperties => ({
+    background: DELIVERY_MEAL_COLORS[mt].bg, color: DELIVERY_MEAL_COLORS[mt].text,
+    fontWeight: 800, fontSize: 12.5, padding: '5px 10px',
+    borderTop: '1.5px solid #1e293b', borderBottom: '1px solid #94a3b8',
+  });
 
   // ── Styles ────────────────────────────────────────────────────────────────
   const s: Record<string, React.CSSProperties> = {
@@ -309,7 +313,14 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
                   لا توجد أصناف
                 </td>
               </tr>
-            ) : items.map((it, idx) => (
+            ) : groupByMeal(items, it => it.meal_type).map(g => (
+              <React.Fragment key={g.mealType}>
+              <tr>
+                <td colSpan={5} style={mealHeadStyle(g.mealType)}>
+                  {DELIVERY_MEAL_TYPE_LABELS[g.mealType]} — المجموع: {sumQty(g.items)}
+                </td>
+              </tr>
+              {g.items.map((it, idx) => (
               <tr key={it.id}>
                 <td style={s.tdNum}>{idx + 1}</td>
                 <td style={s.td}>{it.display_name}</td>
@@ -322,6 +333,8 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
                   ) : null}
                 </td>
               </tr>
+              ))}
+              </React.Fragment>
             ))}
           </tbody>
         </table>
@@ -330,22 +343,31 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
         {extras.length > 0 && (
           <div style={{ marginTop: 10, breakInside: 'avoid' }}>
             <div style={{ background: '#ede9fe', color: '#5b21b6', fontWeight: 700, fontSize: 12.5, padding: '5px 10px', border: '1.5px solid #1e293b', borderBottom: 'none' }}>
-              الأصناف اليومية الإضافية — المجموع: {extras.reduce((a, it) => a + it.quantity, 0)}
+              الأصناف اليومية الإضافية — المجموع: {sumQty(extras)}
             </div>
             <table style={s.table}>
               <tbody>
-                {Array.from({ length: Math.ceil(extras.length / EXTRA_COLS) }).map((_, r) => (
+                {groupByMeal(extras, it => it.meal_type).map(g => (
+                <React.Fragment key={g.mealType}>
+                <tr>
+                  <td colSpan={EXTRA_COLS * 2} style={{ ...mealHeadStyle(g.mealType), fontSize: 11.5, padding: '3px 10px' }}>
+                    {DELIVERY_MEAL_TYPE_LABELS[g.mealType]} — {sumQty(g.items)}
+                  </td>
+                </tr>
+                {Array.from({ length: Math.ceil(g.items.length / EXTRA_COLS) }).map((_, r) => (
                   <tr key={r}>
                     {Array.from({ length: EXTRA_COLS }).map((_, c) => {
-                      const it = extras[r * EXTRA_COLS + c];
+                      const it = g.items[r * EXTRA_COLS + c];
                       return (
                         <React.Fragment key={c}>
                           <td style={{ ...s.tdNum, ...s.extraCell, width: 34, background: it ? '#f5f3ff' : '#fafafa' }}>{it ? it.quantity : ''}</td>
-                          <td style={{ ...s.td, ...s.extraCell, background: it ? undefined : '#fafafa' }}>{it ? `${stripExtraPrefix(it.display_name)}${extrasMixed ? ` (${DELIVERY_MEAL_TYPE_LABELS[it.meal_type]})` : ''}` : ''}</td>
+                          <td style={{ ...s.td, ...s.extraCell, background: it ? undefined : '#fafafa' }}>{it ? stripExtraPrefix(it.display_name) : ''}</td>
                         </React.Fragment>
                       );
                     })}
                   </tr>
+                ))}
+                </React.Fragment>
                 ))}
               </tbody>
             </table>

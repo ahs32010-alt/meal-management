@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { updateDetails, valueDetails, listDiffDetails } from '@/lib/activity-diff';
@@ -12,7 +12,7 @@ import {
   MEAL_TYPE_LABELS,
 } from '@/lib/types';
 import { todayISO } from '@/lib/date-utils';
-import { EXTRA_ITEM_PREFIX, isExtraItemName, stripExtraPrefix } from '@/lib/delivery-order-sheet';
+import { DELIVERY_MEAL_ORDER, EXTRA_ITEM_PREFIX, groupByMeal, isExtraItemName, stripExtraPrefix } from '@/lib/delivery-order-sheet';
 
 const ENTITY_ICON: Record<EntityType, string> = {
   beneficiary: '👥',
@@ -33,6 +33,14 @@ interface DraftItem {
 }
 
 /** الاسم كما يُحفظ: الإضافي يحمل بادئته */
+const MEAL_SECTION_STYLE: Record<DeliveryMealType, string> = {
+  breakfast: 'bg-amber-50 text-amber-800',
+  lunch:     'bg-emerald-50 text-emerald-800',
+  dinner:    'bg-indigo-50 text-indigo-800',
+  all:       'bg-slate-100 text-slate-700',
+};
+const MEAL_ICON: Record<DeliveryMealType, string> = { breakfast: '🌅', lunch: '☀️', dinner: '🌙', all: '🍽' };
+
 const savedItemName = (it: Pick<DraftItem, 'display_name' | 'is_extra'>) =>
   it.is_extra ? `${EXTRA_ITEM_PREFIX}${it.display_name.trim()}` : it.display_name.trim();
 
@@ -515,7 +523,11 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
         notes: notes.trim() || null,
         creator_signature_url: creatorSignature,
         receiver_signature_url: receiverSignature,
-        items: items.map(it => ({
+        items: [...items]
+          .sort((a, b) =>
+            Number(!!a.is_extra) - Number(!!b.is_extra)
+            || DELIVERY_MEAL_ORDER.indexOf(a.meal_type) - DELIVERY_MEAL_ORDER.indexOf(b.meal_type))
+          .map(it => ({
           display_name: savedItemName(it),
           meal_type: it.meal_type,
           quantity: it.quantity,
@@ -1073,7 +1085,15 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
                       </tr>
                     </thead>
                     <tbody>
-                      {mainItems.map(({ it, idx }, n) => (
+                      {groupByMeal(mainItems, x => x.it.meal_type).map(g => (
+                        <Fragment key={g.mealType}>
+                        <tr className={`border-t border-slate-200 ${MEAL_SECTION_STYLE[g.mealType]}`}>
+                          <td colSpan={5} className="px-3 py-1.5 text-xs font-bold">
+                            {MEAL_ICON[g.mealType]} {DELIVERY_MEAL_TYPE_LABELS[g.mealType]}
+                            <span className="font-semibold opacity-70"> — {g.items.length} صنف، المجموع {g.items.reduce((a, x) => a + x.it.quantity, 0)}</span>
+                          </td>
+                        </tr>
+                        {g.items.map(({ it, idx }, n) => (
                         <tr key={idx} className="border-t border-slate-100">
                           <td className="px-2 py-1.5 text-center text-slate-400">{n + 1}</td>
                           <td className="px-2 py-1.5">
@@ -1117,6 +1137,8 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
                             </button>
                           </td>
                         </tr>
+                        ))}
+                        </Fragment>
                       ))}
                     </tbody>
                   </table>
@@ -1165,8 +1187,15 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
                   <p className={`mt-1 text-[11px] ${extrasSource.startsWith('⚠') ? 'text-amber-700' : 'text-violet-500'}`}>{extrasSource}</p>
                 )}
                 {extraItems.length > 0 && (
-                  <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
-                    {extraItems.map(({ it, idx }) => (
+                  <div className="mt-2 space-y-1.5">
+                  {groupByMeal(extraItems, x => x.it.meal_type).map(g => (
+                  <div key={g.mealType} className="flex items-start gap-1.5">
+                    <span className={`shrink-0 w-20 text-center text-[11px] font-bold rounded-lg px-1 py-1.5 ${MEAL_SECTION_STYLE[g.mealType]}`}>
+                      {MEAL_ICON[g.mealType]} {DELIVERY_MEAL_TYPE_LABELS[g.mealType]}
+                      <span className="block font-semibold opacity-70">{g.items.reduce((a, x) => a + x.it.quantity, 0)}</span>
+                    </span>
+                  <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                    {g.items.map(({ it, idx }) => (
                       <div key={idx} className="flex items-center gap-1 bg-white border border-violet-100 rounded-lg px-1.5 py-1">
                         <input
                           type="text"
@@ -1176,7 +1205,6 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
                           className="flex-1 min-w-0 px-1.5 py-1 text-xs border border-transparent rounded focus:outline-none focus:border-violet-300"
                           required
                         />
-                        <span className="shrink-0 text-[10px] text-violet-500">{DELIVERY_MEAL_TYPE_LABELS[it.meal_type]}</span>
                         <input
                           type="number"
                           min={0}
@@ -1194,6 +1222,9 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
                         </button>
                       </div>
                     ))}
+                  </div>
+                  </div>
+                  ))}
                   </div>
                 )}
               </div>
