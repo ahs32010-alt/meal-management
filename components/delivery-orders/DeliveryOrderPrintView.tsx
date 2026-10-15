@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DeliveryOrder, DeliveryPrintHeader } from '@/lib/types';
 import { DELIVERY_MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
 import { APP_FONT_STACK } from '@/lib/fonts';
@@ -44,6 +44,23 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
   }, [deliveryOrderId]);
 
   useEffect(() => { load(); }, [load]);
+
+  /**
+   * أمر التسليم يُطبع دائماً في صفحة A4 واحدة: نقيس الطول الطبيعي ونصغّر
+   * بـzoom لو تجاوز. ٢٩٧مم − هامشين ٦مم ≈ ١٠٧٧px عند 96dpi، ونترك فسحة
+   * لأن القياس يتم والصفحة بحشوة الشاشة (أطول من الطباعة) فالنتيجة آمنة.
+   */
+  const pageRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+  useLayoutEffect(() => {
+    const el = pageRef.current;
+    if (!order || !el) return;
+    const TARGET_HEIGHT = 1060;
+    el.style.setProperty('zoom', '1');
+    const h = el.scrollHeight;
+    el.style.removeProperty('zoom');
+    setScale(h <= TARGET_HEIGHT ? 1 : Math.max(0.3, TARGET_HEIGHT / h));
+  }, [order, header]);
 
   if (error) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: APP_FONT_STACK, color: '#c00' }}>
@@ -220,7 +237,8 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
         .print-page { page-break-inside: avoid; break-inside: avoid; }
         @media print {
           @page { size: A4 portrait; margin: 6mm; }
-          html, body { background: #fff !important; }
+          html, body { background: #fff !important; height: auto !important; }
+          #delivery-print-root { page-break-after: avoid; break-after: avoid; overflow: hidden; }
           .no-print { display: none !important; }
           .print-page {
             width: 100% !important;
@@ -234,7 +252,10 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
 
       {/* Toolbar */}
       <div className="no-print" style={{ background: '#1e293b', color: '#fff', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, fontFamily: APP_FONT_STACK, direction: 'rtl' }}>
-        <span style={{ fontWeight: 600 }}>أمر التسليم {order.order_number} — {arabicDate(order.date)}</span>
+        <span style={{ fontWeight: 600 }}>
+          أمر التسليم {order.order_number} — {arabicDate(order.date)}
+          {scale < 1 && <span style={{ color: '#94a3b8', fontWeight: 400, fontSize: 12 }}> · مصغّر {Math.round(scale * 100)}% ليحتوي في صفحة واحدة</span>}
+        </span>
         <div style={{ display: 'flex', gap: 8 }}>
           <button
             onClick={() => requestAnimationFrame(() => requestAnimationFrame(() => window.print()))}
@@ -251,7 +272,12 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
         </div>
       </div>
 
-      <div id="delivery-print-root" className="print-page" style={s.page}>
+      <div
+        id="delivery-print-root"
+        ref={pageRef}
+        className="print-page"
+        style={{ ...s.page, ...(scale !== 1 ? ({ zoom: scale } as React.CSSProperties) : {}) }}
+      >
         {/* الهيدر — 3 أعمدة: يسار شركة | وسط شعار | يمين عنوان */}
         <PrintHeader header={header} />
 
@@ -499,8 +525,8 @@ function PrintHeader({ header }: { header: DeliveryPrintHeader | null }) {
         </div>
       </div>
 
-      {/* وسط — الشعار */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      {/* وسط — الشعار (ارتفاع ثابت: قياس «صفحة واحدة» يسبق تحميل الصورة) */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 80 }}>
         {header?.logo_url ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={header.logo_url} alt="شعار" style={{ maxHeight: 80, maxWidth: 100, objectFit: 'contain' }} />
