@@ -11,6 +11,8 @@ import {
   ENTITY_TYPE_LABELS_PLURAL,
   MEAL_TYPE_LABELS,
 } from '@/lib/types';
+import { todayISO } from '@/lib/date-utils';
+import { EXTRA_ITEM_PREFIX, isExtraItemName, stripExtraPrefix } from '@/lib/delivery-order-sheet';
 
 const ENTITY_ICON: Record<EntityType, string> = {
   beneficiary: '👥',
@@ -26,7 +28,13 @@ interface DraftItem {
   meal_type: DeliveryMealType;
   quantity: number;
   receiver_signature_url?: string | null;
+  /** من «الأصناف اليومية الإضافية» — يُعرض في قسمه المضغوط ويُحفظ ببادئة */
+  is_extra?: boolean;
 }
+
+/** الاسم كما يُحفظ: الإضافي يحمل بادئته */
+const savedItemName = (it: Pick<DraftItem, 'display_name' | 'is_extra'>) =>
+  it.is_extra ? `${EXTRA_ITEM_PREFIX}${it.display_name.trim()}` : it.display_name.trim();
 
 interface Props {
   editingOrder?: DeliveryOrder | null;
@@ -79,7 +87,8 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
   // Items
   const [items, setItems] = useState<DraftItem[]>(() =>
     (editingOrder?.delivery_order_items ?? []).map(it => ({
-      display_name: it.display_name,
+      display_name: stripExtraPrefix(it.display_name),
+      is_extra: isExtraItemName(it.display_name),
       meal_type: it.meal_type,
       quantity: it.quantity,
       receiver_signature_url: it.receiver_signature_url,
@@ -104,6 +113,11 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
   const [savingLocation, setSavingLocation] = useState(false);
   const [uploadingSig, setUploadingSig] = useState<'creator' | 'receiver' | null>(null);
   const [loadingFromOrder, setLoadingFromOrder] = useState(false);
+  const [extrasMeal, setExtrasMeal] = useState<MealType>(
+    editingOrder?.meal_type && editingOrder.meal_type !== 'all' ? editingOrder.meal_type : 'lunch'
+  );
+  const [loadingExtras, setLoadingExtras] = useState(false);
+  const [extrasSource, setExtrasSource] = useState('');
 
   // Picker for adding a meal to the items table
   const [pickerMealId, setPickerMealId] = useState<string>('');
@@ -316,7 +330,7 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
         if ((it.qty ?? 0) > 0) drafted.push({ display_name: `بديل سناك: ${it.meal.name}`, meal_type: report.order.meal_type, quantity: it.qty ?? 0 });
       }
       for (const it of report.fixedSummary ?? []) {
-        if ((it.qty ?? 0) > 0) drafted.push({ display_name: `ثابت: ${it.meal.name}`, meal_type: report.order.meal_type, quantity: it.qty ?? 0 });
+        if ((it.qty ?? 0) > 0) drafted.push({ display_name: it.meal.name, meal_type: report.order.meal_type, quantity: it.qty ?? 0, is_extra: true });
       }
 
       setItems(drafted);
@@ -329,9 +343,76 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
     }
   };
 
-  const addEmptyItem = () => {
-    setItems(prev => [...prev, { display_name: '', meal_type: mealType, quantity: 0 }]);
+  const addEmptyItem = (is_extra = false) => {
+    setItems(prev => [...prev, { display_name: '', meal_type: is_extra ? extrasMeal : mealType, quantity: 0, is_extra }]);
   };
+
+  /**
+   * يسحب «الأصناف اليومية الإضافية» لتاريخ الأمر والوجبة المختارة، بنفس
+   * أرقام أمر التشغيل حرفياً:
+   *  ١) لو فيه أمر تشغيل لنفس (التاريخ + الوجبة + الفئة) → من تقريره. التقرير
+   *     يُحسب حيّاً للأيام القادمة (آخر تعديل على المستفيد ينعكس)، ومجمّداً
+   *     للأيام الماضية (اللقطة وقت الحفظ) — فإضافة سُجّلت بعد اليوم ما تدخل
+   *     أمراً قبلها، والمحذوفة بعده تبقى في أمره.
+   *  ٢) وإلا → من المسجّل حالياً على المستفيدين حسب يوم الأسبوع. التسجيل ما
+   *     يحفظ تاريخ إضافة موثوقاً (الحفظ يحذف ويعيد إدراج الأصناف)، فلو
+   *     التاريخ ماضٍ ننبّه إن الأرقام بوضع اليوم.
+   * السحب يستبدل إضافات نفس الوجبة فقط عشان إعادة السحب ما تكرّر الأصناف.
+   */
+  const pullExtras = async () => {
+    setLoadingExtras(true);
+    setError('');
+    setExtrasSource('');
+    try {
+      let src = await supabase.from('daily_orders')
+        .select('id').eq('date', date).eq('meal_type', extrasMeal).eq('entity_type', entityType)
+        .order('created_at', { ascending: false }).limit(1);
+      if (src.error && /entity_type|column/i.test(src.error.message)) {
+        src = await supabase.from('daily_orders')
+          .select('id').eq('date', date).eq('meal_type', extrasMeal)
+          .order('created_at', { ascending: false }).limit(1);
+      }
+      const opOrderId = (src.data?.[0] as { id: string } | undefined)?.id;
+
+      let rows: { name: string; qty: number }[];
+      if (opOrderId) {
+        const res = await fetch(`/api/orders/${opOrderId}/report`);
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) { setError(j.error ?? 'تعذّر جلب تقرير أمر التشغيل'); return; }
+        rows = ((j as ReportPayload).fixedSummary ?? []).map(r => ({ name: r.meal.name, qty: r.qty ?? 0 }));
+        setExtrasSource(`من أمر تشغيل ${MEAL_TYPE_LABELS[extrasMeal]} ${date}`);
+      } else {
+        const res = await fetch('/api/reports/fixed-extras', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: date, to: date, meal_types: [extrasMeal], entity_type: entityType }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) { setError(j.error ?? 'تعذّر جلب الإضافات'); return; }
+        rows = ((j.rows ?? []) as { meal: { name: string }; total: number }[]).map(r => ({ name: r.meal.name, qty: r.total }));
+        setExtrasSource(date < todayISO()
+          ? `⚠ ما فيه أمر تشغيل لهذا اليوم — الأرقام من تسجيل المستفيدين الحالي (قد يختلف عمّا كان يوم ${date})`
+          : 'ما فيه أمر تشغيل لهذا اليوم — من تسجيل المستفيدين الحالي');
+      }
+
+      rows = rows.filter(r => r.qty > 0);
+      if (rows.length === 0) {
+        alert(`ما فيه أصناف إضافية لـ${ENTITY_TYPE_LABELS_PLURAL[entityType]} في ${MEAL_TYPE_LABELS[extrasMeal]} بتاريخ ${date}`);
+        return;
+      }
+      setItems(prev => [
+        ...prev.filter(it => !(it.is_extra && it.meal_type === extrasMeal)),
+        ...rows.map(r => ({ display_name: r.name, meal_type: extrasMeal as DeliveryMealType, quantity: r.qty, is_extra: true })),
+      ]);
+    } finally {
+      setLoadingExtras(false);
+    }
+  };
+
+  // القسمان يتشاركان مصفوفة واحدة — نحفظ الفهرس الأصلي لكل بند
+  const indexed = items.map((it, idx) => ({ it, idx }));
+  const mainItems = indexed.filter(x => !x.it.is_extra);
+  const extraItems = indexed.filter(x => x.it.is_extra);
 
   const updateItem = (idx: number, patch: Partial<DraftItem>) => {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
@@ -435,7 +516,7 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
         creator_signature_url: creatorSignature,
         receiver_signature_url: receiverSignature,
         items: items.map(it => ({
-          display_name: it.display_name.trim(),
+          display_name: savedItemName(it),
           meal_type: it.meal_type,
           quantity: it.quantity,
           receiver_signature_url: it.receiver_signature_url ?? null,
@@ -459,8 +540,8 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
         entity_name: `أمر تسليم ${j.order_number ?? editingOrder?.order_number ?? ''} — ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`,
         details: (() => {
           // البنود تُوصف «الاسم ×الكمية» فيظهر تغيير الكمية سطراً مُزالاً وآخر مُضافاً
-          const describeItem = (it: { display_name: string; quantity: number }) =>
-            `${it.display_name.trim()} ×${it.quantity}`;
+          const describeItem = (it: { display_name: string; quantity: number; is_extra?: boolean }) =>
+            `${savedItemName(it)} ×${it.quantity}`;
           const after = {
             date, meal_type: mealType, notes: notes.trim() || null,
             entity_type: entityType,
@@ -826,7 +907,7 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
                   </button>
                   <button
                     type="button"
-                    onClick={addEmptyItem}
+                    onClick={() => addEmptyItem()}
                     className="text-xs px-3 py-1.5 bg-slate-50 text-slate-700 rounded-lg font-semibold hover:bg-slate-100 border border-slate-200"
                     title="صنف يدوي بدون حفظ في القائمة"
                   >
@@ -975,7 +1056,7 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
                 </div>
               )}
 
-              {items.length === 0 ? (
+              {mainItems.length === 0 ? (
                 <div className="border border-dashed border-slate-200 rounded-xl p-6 text-center text-slate-400 text-sm">
                   لا توجد أصناف بعد — اضغط &quot;+ إضافة صنف&quot;
                 </div>
@@ -992,9 +1073,9 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
                       </tr>
                     </thead>
                     <tbody>
-                      {items.map((it, idx) => (
+                      {mainItems.map(({ it, idx }, n) => (
                         <tr key={idx} className="border-t border-slate-100">
-                          <td className="px-2 py-1.5 text-center text-slate-400">{idx + 1}</td>
+                          <td className="px-2 py-1.5 text-center text-slate-400">{n + 1}</td>
                           <td className="px-2 py-1.5">
                             <input
                               type="text"
@@ -1041,6 +1122,81 @@ export default function DeliveryOrderModal({ editingOrder, onClose, onSaved }: P
                   </table>
                 </div>
               )}
+
+              {/* الأصناف اليومية الإضافية — قسم مضغوط: سطر واحد لو فاضي */}
+              <div className="mt-3 border border-violet-200 bg-violet-50/40 rounded-xl p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-bold text-violet-900">
+                    الأصناف اليومية الإضافية
+                    {extraItems.length > 0 && (
+                      <span className="font-semibold text-violet-600">
+                        {' '}({extraItems.length} — المجموع {extraItems.reduce((a, x) => a + x.it.quantity, 0)})
+                      </span>
+                    )}
+                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={extrasMeal}
+                      onChange={e => setExtrasMeal(e.target.value as MealType)}
+                      className="text-xs px-1.5 py-1 border border-violet-200 rounded-lg bg-white focus:outline-none"
+                    >
+                      {Object.entries(MEAL_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={pullExtras}
+                      disabled={loadingExtras}
+                      className="text-xs px-2 py-1 bg-violet-600 text-white rounded-lg font-semibold hover:bg-violet-700 disabled:opacity-50"
+                      title="يجلب الأصناف الإضافية المسجّلة على المستفيدين لتاريخ الأمر والوجبة المختارة"
+                    >
+                      {loadingExtras ? '...' : '⬇ ضيف الإضافات'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addEmptyItem(true)}
+                      className="text-xs px-2 py-1 bg-white text-violet-700 rounded-lg font-semibold hover:bg-violet-100 border border-violet-200"
+                      title="صنف إضافي يدوي"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+                {extrasSource && (
+                  <p className={`mt-1 text-[11px] ${extrasSource.startsWith('⚠') ? 'text-amber-700' : 'text-violet-500'}`}>{extrasSource}</p>
+                )}
+                {extraItems.length > 0 && (
+                  <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                    {extraItems.map(({ it, idx }) => (
+                      <div key={idx} className="flex items-center gap-1 bg-white border border-violet-100 rounded-lg px-1.5 py-1">
+                        <input
+                          type="text"
+                          value={it.display_name}
+                          onChange={e => updateItem(idx, { display_name: e.target.value })}
+                          placeholder="اسم الصنف"
+                          className="flex-1 min-w-0 px-1.5 py-1 text-xs border border-transparent rounded focus:outline-none focus:border-violet-300"
+                          required
+                        />
+                        <span className="shrink-0 text-[10px] text-violet-500">{DELIVERY_MEAL_TYPE_LABELS[it.meal_type]}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={it.quantity}
+                          onChange={e => updateItem(idx, { quantity: parseInt(e.target.value) || 0 })}
+                          className="w-12 text-center px-1 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:border-violet-300 font-bold text-violet-700"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeItem(idx)}
+                          className="text-slate-300 hover:text-red-600 px-0.5"
+                          title="حذف"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* الملاحظات */}

@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import type { DeliveryOrder, DeliveryPrintHeader } from '@/lib/types';
 import { DELIVERY_MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL } from '@/lib/types';
 import { APP_FONT_STACK } from '@/lib/fonts';
+import { isExtraItemName, stripExtraPrefix } from '@/lib/delivery-order-sheet';
 
 function arabicDate(dateStr: string) {
   const d = new Date(dateStr);
@@ -58,7 +59,12 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
     </div>
   );
 
-  const items = order.delivery_order_items ?? [];
+  const allItems = order.delivery_order_items ?? [];
+  const items = allItems.filter(it => !isExtraItemName(it.display_name));
+  const extras = allItems.filter(it => isExtraItemName(it.display_name));
+  const EXTRA_COLS = 4;
+  // اسم الوجبة بجانب الصنف فقط لو الإضافات من أكثر من وجبة
+  const extrasMixed = new Set(extras.map(it => it.meal_type)).size > 1;
 
   // ── Styles ────────────────────────────────────────────────────────────────
   const s: Record<string, React.CSSProperties> = {
@@ -146,6 +152,7 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
       borderLeft: '1px solid #e2e8f0', fontSize: 14, fontWeight: 700,
       textAlign: 'center',
     },
+    extraCell: { padding: '4px 6px', fontSize: 11.5 },
     sigCell: {
       padding: '4px 6px', borderBottom: '1px solid #cbd5e1',
       borderLeft: '1px solid #e2e8f0',
@@ -318,6 +325,32 @@ export default function DeliveryOrderPrintView({ deliveryOrderId }: { deliveryOr
             ))}
           </tbody>
         </table>
+
+        {/* الأصناف اليومية الإضافية — شبكة مضغوطة (العدد | الاسم) × ٤ أعمدة */}
+        {extras.length > 0 && (
+          <div style={{ marginTop: 10, breakInside: 'avoid' }}>
+            <div style={{ background: '#ede9fe', color: '#5b21b6', fontWeight: 700, fontSize: 12.5, padding: '5px 10px', border: '1.5px solid #1e293b', borderBottom: 'none' }}>
+              الأصناف اليومية الإضافية — المجموع: {extras.reduce((a, it) => a + it.quantity, 0)}
+            </div>
+            <table style={s.table}>
+              <tbody>
+                {Array.from({ length: Math.ceil(extras.length / EXTRA_COLS) }).map((_, r) => (
+                  <tr key={r}>
+                    {Array.from({ length: EXTRA_COLS }).map((_, c) => {
+                      const it = extras[r * EXTRA_COLS + c];
+                      return (
+                        <React.Fragment key={c}>
+                          <td style={{ ...s.tdNum, ...s.extraCell, width: 34, background: it ? '#f5f3ff' : '#fafafa' }}>{it ? it.quantity : ''}</td>
+                          <td style={{ ...s.td, ...s.extraCell, background: it ? undefined : '#fafafa' }}>{it ? `${stripExtraPrefix(it.display_name)}${extrasMixed ? ` (${DELIVERY_MEAL_TYPE_LABELS[it.meal_type]})` : ''}` : ''}</td>
+                        </React.Fragment>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {/* الملاحظات */}
         <div style={s.notesBox}>

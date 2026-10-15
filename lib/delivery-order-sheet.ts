@@ -85,6 +85,23 @@ export function deliveryMealTypeLabel(mt: string): string {
 
 // ─── البنود ─────────────────────────────────────────────────────────────────
 
+/**
+ * «الأصناف اليومية الإضافية» القادمة من أمر التشغيل تُحفظ كبنود عادية
+ * يميّزها بادئة في الاسم — بلا عمود جديد ولا ترقية، والتصدير والاستيراد
+ * يحملانها كما هي. «ثابت:» هي البادئة القديمة لنفس الأصناف.
+ */
+export const EXTRA_ITEM_PREFIX = 'إضافي: ';
+const EXTRA_PREFIXES = [EXTRA_ITEM_PREFIX, 'ثابت: '];
+
+export function isExtraItemName(name: string): boolean {
+  return EXTRA_PREFIXES.some(p => name.startsWith(p));
+}
+
+export function stripExtraPrefix(name: string): string {
+  const p = EXTRA_PREFIXES.find(x => name.startsWith(x));
+  return p ? name.slice(p.length) : name;
+}
+
 const ITEM_SEP = ' | ';
 
 export function formatDeliveryItem(name: string, mealType: string, quantity: number): string {
