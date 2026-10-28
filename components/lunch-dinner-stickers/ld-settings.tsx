@@ -8,13 +8,18 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
-import { TIER_LABELS, moveDiet, moveDietTo, NO_DIET, tierKey, type StickerTier } from './ld-diet-order';
+import {
+  TIER_LABELS, moveDiet, moveDietTo, NO_DIET, tierKey, type StickerTier,
+  WITHIN_DIET_SORT_LABELS, type WithinDietSort,
+  colorsBackground, joinColors, splitColors, MAX_STICKER_COLORS,
+} from './ld-diet-order';
 import ColorPicker from '@/components/shared/ColorPicker';
 
 export const HEADER_KEY = 'ldStickerHeaderUrl';
 export const DIET_COLORS_KEY = 'ldDietColors';
 export const DIET_ORDER_KEY = 'ldDietOrder';
 export const HIDDEN_COLORS_KEY = 'ldHiddenColors';
+export const WITHIN_SORT_KEY = 'ldWithinDietSort';
 
 export const PRESETS = [
   { w: '10', h: '10' },
@@ -83,6 +88,9 @@ export interface LdSettings {
   hiddenColors: string[];
   toggleHiddenColor: (key: string) => void;
   showAllColors: () => void;
+  /** الترتيب داخل كل نظام غذائي (الافتراضي / الكود / الفيلا) — محفوظ على هذا الجهاز */
+  withinSort: WithinDietSort;
+  setWithinSort: (v: WithinDietSort) => void;
 }
 
 export function useLdStickerSettings(): LdSettings {
@@ -93,6 +101,7 @@ export function useLdStickerSettings(): LdSettings {
   const [hiddenColors, setHiddenColorsState] = useState<string[]>([]);
   const [showDietOrder, setShowDietOrderState] = useState(true);
   const [sharedSettings, setSharedSettings] = useState(true);
+  const [withinSort, setWithinSortState] = useState<WithinDietSort>('default');
 
   useEffect(() => {
     // كاش محلي فوري
@@ -105,6 +114,8 @@ export function useLdStickerSettings(): LdSettings {
       if (order) setDietOrderState(JSON.parse(order) as string[]);
       const hidden = localStorage.getItem(HIDDEN_COLORS_KEY);
       if (hidden) setHiddenColorsState(JSON.parse(hidden) as string[]);
+      const within = localStorage.getItem(WITHIN_SORT_KEY);
+      if (within === 'code' || within === 'villa') setWithinSortState(within);
     } catch {}
     // الترتيب وإظهاره: مشتركان في sticker_settings (لو الترقية اتشغّلت)
     (async () => {
@@ -168,6 +179,11 @@ export function useLdStickerSettings(): LdSettings {
       .upsert({ id: 1, show_diet_order: v, updated_at: new Date().toISOString() });
   }, []);
 
+  const setWithinSort = useCallback((v: WithinDietSort) => {
+    setWithinSortState(v);
+    try { localStorage.setItem(WITHIN_SORT_KEY, v); } catch {}
+  }, []);
+
   const saveHidden = (next: string[]) => {
     try { localStorage.setItem(HIDDEN_COLORS_KEY, JSON.stringify(next)); } catch {}
     return next;
@@ -203,6 +219,7 @@ export function useLdStickerSettings(): LdSettings {
     headerUrl, uploading, uploadHeader, removeHeader, dietColors, setDietColor, dietOrder, setDietOrder,
     hiddenColors, toggleHiddenColor, showAllColors,
     showDietOrder, setShowDietOrder, sharedSettings,
+    withinSort, setWithinSort,
   };
 }
 
@@ -275,7 +292,7 @@ export function DietOrderPanel({ groups, settings, defaultOpen }: {
   settings: LdSettings;
   defaultOpen?: boolean;
 }) {
-  const { dietColors, dietOrder, setDietOrder, sharedSettings } = settings;
+  const { dietColors, dietOrder, setDietOrder, sharedSettings, withinSort, setWithinSort } = settings;
   const [dragging, setDragging] = useState<string | null>(null);
   const [dropAt, setDropAt] = useState<string | null>(null);
 
@@ -305,6 +322,19 @@ export function DietOrderPanel({ groups, settings, defaultOpen }: {
             الترتيب الافتراضي
           </button>
         )}
+      </div>
+      {/* الترتيب داخل كل نظام — الأنظمة نفسها تبقى بترتيبها أعلاه */}
+      <div className="flex items-center gap-2 flex-wrap pb-2">
+        <span className="text-xs font-semibold text-slate-600">داخل كل نظام رتّب حسب:</span>
+        <div className="inline-flex items-center gap-1 p-1 rounded-lg bg-slate-100">
+          {(Object.keys(WITHIN_DIET_SORT_LABELS) as WithinDietSort[]).map(v => (
+            <button key={v} type="button" onClick={() => setWithinSort(v)} aria-pressed={withinSort === v}
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                withinSort === v ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}>
+              {WITHIN_DIET_SORT_LABELS[v]}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="space-y-3">
         {groups.map((group, t) => {
@@ -343,7 +373,7 @@ export function DietOrderPanel({ groups, settings, defaultOpen }: {
                         <span className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 select-none px-0.5 text-lg leading-none" title="اسحب لتغيير الترتيب">⋮⋮</span>
                         <span className="w-6 text-center text-xs font-bold text-slate-400 shrink-0">{idx + 1}</span>
                         <span className="flex items-center gap-2 font-medium text-sm flex-1 min-w-0 text-slate-700">
-                          <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: color || '#ffffff' }} />
+                          <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: colorsBackground(color) }} />
                           <span className="truncate" title={diet}>{diet}</span>
                           <span className="text-[11px] text-slate-400 font-normal shrink-0">({count})</span>
                         </span>
@@ -382,7 +412,7 @@ export function DietColorsPanel({ dietTypes, settings, counts }: {
   counts?: Map<string, number>;
 }) {
   const { dietColors, setDietColor, hiddenColors, toggleHiddenColor } = settings;
-  const [openColorFor, setOpenColorFor] = useState<string | null>(null);
+  const [openColorFor, setOpenColorFor] = useState<{ diet: string; band: number } | null>(null);
   const [colorTab, setColorTab] = useState<'custom' | 'preset'>('custom');
   if (dietTypes.length === 0) return null;
   const sorted = [...dietTypes].sort((a, b) => a.localeCompare(b, 'ar'));
@@ -397,18 +427,27 @@ export function DietColorsPanel({ dietTypes, settings, counts }: {
         </svg>
       }
     >
-      <p className="text-[11px] text-slate-500 py-2">لون خلفية الستيكر لكل نظام. زر 👁 يخفي ستيكرات ذلك اللون من المعاينة والتصدير.</p>
+      <p className="text-[11px] text-slate-500 py-2">لون خلفية الستيكر لكل نظام. «+» يضيف لوناً ثانياً فينقسم الستيكر (الأول فوق والثاني تحت…). زر 👁 يخفي ستيكرات ذلك اللون من المعاينة والتصدير.</p>
       <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg">
         {sorted.map(diet => {
-          const selected = dietColors[diet];
-          const pickerOpen = openColorFor === diet;
-          const colorKey = selected ? selected.toLowerCase() : NO_DIET;
+          const value = dietColors[diet];
+          const bands = splitColors(value);
+          const colorKey = value ? value.toLowerCase() : NO_DIET;
           const hidden = hiddenColors.includes(colorKey);
           const count = counts?.get(diet);
+          // الشريط المفتوح للتعديل في هذا الصف (فهرسه = موضعه من فوق لتحت)
+          const openBand = openColorFor?.diet === diet ? openColorFor.band : null;
+          const selected = openBand !== null ? bands[openBand] : undefined;
+          const setBand = (bi: number, hex: string | null) => {
+            const next = [...bands];
+            if (hex) next[bi] = hex; else next.splice(bi, 1);
+            setDietColor(diet, joinColors(next));
+          };
+          const pick = (hex: string) => { setBand(openBand ?? 0, hex); setOpenColorFor(null); };
           return (
             <div key={diet} className={`flex items-center gap-2 px-2 py-1.5 ${hidden ? 'bg-slate-50' : ''}`}>
               <span className={`flex items-center gap-2 font-medium text-sm flex-1 min-w-0 ${hidden ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
-                <span className="w-3.5 h-3.5 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: selected || '#ffffff' }} />
+                <span className="w-3.5 h-3.5 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: colorsBackground(value) }} />
                 <span className="truncate" title={diet}>{diet}</span>
                 {count !== undefined && <span className="text-[11px] text-slate-400 font-normal shrink-0">({count})</span>}
               </span>
@@ -425,27 +464,53 @@ export function DietColorsPanel({ dietTypes, settings, counts }: {
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
                 )}
               </button>
-              <div className="relative shrink-0">
+              <div className="relative shrink-0 flex items-center gap-1">
+                {/* لون واحد لكل شريط — الأول فوق والأخير تحت. «+» يقسم الستيكر لشريط إضافي */}
+                {bands.length === 0 ? (
                   <button
                     type="button"
-                    onClick={() => setOpenColorFor(pickerOpen ? null : diet)}
+                    onClick={() => setOpenColorFor(openBand === 0 ? null : { diet, band: 0 })}
                     className="flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-xs font-medium text-slate-600 transition-colors"
                   >
-                    <span
-                      className="w-4 h-4 rounded shrink-0"
-                      style={selected
-                        ? { background: selected, boxShadow: '0 0 0 1px rgba(0,0,0,0.08)' }
-                        : { border: '1.5px dashed #cbd5e1' }}
-                    />
-                    <span>{selected ? 'اللون' : 'بدون لون'}</span>
-                    <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform ${pickerOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
+                    <span className="w-4 h-4 rounded shrink-0" style={{ border: '1.5px dashed #cbd5e1' }} />
+                    <span>بدون لون</span>
                   </button>
-                  {pickerOpen && (
+                ) : (
+                  <div className="flex items-center gap-0.5 p-0.5 rounded-lg border border-slate-200">
+                    {bands.map((c, bi) => (
+                      <button
+                        key={bi}
+                        type="button"
+                        onClick={() => setOpenColorFor(openBand === bi ? null : { diet, band: bi })}
+                        title={bands.length > 1 ? `لون الجزء ${bi + 1} من ${bands.length} (من فوق)` : 'اللون'}
+                        className={`w-5 h-5 rounded transition-transform hover:scale-110 ${openBand === bi ? 'ring-2 ring-violet-500 ring-offset-1' : ''}`}
+                        style={{ background: c, boxShadow: '0 0 0 1px rgba(0,0,0,0.12)' }}
+                      />
+                    ))}
+                  </div>
+                )}
+                {bands.length > 0 && bands.length < MAX_STICKER_COLORS && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDietColor(diet, joinColors([...bands, '#FFFFFF']));
+                      setOpenColorFor({ diet, band: bands.length });
+                    }}
+                    title="إضافة لون: يُقسم الستيكر لأجزاء أفقية (فوق/تحت)"
+                    className="w-6 h-6 flex items-center justify-center rounded-lg border border-dashed border-slate-300 text-slate-500 hover:text-violet-700 hover:border-violet-300 text-sm font-bold"
+                  >
+                    +
+                  </button>
+                )}
+                  {openBand !== null && (
                     <>
                       <div className="fixed inset-0 z-10" onClick={() => setOpenColorFor(null)} />
-                      <div className="absolute z-20 left-0 mt-2 p-3 bg-white rounded-2xl shadow-xl border border-slate-100" style={{ width: 'max-content' }}>
+                      <div className="absolute z-20 left-0 top-full mt-2 p-3 bg-white rounded-2xl shadow-xl border border-slate-100" style={{ width: 'max-content' }}>
+                        {bands.length > 1 && (
+                          <div className="text-xs font-bold text-slate-600 mb-2 text-center">
+                            لون الجزء {openBand + 1} من {bands.length} {openBand === 0 ? '(فوق)' : openBand === bands.length - 1 ? '(تحت)' : ''}
+                          </div>
+                        )}
                         {/* تبويبان: منتقي حرّ (يبقى مفتوحاً للتعديل) + الألوان الجاهزة (تُغلق عند الاختيار) */}
                         <div className="flex border-b border-slate-200 mb-3" role="tablist">
                           {(['custom', 'preset'] as const).map(t => (
@@ -458,13 +523,13 @@ export function DietColorsPanel({ dietTypes, settings, counts }: {
                           ))}
                         </div>
                         {colorTab === 'custom' ? (
-                          <ColorPicker value={selected} onChange={hex => setDietColor(diet, hex)} />
+                          <ColorPicker value={selected} onChange={hex => setBand(openBand, hex)} />
                         ) : (
                           <>
                             <div className="text-[10px] font-semibold text-slate-400 mb-1">ألوان قياسية</div>
                             <div className="flex gap-1 mb-3">
                               {STANDARD_COLORS.map(c => (
-                                <ColorSwatch key={c} color={c} selected={selected} onPick={(col) => { setDietColor(diet, col); setOpenColorFor(null); }} />
+                                <ColorSwatch key={c} color={c} selected={selected} onPick={pick} />
                               ))}
                             </div>
                             <div className="text-[10px] font-semibold text-slate-400 mb-1">تدرّجات</div>
@@ -472,7 +537,7 @@ export function DietColorsPanel({ dietTypes, settings, counts }: {
                               {RAMP_COLUMNS.map((col, ci) => (
                                 <div key={ci} className="flex flex-col gap-1">
                                   {col.map(c => (
-                                    <ColorSwatch key={c} color={c} selected={selected} onPick={(picked) => { setDietColor(diet, picked); setOpenColorFor(null); }} />
+                                    <ColorSwatch key={c} color={c} selected={selected} onPick={pick} />
                                   ))}
                                 </div>
                               ))}
@@ -481,13 +546,13 @@ export function DietColorsPanel({ dietTypes, settings, counts }: {
                         )}
                         <button
                           type="button"
-                          onClick={() => { setDietColor(diet, null); setOpenColorFor(null); }}
+                          onClick={() => { setBand(openBand, null); setOpenColorFor(null); }}
                           className="mt-3 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
                         >
                           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                           </svg>
-                          بدون لون
+                          {bands.length > 1 ? 'حذف هذا اللون' : 'بدون لون'}
                         </button>
                       </div>
                     </>
@@ -532,7 +597,7 @@ export function HiddenColorsControl({ colors, settings }: {
           >
             <span
               className={`w-4 h-4 rounded shrink-0 ${hidden ? 'opacity-40' : ''}`}
-              style={{ background: c.key || '#ffffff', boxShadow: '0 0 0 1px rgba(0,0,0,0.12)' }}
+              style={{ background: colorsBackground(c.key), boxShadow: '0 0 0 1px rgba(0,0,0,0.12)' }}
             />
             <span className="max-w-[120px] truncate">{label}</span>
             <span className="font-normal opacity-70">({c.count})</span>
@@ -686,7 +751,7 @@ export function DietGroupHeader({ diet, color, count, index }: {
   return (
     <div className="w-full flex items-center gap-2 pt-3 pb-1 border-b border-slate-200 first:pt-0">
       <span className="w-5 text-center text-xs font-bold text-slate-400">{index}</span>
-      <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: color || '#ffffff' }} />
+      <span className="w-3 h-3 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: colorsBackground(color) }} />
       <span className="text-sm font-bold text-slate-700">{diet || 'بدون نظام غذائي'}</span>
       <span className="text-xs text-slate-400">({count} ستيكر)</span>
     </div>

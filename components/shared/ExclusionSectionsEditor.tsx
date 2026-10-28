@@ -44,11 +44,19 @@ export function MealTypeSection({
   const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  // قائمة البديل المفتوحة (معرّف الصنف المحظور) — قائمة كبيرة بدل select ضيق
+  const [altFor, setAltFor] = useState<string | null>(null);
+  const [altQuery, setAltQuery] = useState('');
+  const altExclusion = altFor ? items.find(x => x.meal_id === altFor) : undefined;
+  const altMeal = altFor ? mealById(altFor) : undefined;
+  const altCandidates = altMeal
+    ? allMeals.filter(m => m.type === altMeal.type && m.is_snack === altMeal.is_snack && m.id !== altMeal.id)
+    : [];
+  const matches = (m: Meal, q: string) =>
+    m.name.includes(q) || (m.english_name ?? '').toLowerCase().includes(q.toLowerCase());
 
   const availableMeals = sectionMeals.filter(m => !excludedIds.includes(m.id));
-  const filteredMeals = availableMeals.filter(m =>
-    m.name.includes(query) || (m.english_name ?? '').toLowerCase().includes(query.toLowerCase())
-  );
+  const filteredMeals = availableMeals.filter(m => matches(m, query));
 
   const openPicker = () => { setPicking(true); setQuery(''); setTimeout(() => inputRef.current?.focus(), 50); };
   const closePicker = () => { setPicking(false); setQuery(''); };
@@ -121,19 +129,66 @@ export function MealTypeSection({
                 {candidates.length > 0 && (
                   <>
                     <span className="text-slate-300 text-base leading-none">→</span>
-                    <select
-                      value={ex.alternative_meal_id}
-                      onChange={e => onSetAlt(ex.meal_id, e.target.value)}
-                      className="text-xs bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-600 focus:outline-none max-w-[110px]"
+                    <button
+                      type="button"
+                      onClick={() => { setAltFor(altFor === ex.meal_id ? null : ex.meal_id); setAltQuery(''); }}
+                      className={`text-xs border rounded px-1.5 py-0.5 max-w-[160px] truncate transition-colors ${
+                        altFor === ex.meal_id ? 'border-blue-400 bg-blue-50 text-blue-700'
+                          : ex.alternative_meal_id ? 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                          : 'border-dashed border-slate-300 bg-white text-slate-400 hover:text-slate-600'}`}
                     >
-                      <option value="">بلا بديل</option>
-                      {candidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
+                      {ex.alternative_meal_id ? mealById(ex.alternative_meal_id)?.name ?? 'صنف محذوف' : 'بلا بديل'} ▾
+                    </button>
                   </>
                 )}
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* قائمة البديل — كبيرة وقابلة للبحث مثل قائمة الأصناف، تُغلق عند الاختيار */}
+      {altExclusion && altMeal && (
+        <div className="border-t border-slate-200 bg-blue-50/40 px-4 pt-3 pb-3">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-xs font-semibold text-slate-600">
+              بديل <span className="line-through opacity-60">{altMeal.name}</span>
+            </span>
+            <button type="button" onClick={() => setAltFor(null)} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded">
+              إغلاق
+            </button>
+          </div>
+          <input
+            autoFocus
+            value={altQuery}
+            onChange={e => setAltQuery(e.target.value)}
+            placeholder="ابحث عن البديل..."
+            className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300 mb-3 bg-white"
+          />
+          <div className="flex flex-wrap gap-2 max-h-64 overflow-y-auto">
+            <button
+              type="button"
+              onClick={() => { onSetAlt(altExclusion.meal_id, ''); setAltFor(null); }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border border-dashed transition-colors ${
+                !altExclusion.alternative_meal_id ? 'border-slate-500 bg-slate-100 text-slate-700' : 'border-slate-300 bg-white text-slate-500 hover:bg-slate-50'}`}
+            >
+              بلا بديل
+            </button>
+            {altCandidates.filter(m => matches(m, altQuery)).map(c => {
+              const sel = altExclusion.alternative_meal_id === c.id;
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => { onSetAlt(altExclusion.meal_id, c.id); setAltFor(null); }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                    sel ? 'border-blue-500 bg-blue-600 text-white' : 'border-blue-200 bg-white text-blue-800 hover:bg-blue-50 hover:shadow-sm'}`}
+                >
+                  {c.name}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -155,14 +210,18 @@ export function MealTypeSection({
             className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300 mb-3"
           />
           {filteredMeals.length === 0 ? (
-            <p className="text-xs text-slate-400 text-center py-2">لا توجد نتائج</p>
+            <p className="text-xs text-slate-400 text-center py-2">
+              {availableMeals.length === 0 ? 'تم استبعاد كل أصناف هذه الوجبة' : 'لا توجد نتائج'}
+            </p>
           ) : (
-            <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto">
+            // القائمة تبقى مفتوحة: الصنف المختار ينزل منها ويطلع فوق كمحظور،
+            // فيُختار التالي مباشرة بلا إعادة فتح
+            <div className="flex flex-wrap gap-2 max-h-64 overflow-y-auto">
               {filteredMeals.map(m => (
                 <button
                   key={m.id}
                   type="button"
-                  onClick={() => { onAdd(m); closePicker(); }}
+                  onClick={() => { onAdd(m); inputRef.current?.focus(); }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors bg-white hover:bg-opacity-80 ${s.chip} hover:shadow-sm`}
                 >
                   {m.name}

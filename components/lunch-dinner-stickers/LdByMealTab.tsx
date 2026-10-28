@@ -65,7 +65,7 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   const [pdfMode, setPdfMode] = useState<PdfMode>('single');
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
-  const { headerUrl, dietColors, dietOrder, hiddenColors } = settings;
+  const { headerUrl, dietColors, dietOrder, hiddenColors, withinSort } = settings;
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
@@ -210,8 +210,8 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   const visibleRows = useMemo(() => {
     const filtered = colorFiltered.filter(r => !hiddenColors.includes(stickerColorKey(dietOfRow(r), dietColors)));
     // ترتيب ثابت دائماً: كل الأنظمة ← Ⓡ ← وجبات مخصصة (الأنظمة أبجدياً والعادي أولاً)
-    return sortByTierAndDiet(filtered, r => r.ben, dietOrder);
-  }, [colorFiltered, hiddenColors, dietColors, dietOrder]);
+    return sortByTierAndDiet(filtered, r => r.ben, dietOrder, withinSort);
+  }, [colorFiltered, hiddenColors, dietColors, dietOrder, withinSort]);
   // نفس مجموعات الفرز للوحة الترتيب — من القائمة كاملة قبل إخفاء الألوان
   const tierGroups = useMemo(
     () => tierDietGroups(customFiltered, r => r.ben, dietOrder),

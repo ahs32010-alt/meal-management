@@ -61,6 +61,39 @@ export function moveDietTo(dietTypes: string[], saved: string[], diet: string, t
   return [...order, ...saved.filter(d => !inOrder.has(d))];
 }
 
+// ── ستيكر بأكثر من لون ───────────────────────────────────────────────────────
+// قيمة اللون المحفوظة قد تكون عدة ألوان مفصولة بفاصلة («#aaa,#bbb») — نفس العمود
+// النصي بلا ترقية. كل لون شريط أفقي متساوٍ: الأول فوق، والأخير تحت.
+
+export const MAX_STICKER_COLORS = 4;
+
+export function splitColors(value?: string | null): string[] {
+  return (value ?? '').split(',').map(c => c.trim()).filter(Boolean);
+}
+
+export function joinColors(colors: string[]): string | null {
+  const list = colors.map(c => c.trim()).filter(Boolean).slice(0, MAX_STICKER_COLORS);
+  return list.length ? list.join(',') : null;
+}
+
+/** قيمة CSS للخلفية: لون واحد كما هو، وأكثر = أشرطة أفقية بحدود حادة */
+export function colorsBackground(value?: string | null, fallback = '#ffffff'): string {
+  const list = splitColors(value);
+  if (list.length === 0) return fallback;
+  if (list.length === 1) return list[0];
+  const step = 100 / list.length;
+  const stops = list.map((c, i) => `${c} ${+(i * step).toFixed(3)}% ${+((i + 1) * step).toFixed(3)}%`);
+  return `linear-gradient(to bottom, ${stops.join(', ')})`;
+}
+
+/** لون الشريط عند نسبة ارتفاع (0 = أعلى الستيكر، 1 = أسفله) — لملف Word */
+export function colorAt(value: string | null | undefined, fraction: number): string | undefined {
+  const list = splitColors(value);
+  if (list.length === 0) return undefined;
+  const i = Math.min(list.length - 1, Math.max(0, Math.floor(fraction * list.length)));
+  return list[i];
+}
+
 /** مفتاح لون الستيكر: لون نظامه الغذائي (بحروف صغيرة)، أو NO_DIET للأبيض */
 export function stickerColorKey(diet: string, dietColors: Record<string, string>): string {
   const c = diet ? dietColors[diet] : undefined;
@@ -101,6 +134,8 @@ export type StickerTier = 0 | 1 | 2;
 
 export interface TierInput {
   diet_type?: string;
+  code?: string | null;
+  villa?: string | null;
   low_carb?: boolean;
   custom_ld_meals?: boolean;
 }
@@ -147,8 +182,23 @@ export function tierDietGroups<T>(
   });
 }
 
-/** فرز بالمرتبة أولاً، ثم بترتيب الأنظمة داخل المرتبة، ثم الترتيب الأصلي. */
-export function sortByTierAndDiet<T>(items: T[], getBen: (item: T) => TierInput, saved: string[]): T[] {
+/** الترتيب داخل النظام الواحد: كما ورد، أو برقم الكود، أو برقم الفيلا */
+export type WithinDietSort = 'default' | 'code' | 'villa';
+export const WITHIN_DIET_SORT_LABELS: Record<WithinDietSort, string> = {
+  default: 'الافتراضي', code: 'رقم الكود', villa: 'رقم الفيلا',
+};
+
+/** مقارنة رقمية طبيعية (2 قبل 10، و«A2» قبل «A10») — الفارغ في الآخر */
+function compareNatural(a?: string | null, b?: string | null): number {
+  const x = (a ?? '').trim(), y = (b ?? '').trim();
+  if (!x || !y) return x ? -1 : y ? 1 : 0;
+  return x.localeCompare(y, 'ar', { numeric: true, sensitivity: 'base' });
+}
+
+/** فرز بالمرتبة أولاً، ثم بترتيب الأنظمة داخل المرتبة، ثم (الكود/الفيلا أو) الترتيب الأصلي. */
+export function sortByTierAndDiet<T>(
+  items: T[], getBen: (item: T) => TierInput, saved: string[], within: WithinDietSort = 'default',
+): T[] {
   const rank = new Map<string, number>();
   tierDietGroups(items, getBen, saved).forEach((g, t) =>
     g.forEach((x, i) => rank.set(tierKey(t as StickerTier, x.diet), i)));
@@ -157,8 +207,13 @@ export function sortByTierAndDiet<T>(items: T[], getBen: (item: T) => TierInput,
       const b = getBen(item);
       const t = stickerTier(b);
       const diet = b.diet_type?.trim() ?? NO_DIET;
-      return { item, i, t, r: diet ? rank.get(tierKey(t, diet)) ?? Infinity : Infinity };
+      return { item, b, i, t, r: diet ? rank.get(tierKey(t, diet)) ?? Infinity : Infinity };
     })
-    .sort((a, b) => a.t - b.t || a.r - b.r || a.i - b.i)
+    .sort((a, b) =>
+      a.t - b.t || a.r - b.r
+      || (within === 'code' ? compareNatural(a.b.code, b.b.code)
+        : within === 'villa' ? compareNatural(a.b.villa, b.b.villa) || compareNatural(a.b.code, b.b.code)
+        : 0)
+      || a.i - b.i)
     .map(x => x.item);
 }

@@ -12,6 +12,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { Beneficiary } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import { hasCustomization, LD_CATEGORY, type LdMealCustomization } from './ld-types';
+import { colorsBackground } from './ld-diet-order';
 
 // ترجمة إنجليزية لأنواع الأنظمة الغذائية الشائعة — تُعرض كسطر ثانٍ تحت العربي.
 export const DIET_TYPE_EN: Record<string, string> = {
@@ -240,6 +241,7 @@ function CustomizationBlock({ custom, s, heightCm }: {
 // ── ستيكر واحد بمقاس ثابت (widthCm × heightCm) ───────────────────────────────
 export default function StickerCard({ ben, headerUrl, widthCm, heightCm, bgColor, custom, innerRef }: {
   ben: Beneficiary; headerUrl: string | null; widthCm: number; heightCm: number;
+  /** لون واحد، أو عدة ألوان «#a,#b» = أشرطة أفقية (الأول فوق) */
   bgColor?: string;
   /** تخصيصات أمر التشغيل — تُعرض في آخر الستيكر. بدونها الستيكر «ثابت». */
   custom?: LdMealCustomization | null;
@@ -278,7 +280,7 @@ export default function StickerCard({ ben, headerUrl, widthCm, heightCm, bgColor
       ref={innerRef}
       data-ld-sticker
       className="ld-sticker border border-black flex flex-col overflow-hidden shrink-0"
-      style={{ width: `${widthCm}cm`, height: `${heightCm}cm`, background: bgColor || '#ffffff' }}
+      style={{ width: `${widthCm}cm`, height: `${heightCm}cm`, background: colorsBackground(bgColor) }}
     >
       {/* الهيدر */}
       <div

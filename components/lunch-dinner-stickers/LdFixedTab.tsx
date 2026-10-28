@@ -32,7 +32,7 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
   const [colorFilter, setColorFilter] = useState<ColorFilter>('all');
   const [customLdFilter, setCustomLdFilter] = useState<CustomLdFilter>('all');
 
-  const { headerUrl, dietColors, dietOrder, hiddenColors } = settings;
+  const { headerUrl, dietColors, dietOrder, hiddenColors, withinSort } = settings;
 
   const w = Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30);
   const h = Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30);
@@ -79,8 +79,8 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
   const visibleBeneficiaries = useMemo(() => {
     const filtered = colorFiltered.filter(b => !hiddenColors.includes(stickerColorKey(dietOf(b), dietColors)));
     // ترتيب ثابت دائماً: كل الأنظمة ← Ⓡ ← وجبات مخصصة (الأنظمة أبجدياً والعادي أولاً)
-    return sortByTierAndDiet(filtered, b => b, dietOrder);
-  }, [colorFiltered, hiddenColors, dietColors, dietOrder]);
+    return sortByTierAndDiet(filtered, b => b, dietOrder, withinSort);
+  }, [colorFiltered, hiddenColors, dietColors, dietOrder, withinSort]);
   // نفس مجموعات الفرز للوحة الترتيب — من القائمة كاملة قبل إخفاء الألوان
   const tierGroups = useMemo(
     () => tierDietGroups(beneficiaries, b => b, dietOrder),

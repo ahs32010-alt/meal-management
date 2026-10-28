@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { colorsInUse, effectiveDietOrder, moveDiet, moveDietTo, sortByDietOrder, sortByTierAndDiet, stickerColorKey, tierDietGroups } from '@/components/lunch-dinner-stickers/ld-diet-order';
+import { colorAt, colorsBackground, colorsInUse, effectiveDietOrder, joinColors, splitColors, moveDiet, moveDietTo, sortByDietOrder, sortByTierAndDiet, stickerColorKey, tierDietGroups } from '@/components/lunch-dinner-stickers/ld-diet-order';
 
 describe('effectiveDietOrder', () => {
   it('puts saved diets first and appends new ones in incoming order', () => {
@@ -101,5 +101,46 @@ describe('tierDietGroups', () => {
       [],
       [{ diet: 'نظام غذائي عادي', count: 1 }],
     ]);
+  });
+});
+
+// ── الترتيب داخل النظام بالكود/الفيلا + الستيكر متعدد الألوان ─────────────────
+describe('الترتيب داخل النظام', () => {
+  const bens = [
+    { id: 'a', diet_type: 'سكري', code: '10', villa: '3' },
+    { id: 'b', diet_type: 'سكري', code: '2', villa: '' },
+    { id: 'c', diet_type: 'سكري', code: '7', villa: '1' },
+    { id: 'd', diet_type: 'كلوي', code: '1', villa: '9' },
+  ];
+  const ids = (xs: typeof bens) => xs.map(x => x.id).join('');
+
+  it('الافتراضي يبقي الترتيب الوارد داخل النظام', () => {
+    expect(ids(sortByTierAndDiet(bens, b => b, ['0|سكري', '0|كلوي']))).toBe('abcd');
+  });
+  it('بالكود رقمياً (2 قبل 10) والأنظمة بترتيبها', () => {
+    expect(ids(sortByTierAndDiet(bens, b => b, ['0|سكري', '0|كلوي'], 'code'))).toBe('bcad');
+  });
+  it('بالفيلا والفارغ آخر نظامه', () => {
+    expect(ids(sortByTierAndDiet(bens, b => b, ['0|كلوي', '0|سكري'], 'villa'))).toBe('dcab');
+  });
+});
+
+describe('الستيكر متعدد الألوان', () => {
+  it('يفكّ ويجمع الألوان', () => {
+    expect(splitColors('#aaa, #bbb')).toEqual(['#aaa', '#bbb']);
+    expect(splitColors(undefined)).toEqual([]);
+    expect(joinColors(['#a', '', '#b'])).toBe('#a,#b');
+    expect(joinColors([])).toBeNull();
+  });
+  it('لون واحد كما هو، ولونين نصف فوق ونصف تحت', () => {
+    expect(colorsBackground('#ff0000')).toBe('#ff0000');
+    expect(colorsBackground('')).toBe('#ffffff');
+    expect(colorsBackground('#f00,#00f')).toBe('linear-gradient(to bottom, #f00 0% 50%, #00f 50% 100%)');
+  });
+  it('لون الشريط حسب الارتفاع (لملف Word)', () => {
+    expect(colorAt('#f00,#00f', 0.2)).toBe('#f00');
+    expect(colorAt('#f00,#00f', 0.7)).toBe('#00f');
+    expect(colorAt('#f00,#00f', 1)).toBe('#00f');
+    expect(colorAt(undefined, 0.5)).toBeUndefined();
   });
 });

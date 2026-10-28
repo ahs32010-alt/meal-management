@@ -21,6 +21,7 @@ import { STICKER_FLAGS } from '@/lib/sticker-flags';
 import { hasCustomization, LD_CATEGORY, type LdMealCustomization } from './ld-types';
 import { LD_FONT_SIZES, dietLines } from './ld-sticker-card';
 import { APP_FONT_NAME } from '@/lib/fonts';
+import { colorAt } from './ld-diet-order';
 
 /**
  * أحجام Word (نقاط) مشتقّة من LD_FONT_SIZES (بكسل الصفحة) بنسبة ثابتة لكل
@@ -322,14 +323,18 @@ export async function exportLunchDinnerStickers(
 
   const sections = beneficiaries.map((ben, i) => {
     const dietKey = ben.diet_type?.trim();
-    const bg = dietKey ? dietColors[dietKey]?.replace('#', '') : undefined;
+    // أكثر من لون: Word ما يقسم خلفية الخلية، فكل صف (أعلى/الاسم/أسفل) يأخذ
+    // لون الشريط الواقع عند منتصفه — نفس ترتيب الأشرطة في المعاينة والـPDF.
+    const value = dietKey ? dietColors[dietKey] : undefined;
+    const bgAt = (from: number, h: number) => colorAt(value, (from + h / 2) / usable)?.replace('#', '');
+    const bg1 = bgAt(0, r1), bg2 = bgAt(r1, r2), bg3 = bgAt(r1 + r2, r3);
     const frame = new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       borders: { top: BLACK(6), bottom: BLACK(6), left: BLACK(6), right: BLACK(6), insideHorizontal: NONE, insideVertical: NONE },
       rows: [
-        new TableRow({ height: { value: r1, rule: HeightRule.EXACT }, cantSplit: true, children: [topCell(ben, ctx, rowHpx, bg)] }),
-        new TableRow({ height: { value: r2, rule: HeightRule.EXACT }, cantSplit: true, children: [midCell(ben, ctx, bg)] }),
-        new TableRow({ height: { value: r3, rule: HeightRule.EXACT }, cantSplit: true, children: [bottomCell(ben, ctx, bg, customs[i])] }),
+        new TableRow({ height: { value: r1, rule: HeightRule.EXACT }, cantSplit: true, children: [topCell(ben, ctx, rowHpx, bg1)] }),
+        new TableRow({ height: { value: r2, rule: HeightRule.EXACT }, cantSplit: true, children: [midCell(ben, ctx, bg2)] }),
+        new TableRow({ height: { value: r3, rule: HeightRule.EXACT }, cantSplit: true, children: [bottomCell(ben, ctx, bg3, customs[i])] }),
       ],
     });
     return {

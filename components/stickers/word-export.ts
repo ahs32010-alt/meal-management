@@ -14,71 +14,13 @@ import {
   BorderStyle,
   ShadingType,
 } from 'docx';
-import type { ReportData, ItemCategory } from '@/lib/types';
 import { CATEGORY_LABELS } from '@/lib/types';
-import { transliterate } from '@/lib/transliterate';
 import { GROUP_COLORS, CATEGORY_THEME } from './sticker-utils';
 import { APP_FONT_NAME } from '@/lib/fonts';
-
-// ─── helpers ────────────────────────────────────────────────────────────────
-
-interface StickerData {
-  ben: ReportData['beneficiaryDetails'][0]['beneficiary'];
-  groupIndex: number;
-  category: ItemCategory | null;
-  excludedNames: string;
-  excludedTranslit: string;
-  altNames: string;
-  altTranslit: string;
-  fixedItems: string | null;
-}
-
-function prepareSticker(
-  detail: ReportData['beneficiaryDetails'][0],
-  groupIndex: number,
-  category: ItemCategory | null,
-  customDict: Record<string, string>,
-): StickerData {
-  const ben = detail.beneficiary;
-  const items = detail.excludedItems ?? [];
-  const fixedMealsToday = (detail.fixedItems ?? []).map(m => m.meal.name);
-  const altItems = items.filter(e => e.alternative);
-
-  const excludedNames = items
-    .map(({ meal }) => `${meal.name}${meal.is_snack ? ' (snak)' : ''}`)
-    .join('، ');
-  const excludedTranslit = items
-    .map(({ meal }) => {
-      const tr = transliterate(meal.name, customDict);
-      return tr ? (meal.is_snack ? `${tr} (snak)` : tr) : '';
-    })
-    .filter(Boolean)
-    .join(' | ');
-  const altNames = [
-    ...altItems.map(e => `${e.alternative!.name}${e.meal.is_snack ? ' (snak)' : ''}`),
-    ...fixedMealsToday,
-  ].join('، ');
-  const altTranslit = [
-    ...altItems
-      .map(e => {
-        const tr = transliterate(e.alternative!.name, customDict);
-        return tr ? (e.meal.is_snack ? `${tr} (snak)` : tr) : '';
-      })
-      .filter(Boolean),
-    ...fixedMealsToday.map(n => transliterate(n, customDict)).filter(Boolean),
-  ].join(' | ');
-
-  return {
-    ben,
-    groupIndex,
-    category,
-    excludedNames,
-    excludedTranslit,
-    altNames,
-    altTranslit,
-    fixedItems: ben.fixed_items ? String(ben.fixed_items) : null,
-  };
-}
+import {
+  prepareSticker, resolvePageLayout, showsTitle, DEFAULT_SIZES, ALL_SHOWN, DEFAULT_LAYOUT, PARA_SPACING,
+  type StickerData, type StickerDetail, type StickerLayout, type FieldMap,
+} from './sticker-layout';
 
 // docx font sizes are in half-points
 const sz = (pt: number) => Math.round(pt * 2);
@@ -99,8 +41,10 @@ const GROUP_HEADER_BG: Record<number, string> = {
 
 interface ParaOpts {
   title?: { mealTypeAr: string; mealTypeEn: string };
-  // Font scale — 1.0 for grid, larger for per-page based on sticker size
-  scale?: number;
+  /** حجم خط كل عنصر بالنقطة — الافتراضي DEFAULT_SIZES (شبكة A4) */
+  sizes?: FieldMap<number>;
+  /** العناصر الظاهرة — الافتراضي الكل */
+  show?: FieldMap<boolean>;
   /** معامل المسافات بين الفقرات — يُصغَّر مع الخط في المقاسات الصغيرة (الافتراضي 1) */
   spacingScale?: number;
   orderInfo?: { date: string; mealTypeAr: string; weekNumber?: number | null; dayOfWeek?: number | null };
@@ -112,8 +56,8 @@ const AR_DAYS: Record<number, string> = {
 };
 
 function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[] {
-  const k = opts.scale ?? 1;
-  const fs = (pt: number) => sz(pt * k);
+  const S = opts.sizes ?? DEFAULT_SIZES;
+  const show = opts.show ?? ALL_SHOWN;
   const sk = opts.spacingScale ?? 1;
   const sp = (tw: number) => Math.round(tw * sk);
   const out: Paragraph[] = [];
@@ -129,7 +73,7 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
     });
 
   // Order info line — date | meal | week | day
-  if (opts.orderInfo) {
+  if (opts.orderInfo && show.orderInfo) {
     const oi = opts.orderInfo;
     const d = oi.date;
     const dateStr = d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4);
@@ -143,18 +87,18 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
       new Paragraph({
         alignment: AlignmentType.CENTER,
         bidirectional: true,
-        spacing: { after: sp(40), before: sp(0), line: 240 },
+        spacing: { after: sp(PARA_SPACING.orderInfo[1]), before: sp(PARA_SPACING.orderInfo[0]), line: 240 },
         keepLines: true,
         keepNext: true,
         shading: { type: ShadingType.CLEAR, fill: 'F8FAFC', color: 'auto' },
         children: [
-          new TextRun({ text: parts.join(' | '), size: fs(7), color: '64748B' }),
+          new TextRun({ text: parts.join(' | '), size: sz(S.orderInfo), color: '64748B' }),
         ],
       }),
     );
   }
 
-  if (opts.title || s.groupIndex > 0 || s.category) {
+  if (show.title && (opts.title || s.groupIndex > 0 || s.category)) {
     const gc = GROUP_COLORS[s.groupIndex] ?? GROUP_COLORS[0];
     const ct = s.category ? CATEGORY_THEME[s.category] : null;
     const groupLabel = s.groupIndex > 0 ? ` ★ ${gc.label}` : '';
@@ -167,7 +111,7 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
       new Paragraph({
         alignment: AlignmentType.CENTER,
         bidirectional: true,
-        spacing: { after: sp(80), before: sp(0), line: 240 },
+        spacing: { after: sp(PARA_SPACING.title[1]), before: sp(PARA_SPACING.title[0]), line: 240 },
         keepLines: true,
         keepNext: true,
         shading: { type: ShadingType.CLEAR, fill: fillColor, color: 'auto' },
@@ -175,7 +119,7 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
           new TextRun({
             text: titleText.trim(),
             bold: true,
-            size: fs(9),
+            size: sz(S.title),
             color: 'FFFFFF',
           }),
         ],
@@ -184,105 +128,109 @@ function buildStickerParagraphs(s: StickerData, opts: ParaOpts = {}): Paragraph[
   }
 
   // Code + Villa
-  const codeRun = new TextRun({ text: `Code: ${s.ben.code}`, bold: true, size: fs(11), color: 'DC2626' });
-  const codeChildren: TextRun[] = [codeRun];
-  if (s.ben.villa) {
-    codeChildren.push(new TextRun({ text: '   ', size: fs(11) }));
-    codeChildren.push(new TextRun({ text: `Villa: ${s.ben.villa}`, bold: true, size: fs(11), color: 'DC2626' }));
+  const codeChildren: TextRun[] = [];
+  if (show.code) {
+    codeChildren.push(new TextRun({ text: `Code: ${s.ben.code}`, bold: true, size: sz(S.code), color: 'DC2626' }));
   }
-  out.push(center(codeChildren, 60));
+  if (show.villa && s.ben.villa) {
+    if (codeChildren.length) codeChildren.push(new TextRun({ text: '   ', size: sz(S.villa) }));
+    codeChildren.push(new TextRun({ text: `Villa: ${s.ben.villa}`, bold: true, size: sz(S.villa), color: 'DC2626' }));
+  }
+  if (codeChildren.length) out.push(center(codeChildren, PARA_SPACING.codeVilla[1]));
 
   // Arabic name (largest)
-  out.push(center([
-    new TextRun({ text: s.ben.name, bold: true, size: fs(14), color: '0F172A' }),
-  ], 30));
+  if (show.nameAr) {
+    out.push(center([
+      new TextRun({ text: s.ben.name, bold: true, size: sz(S.nameAr), color: '0F172A' }),
+    ], PARA_SPACING.nameAr[1]));
+  }
 
   // English name (smaller, lighter)
-  if (s.ben.english_name) {
+  if (show.nameEn && s.ben.english_name) {
     out.push(
       new Paragraph({
         alignment: AlignmentType.CENTER,
         bidirectional: false,
-        spacing: { after: sp(80), before: sp(0), line: 240 },
+        spacing: { after: sp(PARA_SPACING.nameEn[1]), before: sp(PARA_SPACING.nameEn[0]), line: 240 },
         keepLines: true,
         keepNext: true,
         children: [
-          new TextRun({ text: s.ben.english_name, bold: true, size: fs(10), color: '374151' }),
+          new TextRun({ text: s.ben.english_name, bold: true, size: sz(S.nameEn), color: '374151' }),
         ],
       }),
     );
   }
 
   // مستبعد / بديل
-  if (s.excludedNames) {
+  if (show.excluded && s.excludedNames) {
     out.push(center([
-      new TextRun({ text: 'مستبعد: ', bold: true, size: fs(9.5), color: 'B91C1C' }),
-      new TextRun({ text: s.excludedNames, size: fs(9.5), color: '0F172A' }),
-    ], 40));
+      new TextRun({ text: 'مستبعد: ', bold: true, size: sz(S.excluded), color: 'B91C1C' }),
+      new TextRun({ text: s.excludedNames, size: sz(S.excluded), color: '0F172A' }),
+    ], PARA_SPACING.excluded[1]));
   }
-  if (s.altNames) {
+  if (show.alt && s.altNames) {
     out.push(center([
-      new TextRun({ text: 'بديل: ', bold: true, size: fs(9.5), color: '15803D' }),
-      new TextRun({ text: s.altNames, size: fs(9.5), color: '0F172A' }),
-    ], 80));
+      new TextRun({ text: 'بديل: ', bold: true, size: sz(S.alt), color: '15803D' }),
+      new TextRun({ text: s.altNames, size: sz(S.alt), color: '0F172A' }),
+    ], PARA_SPACING.alt[1]));
   }
 
   // NO / YES (transliterated, LTR direction)
-  if (s.excludedTranslit) {
+  if (show.noEn && s.excludedTranslit) {
     out.push(
       new Paragraph({
         alignment: AlignmentType.LEFT,
         bidirectional: false,
-        spacing: { after: sp(40), before: sp(40), line: 240 },
+        spacing: { after: sp(PARA_SPACING.noEn[1]), before: sp(PARA_SPACING.noEn[0]), line: 240 },
         keepLines: true,
         keepNext: true,
         shading: { type: ShadingType.CLEAR, fill: 'FFF1F2', color: 'auto' },
         children: [
-          new TextRun({ text: ' NO: ', bold: true, size: fs(9), color: 'DC2626' }),
-          new TextRun({ text: s.excludedTranslit, bold: true, size: fs(9), color: 'DC2626' }),
-          new TextRun({ text: ' ', size: fs(9) }),
+          new TextRun({ text: ' NO: ', bold: true, size: sz(S.noEn), color: 'DC2626' }),
+          new TextRun({ text: s.excludedTranslit, bold: true, size: sz(S.noEn), color: 'DC2626' }),
+          new TextRun({ text: ' ', size: sz(S.noEn) }),
         ],
       }),
     );
   }
-  if (s.altTranslit) {
+  if (show.yesEn && s.altTranslit) {
     out.push(
       new Paragraph({
         alignment: AlignmentType.LEFT,
         bidirectional: false,
-        spacing: { after: sp(40), before: sp(0), line: 240 },
+        spacing: { after: sp(PARA_SPACING.yesEn[1]), before: sp(PARA_SPACING.yesEn[0]), line: 240 },
         keepLines: true,
         keepNext: true,
         shading: { type: ShadingType.CLEAR, fill: 'EFF6FF', color: 'auto' },
         children: [
-          new TextRun({ text: ' YES: ', bold: true, size: fs(9), color: '1D4ED8' }),
-          new TextRun({ text: s.altTranslit, bold: true, size: fs(9), color: '1D4ED8' }),
-          new TextRun({ text: ' ', size: fs(9) }),
+          new TextRun({ text: ' YES: ', bold: true, size: sz(S.yesEn), color: '1D4ED8' }),
+          new TextRun({ text: s.altTranslit, bold: true, size: sz(S.yesEn), color: '1D4ED8' }),
+          new TextRun({ text: ' ', size: sz(S.yesEn) }),
         ],
       }),
     );
   }
 
   // إضافات
-  if (s.fixedItems) {
+  if (show.fixed && s.fixedItems) {
     out.push(
       new Paragraph({
         alignment: AlignmentType.CENTER,
         bidirectional: true,
-        spacing: { after: sp(0), before: sp(60), line: 240 },
+        spacing: { after: sp(PARA_SPACING.fixed[1]), before: sp(PARA_SPACING.fixed[0]), line: 240 },
         keepLines: true,
         // Last paragraph in the sticker — don't keepNext so it ends cleanly
         border: { top: DASHED },
         children: [
-          new TextRun({ text: 'إضافات: ', bold: true, size: fs(8), color: '475569' }),
-          new TextRun({ text: s.fixedItems, size: fs(8), color: '475569' }),
+          new TextRun({ text: 'إضافات: ', bold: true, size: sz(S.fixed), color: '475569' }),
+          new TextRun({ text: s.fixedItems, size: sz(S.fixed), color: '475569' }),
         ],
       }),
     );
-  } else if (out.length > 0) {
-    // Mark the final paragraph as not keepNext so it doesn't grab the next sticker
-    // (when sequencing in per-page export). This is a minor cleanup.
   }
+
+  // كل العناصر مخفية → فقرة فاضية حتى لا تطلع الخلية/الصفحة بلا محتوى (Word يرفضها)
+  if (out.length === 0) out.push(new Paragraph({ children: [] }));
 
   return out;
 }
@@ -301,7 +249,7 @@ function emptyCell(): TableCell {
 // ─── A4 grid export (4 stickers per row, no row may split) ──────────────────
 
 export async function exportStickersWord(
-  displayDetails: Array<ReportData['beneficiaryDetails'][0] & { groupIndex: number; category: ItemCategory | null }>,
+  displayDetails: StickerDetail[],
   mealTypeAr: string,
   mealTypeEn: string,
   filename: string,
@@ -309,6 +257,7 @@ export async function exportStickersWord(
   orderDate?: string,
   weekNumber?: number | null,
   dayOfWeek?: number | null,
+  show: FieldMap<boolean> = ALL_SHOWN,
 ) {
   const stickers = displayDetails.map(d => prepareSticker(d, d.groupIndex, d.category, customDict));
   const orderInfo = orderDate ? { date: orderDate, mealTypeAr, weekNumber, dayOfWeek } : undefined;
@@ -323,7 +272,7 @@ export async function exportStickersWord(
       verticalAlign: VerticalAlign.TOP,
       margins: { top: 100, bottom: 100, left: 110, right: 110 },
       borders: { top: CARD_BORDER, bottom: CARD_BORDER, left: CARD_BORDER, right: CARD_BORDER },
-      children: buildStickerParagraphs(s, { title: { mealTypeAr, mealTypeEn }, orderInfo }),
+      children: buildStickerParagraphs(s, { title: { mealTypeAr, mealTypeEn }, orderInfo, show }),
     }));
     while (cells.length < COLS) cells.push(emptyCell());
 
@@ -387,53 +336,8 @@ export async function exportStickersWord(
 
 // ─── Per-page export (one sticker per page, custom size) ────────────────────
 
-const mmToPt = (mm: number) => (mm * 72) / 25.4;
-
-/**
- * تقدير ارتفاع الستيكر (بالنقاط) بمقياس معيّن — تقدير محافظ لنفس فقرات
- * `buildStickerParagraphs`: عدد الأسطر بعد الالتفاف × ارتفاع السطر + المسافات.
- */
-function estimateStickerHeightPt(
-  s: StickerData, opts: ParaOpts, k: number, spacingScale: number, availWPt: number,
-): number {
-  // [حجم الخط, النص, المسافة قبل+بعد بالـtwip]
-  const paras: [number, string, number][] = [];
-  if (opts.orderInfo) paras.push([7, `00/00/0000 | ${opts.orderInfo.mealTypeAr} | أسبوع 0 | الأربعاء`, 40]);
-  if (opts.title || s.groupIndex > 0 || s.category) {
-    paras.push([9, `${opts.title?.mealTypeAr ?? ''} ${opts.title?.mealTypeEn ?? ''} سناك ★ ستيكر`, 80]);
-  }
-  paras.push([11, `Code: ${s.ben.code}   ${s.ben.villa ? `Villa: ${s.ben.villa}` : ''}`, 60]);
-  paras.push([14, s.ben.name, 30]);
-  if (s.ben.english_name) paras.push([10, s.ben.english_name, 80]);
-  if (s.excludedNames) paras.push([9.5, `مستبعد: ${s.excludedNames}`, 40]);
-  if (s.altNames) paras.push([9.5, `بديل: ${s.altNames}`, 80]);
-  if (s.excludedTranslit) paras.push([9, ` NO: ${s.excludedTranslit} `, 80]);
-  if (s.altTranslit) paras.push([9, ` YES: ${s.altTranslit} `, 40]);
-  if (s.fixedItems) paras.push([8, `إضافات: ${s.fixedItems}`, 60]);
-
-  return paras.reduce((h, [pt, text, spaceTw]) => {
-    const f = pt * k;
-    const charW = f * 0.6;                     // عرض الحرف التقريبي (محافظ)
-    const lines = Math.max(1, Math.ceil((text.length * charW) / availWPt));
-    return h + lines * f * 1.5 + (spaceTw * spacingScale) / 20;
-  }, 0) + 4; // + حدّ «إضافات» وهامش أمان
-}
-
-/** أكبر مقياس (≤ الأساسي) يخلّي الستيكر كامل داخل صفحة واحدة. */
-function fitScale(s: StickerData, opts: ParaOpts, baseScale: number, availWPt: number, availHPt: number): number {
-  const fits = (k: number) =>
-    estimateStickerHeightPt(s, opts, k, Math.min(1, k / baseScale), availWPt) <= availHPt * 0.92;
-  if (fits(baseScale)) return baseScale;
-  let lo = 0.1, hi = baseScale;
-  for (let i = 0; i < 20; i++) {
-    const mid = (lo + hi) / 2;
-    if (fits(mid)) lo = mid; else hi = mid;
-  }
-  return lo;
-}
-
 export async function exportStickersPerPageDocx(
-  displayDetails: Array<ReportData['beneficiaryDetails'][0] & { groupIndex: number; category: ItemCategory | null }>,
+  displayDetails: StickerDetail[],
   mealTypeAr: string,
   mealTypeEn: string,
   filename: string,
@@ -443,21 +347,16 @@ export async function exportStickersPerPageDocx(
   orderDate?: string,
   weekNumber?: number | null,
   dayOfWeek?: number | null,
+  layout: StickerLayout = DEFAULT_LAYOUT,
 ) {
-  const minDim = Math.min(widthCm, heightCm);
-  // المقياس الأساسي حسب المقاس (كما كان)…
-  const baseScale = Math.max(0.7, Math.min(1.5, minDim / 11));
   const orderInfo = orderDate ? { date: orderDate, mealTypeAr, weekNumber, dayOfWeek } : undefined;
-  // الهوامش تصغر في المقاسات الصغيرة حتى لا تأكل الصفحة
-  const marginMm = Math.min(4, minDim * 10 * 0.08);
-  const availWPt = mmToPt(widthCm * 10 - 2 * marginMm);
-  const availHPt = mmToPt(heightCm * 10 - 2 * marginMm);
+  const ctx = { hasOrderInfo: !!orderInfo, mealTypeAr, mealTypeEn };
 
   const sections = displayDetails.map(d => {
     const data = prepareSticker(d, d.groupIndex, d.category, customDict);
-    // …ثم نصغّره لكل ستيكر حتى يدخل كامل في صفحة واحدة — مهما صغر المقاس
-    const scale = fitScale(data, { title: { mealTypeAr, mealTypeEn }, orderInfo }, baseScale, availWPt, availHPt);
-    const spacingScale = Math.min(1, scale / baseScale);
+    // نفس الحساب اللي تستخدمه المعاينة في الصفحة — تلقائي (يصغر لين يدخل) أو أحجامك اليدوية
+    const page = resolvePageLayout(data, layout, widthCm, heightCm, ctx);
+    const marginMm = page.marginMm;
     return {
       properties: {
         page: {
@@ -478,7 +377,10 @@ export async function exportStickersPerPageDocx(
         },
         verticalAlign: VerticalAlign.CENTER,
       },
-      children: buildStickerParagraphs(data, { title: { mealTypeAr, mealTypeEn }, scale, spacingScale, orderInfo }),
+      children: buildStickerParagraphs(data, {
+        title: showsTitle(layout.show) ? { mealTypeAr, mealTypeEn } : undefined,
+        sizes: page.sizes, spacingScale: page.spacingScale, show: layout.show, orderInfo,
+      }),
     };
   });
 

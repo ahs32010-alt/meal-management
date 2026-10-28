@@ -19,13 +19,15 @@ import {
   type GroupMap,
   type SplitsMap,
 } from './sticker-utils';
+import StickerLayoutPanel, { useStickerLayout } from './StickerLayoutPanel';
+import { ALL_SHOWN, type FieldMap } from './sticker-layout';
 // `./word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
 
 const t = (s: string, dict: Record<string, string>) => dict[s] ?? transliterate(s);
 
 
 // ── Sticker Card ──────────────────────────────────────────────────────────────
-function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 0, category = null, orderDate, weekNumber, dayOfWeek }: {
+function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 0, category = null, orderDate, weekNumber, dayOfWeek, show = ALL_SHOWN }: {
   detail: ReportData['beneficiaryDetails'][0];
   mealTypeAr: string;
   mealTypeEn: string;
@@ -35,6 +37,8 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
   orderDate?: string;
   weekNumber?: number | null;
   dayOfWeek?: number | null;
+  /** العناصر الظاهرة — من «تصميم الستيكر» */
+  show?: FieldMap<boolean>;
 }) {
   const gc = GROUP_COLORS[groupIndex] ?? GROUP_COLORS[0];
   const ct = category ? CATEGORY_THEME[category] : null;
@@ -97,7 +101,7 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
   return (
     <div className="sticker-card">
       {/* Order info — date | meal | week | day */}
-      {orderInfoParts.length > 0 && (
+      {show.orderInfo && orderInfoParts.length > 0 && (
         <div className="sticker-order-info">{orderInfoParts.join(' | ')}</div>
       )}
 
@@ -109,36 +113,42 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
       </div>
 
       {/* Split group badge (manual override) */}
-      {groupIndex > 0 && (
+      {show.title && groupIndex > 0 && (
         <div className={`sticker-group-badge ${gc.bg} ${gc.text}`}>
           ★ {gc.label} — {mealTypeAr} {mealTypeEn}
         </div>
       )}
       {/* Category badge (auto-split) */}
-      {ct && groupIndex === 0 && (
+      {show.title && ct && groupIndex === 0 && (
         <div className={`sticker-group-badge ${ct.bg} ${ct.text}`}>
           {ct.icon} {CATEGORY_LABELS[category!]} — {mealTypeAr} {mealTypeEn}
         </div>
       )}
 
       {/* Code + Villa — one row, centered, red */}
+      {(show.code || show.villa) && (
       <div className="sticker-info-row">
+        {show.code && (
         <span><span className="sticker-info-label">Code: </span>
           {editMode ? inp(code, setCode, 'ltr') : <span className="sticker-info-value">{code}</span>}
         </span>
-        {(villa || editMode) && (
+        )}
+        {show.villa && (villa || editMode) && (
           <span><span className="sticker-info-label">Villa: </span>
             {editMode ? inp(villa, setVilla, 'ltr') : <span className="sticker-info-value">{villa}</span>}
           </span>
         )}
       </div>
+      )}
 
       {/* Names — centered */}
       <div className="sticker-names-block">
+        {show.nameAr && (
         <div className="sticker-name-ar-center">
           {editMode ? inp(nameAr, setNameAr) : nameAr}
         </div>
-        {(nameEn || editMode) && (
+        )}
+        {show.nameEn && (nameEn || editMode) && (
           <div className="sticker-name-en-center">
             {editMode ? inp(nameEn, setNameEn, 'ltr') : nameEn}
           </div>
@@ -147,7 +157,7 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
 
       {/* Excluded + Alternative — centered */}
       <div className="sticker-excl-block">
-        {exclusions.length > 0 && (
+        {show.excluded && exclusions.length > 0 && (
           <div className="sticker-excl-row">
             <span className="sticker-excl-label">مستبعد: </span>
             {exclusions.map((e, i) => (
@@ -162,7 +172,7 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
             ))}
           </div>
         )}
-        {hasAnyBadil && (
+        {show.alt && hasAnyBadil && (
           <div className="sticker-alt-row">
             <span className="sticker-alt-label">بديل: </span>
             {exclusions.map((e, i) => e.alternativeName.trim() !== '' && (
@@ -191,19 +201,19 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
 
       {/* NO / YES */}
       <div className="sticker-pills">
-        {excludedTranslitList.length > 0 && (
+        {show.noEn && excludedTranslitList.length > 0 && (
           <div className="sticker-pill-no">
             <span className="sticker-pill-label">NO: </span>{excludedTranslitList.join(' | ')}
           </div>
         )}
-        {badilTranslitList.length > 0 && (
+        {show.yesEn && badilTranslitList.length > 0 && (
           <div className="sticker-pill-yes">
             <span className="sticker-pill-label">YES: </span>{badilTranslitList.join(' | ')}
           </div>
         )}
       </div>
 
-      {ben.fixed_items && (
+      {show.fixed && ben.fixed_items && (
         <div className="sticker-fixed">
           <span className="sticker-fixed-label">إضافات: </span>{ben.fixed_items}
         </div>
@@ -535,6 +545,8 @@ export default function StickersView({ variant = 'breakfast' }: { variant?: 'bre
   const [sizeWidth, setSizeWidth]   = useState<string>('10');
   const [sizeHeight, setSizeHeight] = useState<string>('10');
   const [hideNoAlt, setHideNoAlt] = useState(true);
+  // تصميم الستيكر (العناصر الظاهرة + أحجام الخط) — منفصل لكل صفحة، محفوظ على هذا الجهاز
+  const [layout, setLayout] = useStickerLayout(isLd ? 'stickerLayout:ld' : 'stickerLayout:breakfast');
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFirstSplitsLoad = useRef(true);
 
@@ -720,6 +732,7 @@ export default function StickersView({ variant = 'breakfast' }: { variant?: 'bre
       report.order.date,
       report.order.week_number ?? report.order.week_of_month,
       report.order.day_of_week,
+      layout.show,
     );
   };
 
@@ -739,6 +752,7 @@ export default function StickersView({ variant = 'breakfast' }: { variant?: 'bre
         report.order.date,
         report.order.week_number ?? report.order.week_of_month,
         report.order.day_of_week,
+        layout,
       );
     } catch (e) {
       alert('حدث خطأ أثناء إنشاء الملف');
@@ -825,8 +839,24 @@ export default function StickersView({ variant = 'breakfast' }: { variant?: 'bre
 
       <p className="text-[11px] text-slate-400 mt-3">
         💡 افتح الملف في Word ثم اطبعه — كل ستيكر في صفحة منفصلة بمقاس {sizeWidth || '—'}×{sizeHeight || '—'} سم.
-        الخط يتكيّف تلقائياً مع المقاس المختار.
+        {layout.mode === 'manual' ? 'الخط بالأحجام اللي حددتها في «تصميم الستيكر».' : 'الخط يتكيّف تلقائياً مع المقاس المختار.'}
       </p>
+
+      {report && (
+        <StickerLayoutPanel
+          layout={layout}
+          onChange={setLayout}
+          details={effectiveDisplayDetails}
+          widthCm={Math.min(Math.max(parseFloat(sizeWidth) || 10, 2), 30)}
+          heightCm={Math.min(Math.max(parseFloat(sizeHeight) || 10, 2), 30)}
+          mealTypeAr={mealTypeAr}
+          mealTypeEn={mealTypeEn}
+          customDict={customDict}
+          orderDate={report.order.date}
+          weekNumber={report.order.week_number ?? report.order.week_of_month}
+          dayOfWeek={report.order.day_of_week}
+        />
+      )}
     </div>
   );
 
@@ -966,6 +996,7 @@ export default function StickersView({ variant = 'breakfast' }: { variant?: 'bre
                     orderDate={report.order.date}
                     weekNumber={report.order.week_number ?? report.order.week_of_month}
                     dayOfWeek={report.order.day_of_week}
+                    show={layout.show}
                   />
                 ))}
               </div>

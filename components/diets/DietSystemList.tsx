@@ -409,14 +409,16 @@ function DietModal({ diet, meals, existingNames, onClose, onSaved }: {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[92vh] flex flex-col">
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+    // ملء الشاشة — نفس نافذة منيو المستفيد: أقسام الوجبات الست وقوائم أصنافها
+    // تحتاج المساحة كاملة بدل صندوق ضيق يتطلب تمريراً مستمراً.
+    <div className="fixed inset-0 bg-black/50 z-50 flex">
+      <div className="bg-white shadow-xl w-full h-full flex flex-col">
+        <div className="shrink-0 px-6 py-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="text-lg font-bold text-slate-800">{diet ? `تعديل نظام «${diet.name}»` : 'نظام غذائي جديد'}</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">✕</button>
         </div>
 
-        <div className="p-6 space-y-4 overflow-y-auto">
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="label">اسم النظام</label>
@@ -448,7 +450,7 @@ function DietModal({ diet, meals, existingNames, onClose, onSaved }: {
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-3">
+        <div className="shrink-0 px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-3">
           <span className="text-sm text-red-600">{error}</span>
           <div className="flex gap-2">
             <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">إلغاء</button>
