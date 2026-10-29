@@ -10,7 +10,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AppUser } from './permissions';
-import { DAY_LABELS, MEAL_TYPE_LABELS, type MealType } from './types';
+import { DAY_LABELS, DAYS_ORDER, MEAL_TYPE_LABELS, type MealType } from './types';
 import {
   approveAction, rejectAction,
   type CreatePayload, type DietPayload, type PendingAction,
@@ -30,6 +30,8 @@ export interface ChangeSet {
   build: (selected: Set<string>) => Record<string, unknown> | null;
   /** ملاحظة تُعرض فوق القائمة (مثلاً: السجل محذوف) */
   note?: string;
+  /** تعريف بالسجل كما هو الآن — يوضّح للمراجع «وش هو» قبل ما يقرر */
+  context?: { title: string; lines: { label: string; value: string }[] };
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -274,6 +276,60 @@ async function beneficiaryChangeSet(supabase: SupabaseClient, pa: PendingAction)
 
 // ── النظام الغذائي ─────────────────────────────────────────────────────────
 
+/**
+ * تعريف بالنظام الغذائي كما هو في القاعدة الآن: وصفه، أصنافه المستبعدة
+ * وبدائلها، أصنافه الثابتة، ولمن هو مسند — عشان المراجع يعرف أي نظام يعدّل.
+ */
+async function dietContext(supabase: SupabaseClient, dietId: string): Promise<ChangeSet['context']> {
+  const [dRes, exRes, fxRes, bRes] = await Promise.all([
+    supabase.from('diet_systems').select('name, description').eq('id', dietId).maybeSingle(),
+    supabase.from('diet_system_exclusions').select('meal_id, alternative_meal_id').eq('diet_id', dietId),
+    // الجدول غائب قبل diet-fixed-meals-migration → خطأ نتجاهله
+    supabase.from('diet_system_fixed_meals').select('day_of_week, meal_type, meal_id, quantity, is_alternative').eq('diet_id', dietId),
+    supabase.from('beneficiary_diets').select('beneficiaries(name)').eq('diet_id', dietId),
+  ]);
+  if (!dRes.data) return undefined;
+  const d = dRes.data as { name: string; description: string | null };
+  const ex = (exRes.data ?? []) as ExRow[];
+  const fx = (fxRes.error ? [] : fxRes.data ?? []) as DietFx[];
+  const meals = await nameMap(supabase, 'meals', [...ex.flatMap(e => [e.meal_id, e.alternative_meal_id]), ...fx.map(r => r.meal_id)]);
+  const mealName = (id: string) => meals.get(id) ?? 'صنف محذوف';
+
+  // الثابتة مجمّعة بالصنف والوجبة: «فول (فطور) — كل الأيام ×2»
+  const groups = new Map<string, { r: DietFx; days: number[] }>();
+  for (const r of fx) {
+    const k = `${r.meal_id}|${r.meal_type}`;
+    const g = groups.get(k);
+    if (g) g.days.push(r.day_of_week); else groups.set(k, { r, days: [r.day_of_week] });
+  }
+  const fixedText = [...groups.values()].map(({ r, days }) => {
+    const dayText = days.length === 7 ? 'كل الأيام' : DAYS_ORDER.filter(x => days.includes(x)).map(x => DAY_LABELS[x]).join('، ');
+    return `${mealName(r.meal_id)} (${MEAL_TYPE_LABELS[r.meal_type as MealType] ?? r.meal_type}) — ${dayText}` +
+      `${r.quantity > 1 ? ` ×${r.quantity}` : ''}${r.is_alternative ? ' · بديل' : ''}`;
+  });
+
+  const names = ((bRes.data ?? []) as unknown as { beneficiaries: { name: string } | null }[])
+    .map(x => x.beneficiaries?.name).filter((x): x is string => !!x);
+  const shown = names.slice(0, 10).join('، ');
+
+  return {
+    title: `النظام الغذائي «${d.name}» حالياً`,
+    lines: [
+      ...(d.description ? [{ label: 'الوصف', value: d.description }] : []),
+      {
+        label: `الأصناف المستبعدة (${ex.length})`,
+        value: ex.length === 0 ? 'لا شيء'
+          : ex.map(e => `${mealName(e.meal_id)}${e.alternative_meal_id ? ` ← ${mealName(e.alternative_meal_id)}` : ''}`).join('، '),
+      },
+      ...(fxRes.error ? [] : [{ label: `الأصناف الثابتة (${groups.size})`, value: fixedText.length === 0 ? 'لا شيء' : fixedText.join('، ') }]),
+      {
+        label: `مسند لـ ${names.length} شخص`,
+        value: names.length === 0 ? 'لا أحد' : `${shown}${names.length > 10 ? ` و${names.length - 10} غيرهم` : ''}`,
+      },
+    ],
+  };
+}
+
 async function dietChangeSet(supabase: SupabaseClient, pa: PendingAction): Promise<ChangeSet> {
   const p = pa.payload as unknown as DietPayload | null;
   if (!p?.diet) return { changes: [], build: () => null, note: 'الطلب ما يحمل بيانات.' };
@@ -304,6 +360,7 @@ async function dietChangeSet(supabase: SupabaseClient, pa: PendingAction): Promi
   const changes: PendingChange[] = isCreate
     ? [{ id: 'base', kind: 'add', locked: true, label: `إنشاء النظام الغذائي «${p.diet.name ?? ''}»${p.diet.description ? ` — ${p.diet.description}` : ''}` }]
     : fieldChanges(cur, p.diet, mealName);
+  const context = !isCreate && pa.entity_id ? await dietContext(supabase, pa.entity_id) : undefined;
   changes.push(...exclusionChanges(curEx, p.exclusions ?? [], mealName));
 
   // الأصناف الثابتة — تغيير لكل صف (صنف + وجبة + يوم)
@@ -344,7 +401,7 @@ async function dietChangeSet(supabase: SupabaseClient, pa: PendingAction): Promi
     };
     return out as unknown as Record<string, unknown>;
   };
-  return { changes, build };
+  return { changes, build, context };
 }
 
 // ── الأصناف وبنود المنيو (payload = أعمدة الجدول مباشرة) ──────────────────
@@ -382,6 +439,8 @@ export async function loadChangeSet(supabase: SupabaseClient, pa: PendingAction)
     return {
       changes: [{ id: 'base', kind: 'remove', locked: true, label: `حذف ${NOUNS[pa.entity_type] ?? ''} «${pa.entity_name ?? ''}»` }],
       build: () => null,
+      // حذف نظام غذائي يمسّ كل من هو مسند له — نعرّف بالنظام قبل القرار
+      context: pa.entity_type === 'diet' && pa.entity_id ? await dietContext(supabase, pa.entity_id) : undefined,
     };
   }
   if (pa.entity_type === 'diet') return dietChangeSet(supabase, pa);

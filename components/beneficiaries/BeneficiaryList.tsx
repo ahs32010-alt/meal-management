@@ -103,6 +103,30 @@ interface BeneficiaryListProps {
   entityType?: EntityType;
 }
 
+/**
+ * يعبّي كائن الصنف داخل كل محظور/بديل/صنف ثابت من قائمة الأصناف المحمّلة.
+ *
+ * كانت القاعدة تضمّن الصنف (وبديله) داخل كل صف من ~٧٠٠٠ محظور — نفس ٣٤٧
+ * صنفاً تتكرر آلاف المرات، فصار رد القائمة ~٣ ميقا ويأخذ ١٠ ثوانٍ وأكثر على
+ * اتصال عادي. الآن الرد معرّفات فقط والتعبئة هنا بنفس الشكل القديم
+ * (meals / alternative_meal) فما يتغيّر شيء في بقية الصفحة والنافذة.
+ */
+function attachMeals(
+  bens: Beneficiary[],
+  meals: { id: string; name: string; type: MealType; is_snack: boolean }[],
+): Beneficiary[] {
+  const byId = new Map(meals.map(m => [m.id, m]));
+  return bens.map(b => ({
+    ...b,
+    exclusions: (b.exclusions ?? []).map(e => ({
+      ...e,
+      meals: byId.get(e.meal_id),
+      alternative_meal: e.alternative_meal_id ? byId.get(e.alternative_meal_id) : undefined,
+    })),
+    fixed_meals: (b.fixed_meals ?? []).map(fm => ({ ...fm, meals: byId.get(fm.meal_id) })),
+  })) as unknown as Beneficiary[];
+}
+
 export default function BeneficiaryList({ entityType = 'beneficiary' }: BeneficiaryListProps = {}) {
   const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
   const [meals, setMeals] = useState<Meal[]>([]);
@@ -180,15 +204,8 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
           .select(`
             id, name, english_name, code, category, villa, diet_type,
             fixed_items, notes, created_at${withEntityType ? ', entity_type' : ''}${flagCols},
-            exclusions(
-              id, beneficiary_id, meal_id, alternative_meal_id${withDiets ? ', diet_id' : ''},
-              meals:meals!exclusions_meal_id_fkey(id, name, type, is_snack),
-              alternative_meal:meals!exclusions_alternative_meal_id_fkey(id, name, type, is_snack)
-            ),
-            fixed_meals:beneficiary_fixed_meals(
-              ${fixedCols},
-              meals!meal_id(id, name, type, is_snack)
-            )${withDiets ? ', diets:beneficiary_diets(diet_id)' : ''}
+            exclusions(id, beneficiary_id, meal_id, alternative_meal_id${withDiets ? ', diet_id' : ''}),
+            fixed_meals:beneficiary_fixed_meals(${fixedCols})${withDiets ? ', diets:beneficiary_diets(diet_id)' : ''}
           `)
           .order('name')
           .order('id')
@@ -266,8 +283,12 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         return res;
       };
 
-      // القراءتان معاً — لا واحدة تنتظر الأخرى
-      const [bensOut, mealsResult] = await Promise.all([loadBens(), loadMeals()]);
+      // كل الأصناف (الفئتين) — لملف Excel، ولتعبئة الصنف داخل كل محظور/ثابت
+      const loadAllMeals = () => fetchAllRows<{ id: string; name: string; type: MealType; is_snack: boolean }>(
+        (from, to) => supabase.from('meals').select('id, name, type, is_snack').order('id').range(from, to));
+
+      // القراءات معاً — لا واحدة تنتظر الأخرى
+      const [bensOut, mealsResult, allMealsRes] = await Promise.all([loadBens(), loadMeals(), loadAllMeals()]);
 
       if (bensOut.companionsNeedMigration) {
         alert(
@@ -281,15 +302,12 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       }
       const bensResult = bensOut.result;
 
-      // كل الأصناف (الفئتين) لبناء ملف Excel — قراءة خفيفة على دفعات
-      void (async () => {
-        const r = await fetchAllRows<{ id: string; name: string; type: MealType; is_snack: boolean }>(
-          (from, to) => supabase.from('meals').select('id, name, type, is_snack').order('id').range(from, to));
-        if (!r.error && r.data) setAllMealsForSheet(r.data);
-      })();
+      if (!allMealsRes.error && allMealsRes.data) setAllMealsForSheet(allMealsRes.data);
 
       // ✅ FIX 1: لازم نحفظ المستفيدين فعلياً
-      const freshBens = bensResult.data ? (bensResult.data as unknown as Beneficiary[]) : null;
+      const freshBens = bensResult.data
+        ? attachMeals(bensResult.data as unknown as Beneficiary[], allMealsRes.data ?? [])
+        : null;
       const freshMeals = mealsResult.data ? (mealsResult.data as unknown as Meal[]) : null;
       if (freshBens) setBeneficiaries(freshBens);
       if (freshMeals) setMeals(freshMeals);

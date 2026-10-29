@@ -75,10 +75,14 @@ export async function buildOrderReport(
 
   // قراءة على دفعات — قائمة المستفيدين هي أساس كل الأعداد، فلو قصّها السقف
   // الافتراضي (١٠٠٠ صف) تطلع كل كميات أمر التشغيل ناقصة.
-  const fetchBens = async (withFixedCategory: boolean, withEntityType: boolean, withMealCategory: boolean) => {
-    const mealCols = `id, name, english_name, type, is_snack${withMealCategory ? ', category' : ''}`;
+  // الوسيط الثالث (عمود meals.category) بقي من زمن تضمين الصنف — الأصناف صارت
+  // تُقرأ منفصلة في loadAllMeals بإسقاطها الخاص، فلا أثر له هنا.
+  const fetchBens = async (withFixedCategory: boolean, withEntityType: boolean, _withMealCategory: boolean) => {
     const fixedCols = `id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category, suppress_if_meal_ids' : ''}${withFixedAlt ? ', is_alternative' : ''}`;
-    const sel = `*, exclusions(id, meal_id, alternative_meal_id, meals:meals!exclusions_meal_id_fkey(${mealCols})), fixed_meals:beneficiary_fixed_meals(${fixedCols}, meals!meal_id(${mealCols}))`;
+    // بلا تضمين الصنف داخل كل صف: نفس ٣٤٧ صنفاً كانت تتكرر داخل ~٧٠٠٠ محظور
+    // (~٣ ميقا لكل تقرير). الأصناف تُقرأ كاملة بالتوازي (loadAllMeals) وتُعبَّأ
+    // في fm.meals تحت.
+    const sel = `*, exclusions(id, meal_id, alternative_meal_id), fixed_meals:beneficiary_fixed_meals(${fixedCols})`;
     return fetchAllRows((from, to) => {
       const q = supabase.from('beneficiaries').select(sel).order('name').order('id').range(from, to);
       return withEntityType ? q.eq('entity_type', orderEntityType) : q;
@@ -167,8 +171,24 @@ export async function buildOrderReport(
     exclusions: { id: string; meal_id: string; alternative_meal_id: string | null }[];
     fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; category?: string; suppress_if_meal_ids?: string[]; is_alternative?: boolean }[];
   };
+  // الصنف داخل كل صنف ثابت — من قائمة الأصناف الكاملة. لو تعذّرت تلك القراءة
+  // نسأل عن أصناف الثوابت وحدها، فما ينكسر حساب الأمر.
+  const mealById = new Map<string, Meal>((allMealsRes.data ?? []).map(m => [m.id, m]));
+  const rawBens = (bensRes.data as unknown as BenRow[] | null) ?? [];
+  const missingFixed = Array.from(new Set(
+    rawBens.flatMap(b => (b.fixed_meals ?? []).map(fm => fm.meal_id)).filter(id => !mealById.has(id)),
+  ));
+  if (missingFixed.length > 0) {
+    const { data: extra } = await supabase
+      .from('meals').select('id, name, english_name, type, is_snack').in('id', missingFixed);
+    for (const m of (extra ?? []) as Meal[]) mealById.set(m.id, m);
+  }
+  for (const b of rawBens) {
+    for (const fm of b.fixed_meals ?? []) fm.meals = mealById.get(fm.meal_id) as Meal;
+  }
+
   // نستبعد المعطّلين مؤقتاً (is_active = false) — لا يدخلون التقارير/الستيكرات/العدّ
-  const beneficiaries = ((bensRes.data as unknown as BenRow[] | null) ?? [])
+  const beneficiaries = rawBens
     .filter(b => (b as { is_active?: boolean }).is_active !== false);
 
   if (beneficiaries.length === 0) return null;

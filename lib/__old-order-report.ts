@@ -1,0 +1,472 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Meal, ItemCategory, MealType } from '@/lib/types';
+import { fetchAllRows } from '@/lib/fetch-all';
+import { buildOrderOverlay, type PersonalMenuOverride } from '@/lib/beneficiary-menu';
+
+/**
+ * Builds the full report payload for an order from CURRENT database state.
+ * This is the snapshot computation — calling it twice at different times
+ * may produce different results if beneficiaries/exclusions/fixed_meals change.
+ *
+ * Returns null if the order doesn't exist or has no items.
+ */
+export async function buildOrderReport(
+  supabase: SupabaseClient,
+  orderId: string,
+): Promise<Record<string, unknown> | null> {
+  // نحاول جلب meals.category أولاً (المصدر الأساسي للتصنيف). لو الـmigration
+  // ما اتشغّل، نرجع للسلوك القديم بدون العمود.
+  const fetchOrder = async (withMealCategory: boolean) =>
+    supabase
+      .from('daily_orders')
+      .select(`*, order_items(id, meal_id, display_name, extra_quantity, category, multiplier, meals(id, name, english_name, type, is_snack${withMealCategory ? ', category' : ''}))`)
+      .eq('id', orderId)
+      .single();
+
+  let { data: order, error: orderError } = await fetchOrder(true);
+  if (orderError && /category|column/i.test(orderError.message)) {
+    ({ data: order, error: orderError } = await fetchOrder(false));
+  }
+
+  if (orderError || !order) return null;
+
+  const orderItems: { meal_id: string; display_name?: string | null; extra_quantity?: number; category?: string; multiplier?: number; meals: Meal }[] = order.order_items || [];
+  if (orderItems.length === 0) return null;
+
+  const mealMap: Record<string, Meal> = {};
+  const displayMealMap: Record<string, Meal> = {};
+  const extraQtyMap: Record<string, number> = {};
+  const categoryMap: Record<string, ItemCategory> = {};
+  const multiplierMap: Record<string, number> = {};
+
+  orderItems.forEach(item => {
+    mealMap[item.meal_id] = item.meals;
+    extraQtyMap[item.meal_id] = item.extra_quantity ?? 0;
+    multiplierMap[item.meal_id] = Math.max(1, item.multiplier ?? 1);
+    // أولوية التصنيف: (1) meals.category — المصدر الموحد، (2) order_items.category
+    // — توافق رجعي، (3) المشتق من is_snack. هذا يضمن الستيكرات تتبع نفس التصنيف
+    // أينما ظهر الصنف.
+    const mealCat = (item.meals as { category?: ItemCategory }).category;
+    categoryMap[item.meal_id] =
+      mealCat ?? (item.category as ItemCategory) ?? (item.meals.is_snack ? 'snack' : 'hot');
+    displayMealMap[item.meal_id] = item.display_name
+      ? { ...item.meals, name: item.display_name }
+      : item.meals;
+  });
+
+  const orderMealIds = new Set(Object.keys(mealMap));
+  // Prefer the explicit day_of_week stored on the order (driven by the menu).
+  // For older orders that don't have it set, fall back to deriving it from the date.
+  const orderDayOfWeek = (typeof order.day_of_week === 'number' && order.day_of_week >= 0 && order.day_of_week <= 6)
+    ? order.day_of_week
+    : new Date(order.date).getDay();
+
+  // كل أمر تشغيل يخص فئة معيّنة (مستفيدين أو مرافقين). نقرأ النوع من الأمر،
+  // ولو ما كان موجود (أمر قديم قبل الـmigration) نعتبره مستفيدين.
+  const orderEntityType: 'beneficiary' | 'companion' =
+    (order as { entity_type?: string }).entity_type === 'companion' ? 'companion' : 'beneficiary';
+
+  // Try with the category column on fixed_meals first; if the migration hasn't
+  // been run yet, fall back to the older shape so the report still works.
+  // Same fallback strategy for the entity_type filter on beneficiaries.
+  // علامة «صنف بديل» على الصنف الثابت — عمود اختياري (fixed-meals-is-alternative-migration).
+  // نجرّبه أولاً وحده، ولو ما كان موجود نكمل بباقي سلسلة الإسقاط بدونه.
+  let withFixedAlt = true;
+
+  // قراءة على دفعات — قائمة المستفيدين هي أساس كل الأعداد، فلو قصّها السقف
+  // الافتراضي (١٠٠٠ صف) تطلع كل كميات أمر التشغيل ناقصة.
+  const fetchBens = async (withFixedCategory: boolean, withEntityType: boolean, withMealCategory: boolean) => {
+    const mealCols = `id, name, english_name, type, is_snack${withMealCategory ? ', category' : ''}`;
+    const fixedCols = `id, day_of_week, meal_type, meal_id, quantity${withFixedCategory ? ', category, suppress_if_meal_ids' : ''}${withFixedAlt ? ', is_alternative' : ''}`;
+    const sel = `*, exclusions(id, meal_id, alternative_meal_id, meals:meals!exclusions_meal_id_fkey(${mealCols})), fixed_meals:beneficiary_fixed_meals(${fixedCols}, meals!meal_id(${mealCols}))`;
+    return fetchAllRows((from, to) => {
+      const q = supabase.from('beneficiaries').select(sel).order('name').order('id').range(from, to);
+      return withEntityType ? q.eq('entity_type', orderEntityType) : q;
+    });
+  };
+
+  // نحاول كل الأعمدة، ثم نسقط واحدة بواحدة عند ظهور أخطاء العمود/الترقية
+  const loadBens = async () => {
+    let res = await fetchBens(true, true, true);
+    if (res.error && /is_alternative/i.test(res.error.message)) {
+      withFixedAlt = false;
+      res = await fetchBens(true, true, true);
+    }
+    if (res.error && /category|column/i.test(res.error.message)) {
+      // إما fixed_meals.category أو meals.category — جرّب الإسقاط بالترتيب
+      res = await fetchBens(false, true, true);
+      if (res.error && /category|column/i.test(res.error.message)) {
+        res = await fetchBens(true, true, false);
+        if (res.error && /category|column/i.test(res.error.message)) {
+          res = await fetchBens(false, true, false);
+        }
+      }
+    }
+    if (res.error && /entity_type|column/i.test(res.error.message)) {
+      res = await fetchBens(false, false, false);
+    }
+    return res;
+  };
+
+  /**
+   * قرارات الخانة (beneficiary_menu_overrides) لهذه الخانة وحدها — تبديل أو
+   * حذف أو إضافة يخص (أسبوع + يوم + وجبة) هذا الأمر.
+   *
+   * ⚠️ ضمانتان:
+   *  ١) الأمر الذي لا يحمل `week_number` (أمر قديم) لا يُقرأ له أي قرار — يُحسب
+   *     بالمنطق القديم حرفياً.
+   *  ٢) لو الجدول غير موجود (الترقية ما اتشغّلت) نكمل بلا قرارات بصمت — نفس
+   *     نمط الإسقاط في بقية المشروع، فما ينكسر شيء قبل تشغيل الـmigration.
+   */
+  const orderWeekNumber = typeof order.week_number === 'number' ? order.week_number : null;
+  const loadOverrides = async () => {
+    if (orderWeekNumber === null) return null;
+    return fetchAllRows<PersonalMenuOverride & { beneficiary_id: string }>((from, to) =>
+      supabase
+        .from('beneficiary_menu_overrides')
+        .select('id, beneficiary_id, week_number, day_of_week, meal_type, action, base_meal_id, target_meal_id, quantity, is_alternative')
+        .eq('week_number', orderWeekNumber)
+        .eq('day_of_week', orderDayOfWeek)
+        .eq('meal_type', order.meal_type)
+        .order('id')
+        .range(from, to));
+  };
+
+  /**
+   * أسماء كل الأصناف مقدَّماً.
+   *
+   * كانت تُقرأ في مرحلة **ثالثة** تنتظر وصول المحظورات لتعرف أي بديل تسأل عنه
+   * — رحلة شبكة كاملة (~٣٠٠ms) في نهاية السلسلة. وجدول `meals` كله ٣٠٥ صفوف
+   * (٧٠ كيلوبايت)، فقراءته مع البقية أرخص من انتظار دور ثالث.
+   */
+  const loadAllMeals = async (): Promise<{ data: Meal[] | null }> => {
+    // العمود `category` اختياري (قبل تشغيل meals-category-migration) — نسقطه عند الحاجة
+    const attempt = (withCategory: boolean) =>
+      fetchAllRows((from, to) =>
+        supabase.from('meals')
+          .select(`id, name, english_name, type, is_snack${withCategory ? ', category' : ''}`)
+          .order('id').range(from, to));
+    let res = await attempt(true);
+    if (res.error) res = await attempt(false);
+    return { data: res.error ? null : (res.data as unknown as Meal[]) };
+  };
+
+  // الثلاثة لا تعتمد إحداها على الأخرى — كانت متسلسلة فتدفع كل نداء للتقرير
+  // رحلتَي شبكة زائدتين. الآن معاً في مرحلة واحدة.
+  const [bensRes, ovRes, allMealsRes] = await Promise.all([
+    loadBens(),
+    loadOverrides(),
+    loadAllMeals(),
+  ]);
+  // الـquery select ديناميكي فما يقدر TypeScript يستنتج النوع — نعرّف نوع
+  // محلّي يطابق شكل الصف ونقصّ النتيجة إليه.
+  type BenRow = {
+    id: string; name: string; english_name?: string; code: string;
+    category: string; villa?: string; diet_type?: string;
+    fixed_items?: string; notes?: string; created_at: string;
+    exclusions: { id: string; meal_id: string; alternative_meal_id: string | null }[];
+    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; category?: string; suppress_if_meal_ids?: string[]; is_alternative?: boolean }[];
+  };
+  // نستبعد المعطّلين مؤقتاً (is_active = false) — لا يدخلون التقارير/الستيكرات/العدّ
+  const beneficiaries = ((bensRes.data as unknown as BenRow[] | null) ?? [])
+    .filter(b => (b as { is_active?: boolean }).is_active !== false);
+
+  if (beneficiaries.length === 0) return null;
+
+  const overridesByBen = new Map<string, PersonalMenuOverride[]>();
+  if (ovRes && !ovRes.error && ovRes.data) {
+    for (const ov of ovRes.data) {
+      const list = overridesByBen.get(ov.beneficiary_id) ?? [];
+      list.push(ov);
+      overridesByBen.set(ov.beneficiary_id, list);
+    }
+  }
+
+  const altIds = new Set<string>();
+  beneficiaries.forEach((ben: { exclusions: { alternative_meal_id: string | null }[] }) => {
+    (ben.exclusions || []).forEach(ex => { if (ex.alternative_meal_id) altIds.add(ex.alternative_meal_id); });
+  });
+  // أصناف قرارات الخانة (بدائل ومضافات) لازم تُقرأ أسماؤها مثل بدائل المحظورات
+  for (const list of overridesByBen.values()) {
+    for (const ov of list) if (ov.target_meal_id) altIds.add(ov.target_meal_id);
+  }
+
+  // البدائل تُلتقط من قائمة الأصناف المقروءة سلفاً — بلا رحلة شبكة إضافية.
+  // لو تعذّرت تلك القراءة (عمود ناقص مثلاً) نرجع للسؤال عن المطلوب وحده.
+  const altMealMap: Record<string, Meal> = { ...mealMap };
+  if (altIds.size > 0) {
+    const preloaded = allMealsRes.data;
+    if (preloaded) {
+      for (const m of preloaded) if (altIds.has(m.id)) altMealMap[m.id] = m;
+    } else {
+      const { data: altMeals } = await supabase
+        .from('meals')
+        .select('id, name, english_name, type, is_snack')
+        .in('id', Array.from(altIds));
+      (altMeals || []).forEach((m: { id: string; name: string; english_name?: string; type: string; is_snack: boolean }) => {
+        altMealMap[m.id] = m as Meal;
+      });
+    }
+  }
+
+  const mainQty: Record<string, number> = {};
+  const altQty: Record<string, number> = {};
+  const fixedQty: Record<string, number> = {};
+  const allMealDetails: Record<string, Meal> = { ...altMealMap };
+  Object.entries(displayMealMap).forEach(([id, m]) => { allMealDetails[id] = m; });
+
+  const beneficiaryDetails = beneficiaries.map((ben: {
+    id: string; name: string; english_name?: string; code: string;
+    category: string; villa?: string; diet_type?: string;
+    fixed_items?: string; notes?: string; created_at: string;
+    exclusions: { id: string; meal_id: string; alternative_meal_id: string | null }[];
+    fixed_meals: { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; meals: Meal; suppress_if_meal_ids?: string[]; is_alternative?: boolean }[];
+  }) => {
+    /**
+     * تخصيص هذا المستفيد لهذه الخانة: قرار الخانة يتقدّم على المحظور العام،
+     * والمحظور العام يبقى شغّالاً لكل صنف لا قرار له. الحساب في
+     * lib/beneficiary-menu.ts — نفس الدالة التي تعرض بها شاشة منيو المستفيد،
+     * فما تختلف الشاشة عن المطبخ.
+     */
+    const overlay = buildOrderOverlay({
+      week: orderWeekNumber,
+      day: orderDayOfWeek,
+      mealType: order.meal_type as MealType,
+      orderMealIds: Array.from(orderMealIds),
+      exclusions: (ben.exclusions || []).map(e => ({
+        meal_id: e.meal_id,
+        alternative_meal_id: e.alternative_meal_id,
+      })),
+      overrides: overridesByBen.get(ben.id),
+    });
+
+    const excludedIds = new Set(overlay.excluded.map(e => e.meal_id));
+
+    const excludedItems = overlay.excluded.map(ex => {
+      const meal = displayMealMap[ex.meal_id];
+      let alternative: Meal | null = null;
+      if (ex.alternative_meal_id && altMealMap[ex.alternative_meal_id]) {
+        alternative = altMealMap[ex.alternative_meal_id];
+      }
+      const category = categoryMap[ex.meal_id] ?? (meal.is_snack ? 'snack' : 'hot');
+      return { meal, alternative, category };
+    });
+
+    const todayFixed: { meal: Meal; quantity: number; category: ItemCategory; is_alternative: boolean }[] = (ben.fixed_meals || [])
+      .filter(fm =>
+        fm.day_of_week === orderDayOfWeek &&
+        fm.meal_type === order.meal_type &&
+        fm.meals &&
+        !(fm.suppress_if_meal_ids?.some(id => orderMealIds.has(id)))
+      )
+      .flatMap(fm => {
+        // أولوية تصنيف الصنف الثابت:
+        //   1) meals.category — المصدر الموحد (يضمن نفس الصنف نفس الفئة في كل مكان)
+        //   2) قيمة محفوظة على صف fixed_meals (للتوافق الرجعي)
+        //   3) تصنيف الصنف داخل أمر التشغيل
+        //   4) المشتق من is_snack
+        const mealCat = (fm.meals as { category?: ItemCategory }).category;
+        const stored = (fm as { category?: ItemCategory }).category;
+        const category: ItemCategory =
+          mealCat ?? stored ?? categoryMap[fm.meal_id] ?? (fm.meals.is_snack ? 'snack' : 'hot');
+        const quantity = fm.quantity ?? 1;
+        const is_alternative = fm.is_alternative === true;
+
+        // قرار الخانة على صنف ثابت: حذفه من هذا الأمر وحده، أو تبديله فيه وحده
+        const decision = overlay.fixedDecisions.get(fm.meal_id);
+        if (decision?.removed) return [];
+        if (decision?.replacedWith) {
+          const target = altMealMap[decision.replacedWith];
+          if (!target) return [];
+          return [{
+            meal: target,
+            quantity,
+            category: (target.category as ItemCategory | undefined)
+              ?? (target.is_snack ? 'snack' : category),
+            is_alternative,
+          }];
+        }
+        return [{ meal: fm.meals, quantity, category, is_alternative }];
+      });
+
+    // الأصناف المضافة لهذه الخانة وحدها — تُحتسب بنفس دلالة الصنف الثابت:
+    // المعلَّم «بديل» يذهب لجدول البدائل، وغيره لجدول الأصناف اليومية الثابتة.
+    for (const add of overlay.added) {
+      const meal = altMealMap[add.meal_id];
+      if (!meal) continue;
+      // ما نكرّر صنفاً موجوداً أصلاً كصنف ثابت في نفس الأمر — القرار الأخص يفوز
+      const dupIdx = todayFixed.findIndex(f => f.meal.id === meal.id);
+      const row = {
+        meal,
+        quantity: add.quantity,
+        category: ((meal.category as ItemCategory | undefined)
+          ?? (meal.is_snack ? 'snack' : 'hot')) as ItemCategory,
+        is_alternative: add.is_alternative,
+      };
+      if (dupIdx >= 0) todayFixed[dupIdx] = row;
+      else todayFixed.push(row);
+    }
+
+    orderItems.forEach(item => {
+      if (!excludedIds.has(item.meal_id)) {
+        mainQty[item.meal_id] = (mainQty[item.meal_id] || 0) + 1;
+        allMealDetails[item.meal_id] = displayMealMap[item.meal_id];
+      }
+    });
+    excludedItems.forEach(({ meal, alternative }) => {
+      if (alternative) {
+        // البديل يتزامن مع مضاعف الصنف المستبعد: لو الفول ×٢، كل مستفيد
+        // مستبعَد من الفول يحتاج حصّتين من البديل أيضاً.
+        const mult = multiplierMap[meal.id] ?? 1;
+        altQty[alternative.id] = (altQty[alternative.id] || 0) + mult;
+        allMealDetails[alternative.id] = alternative;
+      }
+    });
+    todayFixed.forEach(({ meal, quantity, is_alternative }) => {
+      // الصنف الثابت المعلَّم كـ«بديل» يُحتسب مع البدائل (altQty) بدل الأصناف
+      // اليومية الثابتة (fixedQty). المجموع في إحصاء الأصناف واحد في الحالتين.
+      if (is_alternative) {
+        altQty[meal.id] = (altQty[meal.id] || 0) + quantity;
+      } else {
+        fixedQty[meal.id] = (fixedQty[meal.id] || 0) + quantity;
+      }
+      allMealDetails[meal.id] = meal;
+    });
+
+    return {
+      beneficiary: {
+        id: ben.id, name: ben.name, english_name: ben.english_name,
+        code: ben.code, category: ben.category, villa: ben.villa,
+        diet_type: ben.diet_type, fixed_items: ben.fixed_items,
+        notes: ben.notes, created_at: ben.created_at,
+      },
+      excludedItems,
+      fixedItems: todayFixed,
+    };
+  });
+
+  // اسم الصنف في هذا الأمر (display_name) يغلب دائماً: حلقة المستفيدين فوق
+  // تكتب الصنف الخام حين يكون بديلاً أو ثابتاً لأحدهم، فيرجع اسمه الأصلي في
+  // «إحصاء الأصناف» والبدائل حسب ترتيب المستفيدين — بينما الأمر يعرض اسمه المعدّل.
+  Object.entries(displayMealMap).forEach(([id, m]) => { allMealDetails[id] = m; });
+
+  // allIds يشمل: كل أصناف الأمر (حتى لو mainQty=0 بسبب استثناء الجميع)
+  // + البدائل (altQty) + الأصناف الثابتة (fixedQty)
+  const allIds = new Set([
+    ...orderItems.map(i => i.meal_id),
+    ...Object.keys(altQty),
+    ...Object.keys(fixedQty),
+  ]);
+
+  // احسب الكمية لكل ID أولاً
+  const perIdItems = Array.from(allIds)
+    .map(id => {
+      const extra = extraQtyMap[id] ?? 0;
+      const mult  = multiplierMap[id] ?? 1;
+      const mainCooked = (mainQty[id] || 0) * mult + extra;
+      const total = mainCooked + (altQty[id] || 0) + (fixedQty[id] || 0);
+      return {
+        meal: allMealDetails[id],
+        quantity: total,
+        mainQty: mainCooked,
+        altQty: altQty[id] || 0,
+        fixedQty: fixedQty[id] || 0,
+        multiplier: mult,
+      };
+    })
+    .filter(x => x.meal && x.quantity > 0);
+
+  // اجمع الأصناف التي لها نفس الاسم (مثل صنف + سناك باسم واحد) في بند واحد
+  const nameMap = new Map<string, typeof perIdItems[0]>();
+  for (const item of perIdItems) {
+    const key = item.meal.name.trim();
+    const existing = nameMap.get(key);
+    if (existing) {
+      existing.quantity += item.quantity;
+      existing.mainQty  += item.mainQty;
+      existing.altQty   += item.altQty;
+      existing.fixedQty += item.fixedQty;
+    } else {
+      nameMap.set(key, { ...item });
+    }
+  }
+
+  const itemsSummary = Array.from(nameMap.values())
+    .sort((a, b) => b.quantity - a.quantity);
+
+  const mainMealsSummary = orderItems
+    .filter(item => !item.meals.is_snack)
+    .map(item => {
+      const mult = multiplierMap[item.meal_id] ?? 1;
+      return {
+        meal: displayMealMap[item.meal_id],
+        gets: (mainQty[item.meal_id] || 0) * mult + (extraQtyMap[item.meal_id] ?? 0),
+        multiplier: mult,
+      };
+    });
+
+  const snackMealsSummary = orderItems
+    .filter(item => item.meals.is_snack)
+    .map(item => {
+      const mult = multiplierMap[item.meal_id] ?? 1;
+      return {
+        meal: displayMealMap[item.meal_id],
+        gets: (mainQty[item.meal_id] || 0) * mult + (extraQtyMap[item.meal_id] ?? 0),
+        multiplier: mult,
+      };
+    });
+
+  const altSummary = Object.entries(altQty)
+    .map(([id, qty]) => ({ meal: allMealDetails[id], qty }))
+    .filter(x => x.meal && !x.meal.is_snack);
+
+  const snackAltSummary = Object.entries(altQty)
+    .map(([id, qty]) => ({ meal: allMealDetails[id], qty }))
+    .filter(x => x.meal && x.meal.is_snack);
+
+  const fixedSummary = Object.entries(fixedQty)
+    .map(([id, qty]) => ({ meal: allMealDetails[id], qty }))
+    .filter(x => x.meal)
+    .sort((a, b) => b.qty - a.qty);
+
+  // Per-meal final count (used by OrderList for the snapshot-friendly count column)
+  // يشمل: أصناف الأمر × المضاعف + extra_quantity + البدائل + الأصناف الثابتة
+  const itemFinalCounts: Record<string, number> = {};
+  for (const id of allIds) {
+    const mult = multiplierMap[id] ?? 1;
+    itemFinalCounts[id] = (mainQty[id] || 0) * mult + (extraQtyMap[id] ?? 0) + (altQty[id] || 0) + (fixedQty[id] || 0);
+  }
+
+  return {
+    order,
+    itemsSummary,
+    beneficiaryDetails,
+    mainMealsSummary,
+    snackMealsSummary,
+    altSummary,
+    snackAltSummary,
+    fixedSummary,
+    itemFinalCounts,
+    totalBeneficiaries: beneficiaries.length,
+  };
+}
+
+/**
+ * Saves the snapshot for an order. Returns the timestamp.
+ * Silently no-ops if the snapshot column doesn't exist yet (migration not run).
+ */
+export async function saveOrderSnapshot(
+  supabase: SupabaseClient,
+  orderId: string,
+  snapshot: Record<string, unknown>,
+): Promise<string | null> {
+  const snapshotAt = new Date().toISOString();
+  const { error } = await supabase
+    .from('daily_orders')
+    .update({ snapshot, snapshot_at: snapshotAt })
+    .eq('id', orderId);
+  if (error && /snapshot|column/i.test(error.message)) {
+    return null;
+  }
+  return snapshotAt;
+}

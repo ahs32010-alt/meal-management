@@ -77,6 +77,17 @@ function ChangeReview({
   if (loadErr) return <div className="text-xs text-red-600">تعذّر تحليل الطلب: {loadErr}</div>;
   if (!cs) return <div className="text-xs text-slate-400">جاري تحليل التغييرات...</div>;
 
+  const context = cs.context && (
+    <div className="rounded-lg border border-teal-200 bg-teal-50/50 px-3 py-2 space-y-1">
+      <p className="text-xs font-bold text-slate-700">{cs.context.title}</p>
+      {cs.context.lines.map(l => (
+        <p key={l.label} className="text-[11px] text-slate-600 leading-relaxed">
+          <span className="font-semibold text-slate-700">{l.label}: </span>{l.value}
+        </p>
+      ))}
+    </div>
+  );
+
   // بعد التنفيذ، المقارنة مع القاعدة ما عاد لها معنى (التغييرات صارت هي الحالة)
   if (pa.status !== 'pending') {
     return (
@@ -95,6 +106,7 @@ function ChangeReview({
 
   return (
     <div className="space-y-2">
+      {context}
       {cs.note && <p className="text-xs text-amber-700">{cs.note}</p>}
       {cs.changes.length === 0 && !cs.note && (
         <p className="text-xs text-slate-500">— لا توجد تغييرات فعلية مقارنة بالبيانات الحالية.</p>
