@@ -162,6 +162,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       // الأنظمة الغذائية (diet-systems-migration) — diet_id يفصل المحظور الشخصي
       // عن المشتق من نظام، فلا يحوّل حفظُ المستفيد محظوراتِ النظام إلى شخصية.
       let withDiets = true;
+      // مصدر الصنف الثابت (diet-fixed-meals-migration) — بدونه يحوّل حفظ
+      // المستفيد أصنافَ النظام الثابتة إلى شخصية. يُسقط وحده لو العمود غائب.
+      let withFixedDiet = true;
       // علامة «وجبات غداء وعشاء مخصصة» (custom-ld-meals-migration) — تُسقط وحدها لو غابت
       let withCustomLd = true;
       const fetchBens = (withFixedCategory: boolean, withEntityType: boolean, withFlags: boolean) => {
@@ -169,7 +172,8 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
           (withFlags && withCustomLd ? ', custom_ld_meals' : '');
         const fixedCols =
           `id, beneficiary_id, day_of_week, meal_type, meal_id, quantity` +
-          `${withFixedCategory ? ', category, suppress_if_meal_ids' : ''}${withFixedAlt ? ', is_alternative' : ''}`;
+          `${withFixedCategory ? ', category, suppress_if_meal_ids' : ''}${withFixedAlt ? ', is_alternative' : ''}` +
+          `${withDiets && withFixedDiet ? ', diet_id' : ''}`;
         return fetchAllRows((from, to) => {
         const q = supabase
           .from('beneficiaries')
@@ -202,6 +206,10 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         companionsNeedMigration?: boolean;
       }> => {
         let res = await fetchBens(true, true, true);
+        if (res.error && /diet_id/i.test(res.error.message)) {
+          withFixedDiet = false;
+          res = await fetchBens(true, true, true);
+        }
         if (res.error && /diet_id|beneficiary_diets/i.test(res.error.message)) {
           withDiets = false;
           res = await fetchBens(true, true, true);

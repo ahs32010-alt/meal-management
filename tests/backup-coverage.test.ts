@@ -52,7 +52,7 @@ describe('تغطية جداول النسخة الاحتياطية', () => {
   });
 
   it('قائمة السيرفر (آخر backup_logical_tables) = BACKUP_TABLES حرفياً وبالترتيب', () => {
-    const sql = readFileSync(join(SUPABASE_DIR, 'backup-menu-overrides-coverage-migration.sql'), 'utf8');
+    const sql = readFileSync(join(SUPABASE_DIR, 'diet-fixed-meals-migration.sql'), 'utf8');
     const body = sql.slice(sql.indexOf('select array['), sql.indexOf(']::text[]'));
     const list = [...body.matchAll(/'([a-z_]+)'/g)].map(m => m[1]);
     expect(list).toEqual([...BACKUP_TABLES]);
@@ -132,7 +132,7 @@ describe('restoreFromSnapshot', () => {
     // المتصفح لمس الجدول الناقص فقط — لم يُعِد مسح ما استعاده السيرفر
     expect(log.deleted).toEqual(['beneficiary_menu_overrides']);
     expect(log.inserted).toEqual({ beneficiary_menu_overrides: overrides });
-    expect(res.warnings.join(' ')).toContain('backup-menu-overrides-coverage-migration.sql');
+    expect(res.warnings.join(' ')).toContain('diet-fixed-meals-migration.sql');
   });
 
   it('ذرّية بالكامل حين تغطي قائمة السيرفر كل الجداول', async () => {

@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
+import { useCurrentUser } from '@/lib/use-current-user';
 import type { Beneficiary, Meal, MealType, ItemCategory, EntityType } from '@/lib/types';
 import {
   MEAL_TYPE_LABELS,
@@ -166,6 +167,9 @@ export default function BulkCustomization({ entityType }: Props) {
   const entityLabel = ENTITY_TYPE_LABELS[entityType];
   const entityPlural = ENTITY_TYPE_LABELS_PLURAL[entityType];
   const listHref = entityType === 'companion' ? '/companions' : '/beneficiaries';
+  // رابط الصفحة يظهر للأدمن فقط، لكن المسار نفسه كان مفتوحاً لأي أحد يكتبه —
+  // والتعديل الجماعي يكتب مباشرة بلا موافقة. الحارس تحت قبل أي عرض.
+  const { user: currentUser, loading: userLoading } = useCurrentUser();
 
   // ── Data ────────────────────────────────────────────────────────────────────
   const [bens, setBens] = useState<Beneficiary[]>([]);
@@ -667,7 +671,15 @@ export default function BulkCustomization({ entityType }: Props) {
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
-  if (loading) {
+  if (!userLoading && currentUser?.is_admin !== true) {
+    return (
+      <div className="p-6">
+        <div className="card p-8 text-center text-slate-500">التعديل الجماعي متاح للأدمن فقط</div>
+      </div>
+    );
+  }
+
+  if (loading || userLoading) {
     return (
       <div className="p-6">
         <div className="animate-pulse space-y-4">

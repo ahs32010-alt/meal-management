@@ -125,7 +125,19 @@ export interface DietSystem {
   description?: string | null;
   created_at: string;
   exclusions?: DietSystemExclusion[];
+  /** الأصناف الثابتة للنظام (diet-fixed-meals-migration) — صف لكل يوم */
+  fixed_meals?: DietSystemFixedMeal[];
   beneficiary_diets?: { beneficiary_id: string }[];
+}
+
+export interface DietSystemFixedMeal {
+  id?: string;
+  diet_id?: string;
+  day_of_week: number;
+  meal_type: MealType;
+  meal_id: string;
+  quantity: number;
+  is_alternative?: boolean;
 }
 
 export interface DietSystemExclusion {
@@ -150,6 +162,8 @@ export interface BeneficiaryFixedMeal {
    * في إحصاء الأصناف لا تتغيّر — فقط مكان ظهورها.
    */
   is_alternative?: boolean;
+  /** مشتق من نظام غذائي (diet-fixed-meals-migration) — null = صنف شخصي */
+  diet_id?: string | null;
   meals?: Meal;
 }
 

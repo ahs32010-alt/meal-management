@@ -6,11 +6,18 @@ import { supabase } from '@/lib/supabase-client';
 import { logActivity } from '@/lib/activity-log';
 import { listDiffDetails } from '@/lib/activity-diff';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { can } from '@/lib/permissions';
+import { can, needsApproval, type AppUser } from '@/lib/permissions';
+import {
+  enqueueGenericCreate, enqueueGenericUpdate, enqueueGenericDelete,
+  isEntityTypeConstraintError, DIET_APPROVAL_MIGRATION_HINT, type DietPayload, type EnqueueResult,
+} from '@/lib/pending-actions';
+import { useMyPending } from '@/lib/use-my-pending';
 import { fetchAllRows } from '@/lib/fetch-all';
 import type { DietSystem, Meal } from '@/lib/types';
+import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER } from '@/lib/types';
 import ExclusionSectionsEditor, { type ExclusionEntry } from '@/components/shared/ExclusionSectionsEditor';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
+import DietFixedMealsEditor, { draftsFromRows, rowsFromDrafts, fixedRowKey, type DietFixedDraft } from '@/components/diets/DietFixedMealsEditor';
 import type { ImportMode } from '@/components/shared/ImportModeDialog';
 import { exportXLSX } from '@/lib/xlsx-utils';
 import { DIET_HEADERS, DIET_REQUIRED_HEADERS, DIET_TEMPLATE_ROW, buildDietRows, dietNameKey, parseDietRows } from '@/lib/diet-sheet';
@@ -20,7 +27,16 @@ const ImportModal = dynamic(() => import('@/components/shared/ImportModal'), { s
 const MIGRATION_HINT =
   'جداول «النظام الغذائي» غير موجودة بعد — شغّل الملف supabase/diet-systems-migration.sql في Supabase SQL Editor ثم حدّث الصفحة.';
 
+const FIXED_MIGRATION_HINT =
+  'الأصناف الثابتة للأنظمة غير مفعّلة بعد — شغّل الملف supabase/diet-fixed-meals-migration.sql في Supabase SQL Editor ثم حدّث الصفحة.';
+
 type Ben = { id: string; name: string; code: string; entity_type?: string };
+
+/** وصف مختصر لصنف ثابت في النظام: «فول · فطور · كل الأيام ×2» */
+function describeFixedDraft(d: DietFixedDraft, mealName: (id: string) => string) {
+  const days = d.days.length === 7 ? 'كل الأيام' : DAYS_ORDER.filter(x => d.days.includes(x)).map(x => DAY_LABELS[x]).join('، ');
+  return `${mealName(d.meal_id)} · ${MEAL_TYPE_LABELS[d.meal_type]} · ${days}${d.quantity > 1 ? ` ×${d.quantity}` : ''}${d.is_alternative ? ' (بديل)' : ''}`;
+}
 
 /**
  * صفحة «النظام الغذائي»: كل نظام = اسم + أصناف مستبعدة (ولكل صنف بديل
@@ -34,6 +50,11 @@ export default function DietSystemList() {
   const canEdit = can(currentUser, 'diets', 'edit');
   const canDelete = can(currentUser, 'diets', 'delete');
   const isAdmin = currentUser?.is_admin === true;
+  // المستخدم المقيَّد بالموافقة: الحفظ/الحذف يصير طلباً في صفحة الموافقات
+  const addNeedsApproval = needsApproval(currentUser, 'diets', 'add');
+  const editNeedsApproval = needsApproval(currentUser, 'diets', 'edit');
+  const deleteNeedsApproval = needsApproval(currentUser, 'diets', 'delete');
+  const myPending = useMyPending('diet');
 
   const [diets, setDiets] = useState<DietSystem[]>([]);
   const [meals, setMeals] = useState<Meal[]>([]);
@@ -44,14 +65,27 @@ export default function DietSystemList() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<DietSystem | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  // false = جدول الأصناف الثابتة للأنظمة غير موجود (الترقية ما اتشغّلت)
+  const [fixedReady, setFixedReady] = useState(true);
 
   const load = useCallback(async () => {
     setError('');
     const [dRes, mRes, bRes] = await Promise.all([
-      supabase
-        .from('diet_systems')
-        .select('id, name, description, created_at, exclusions:diet_system_exclusions(id, meal_id, alternative_meal_id), beneficiary_diets(beneficiary_id)')
-        .order('name'),
+      // الأصناف الثابتة (diet-fixed-meals-migration) — نرجع بدونها لو الجدول غير موجود
+      (async () => {
+        const read = (withFixed: boolean) => supabase
+          .from('diet_systems')
+          .select(`id, name, description, created_at, exclusions:diet_system_exclusions(id, meal_id, alternative_meal_id)${withFixed
+            ? ', fixed_meals:diet_system_fixed_meals(id, day_of_week, meal_type, meal_id, quantity, is_alternative)' : ''}, beneficiary_diets(beneficiary_id)`)
+          .order('name');
+        const r = await read(true);
+        if (r.error && /diet_system_fixed_meals/i.test(r.error.message)) {
+          setFixedReady(false);
+          return read(false);
+        }
+        setFixedReady(true);
+        return r;
+      })(),
       // entity_type يميّز صنف المستفيدين عن صنف المرافقين بنفس الاسم في ملف
       // التصدير/الاستيراد — ونرجع بدونه لو ترقية المرافقين ما اتشغّلت.
       (async () => {
@@ -84,6 +118,13 @@ export default function DietSystemList() {
 
   const handleDelete = async (d: DietSystem) => {
     setConfirmDelete(null);
+    if (deleteNeedsApproval && currentUser) {
+      const r = await enqueueGenericDelete(supabase, currentUser, 'diet', d.id, d.name);
+      if (!r.ok) { alert(approvalError(r)); return; }
+      alert(`✓ تم إرسال طلب حذف النظام «${d.name}» للأدمن. يُحذف بعد الموافقة.`);
+      myPending.refresh();
+      return;
+    }
     const { error: e } = await supabase.from('diet_systems').delete().eq('id', d.id);
     if (e) { alert(e.message); return; }
     void logActivity({ action: 'delete', entity_type: 'diet_system', entity_id: d.id, entity_name: d.name });
@@ -171,7 +212,7 @@ export default function DietSystemList() {
         <div>
           <h1 className="text-2xl font-bold text-slate-800">النظام الغذائي</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            أنشئ النظام وحدّد أصنافه المستبعدة، ثم اختره للمستفيد من خانة «النظام الغذائي الأساسي» في صفحته — تنطبق الاستبعادات على منيوه تلقائياً.
+            أنشئ النظام وحدّد أصنافه المستبعدة وأصنافه الثابتة، ثم اختره للمستفيد من خانة «النظام الغذائي الأساسي» في صفحته — تنطبق على منيوه تلقائياً.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -211,6 +252,12 @@ export default function DietSystemList() {
         </div>
       )}
 
+      {myPending.getCreates().length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2.5 rounded-xl text-sm">
+          ⏳ بانتظار موافقة الأدمن على إنشاء: {myPending.getCreates().map(p => `«${p.entity_name}»`).join('، ')}
+        </div>
+      )}
+
       {!loading && !error && diets.length === 0 && (
         <div className="card p-10 text-center text-slate-500">
           <p className="font-semibold text-slate-700 mb-1">لا توجد أنظمة غذائية بعد</p>
@@ -227,12 +274,21 @@ export default function DietSystemList() {
               <div key={d.id} className="card overflow-hidden">
                 <div className="px-4 py-3 flex items-start justify-between gap-3 border-b border-slate-100">
                   <div className="min-w-0">
-                    <h3 className="font-bold text-slate-800 text-lg">{d.name}</h3>
+                    <h3 className="font-bold text-slate-800 text-lg">
+                      {d.name}
+                      {myPending.hasDelete(d.id) && <span className="pending-badge pending-badge-delete mr-2">⏳ حذف</span>}
+                      {!myPending.hasDelete(d.id) && myPending.hasUpdate(d.id) && <span className="pending-badge pending-badge-update mr-2">⏳ تعديل</span>}
+                    </h3>
                     {d.description && <p className="text-xs text-slate-500 mt-0.5">{d.description}</p>}
                     <div className="flex gap-2 mt-2 text-xs">
                       <span className="px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
                         {d.exclusions?.length ?? 0} صنف مستبعد
                       </span>
+                      {fixedReady && (
+                        <span className="px-2 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">
+                          {draftsFromRows(d.fixed_meals ?? []).length} صنف ثابت
+                        </span>
+                      )}
                       <button type="button" onClick={() => setExpanded(open ? null : d.id)}
                         className="px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 hover:bg-green-100">
                         مسند لـ {assigned.length} {open ? '▲' : '▼'}
@@ -266,6 +322,15 @@ export default function DietSystemList() {
                     );
                   })}
                 </div>
+                {(d.fixed_meals ?? []).length > 0 && (
+                  <div className="px-4 pb-3 flex flex-wrap gap-1.5">
+                    {draftsFromRows(d.fixed_meals ?? []).map(fd => (
+                      <span key={`${fd.meal_id}_${fd.meal_type}`} className="text-xs bg-teal-50/60 border border-teal-200 text-slate-700 rounded-lg px-2 py-1">
+                        {describeFixedDraft(fd, id => mealById.get(id)?.name ?? 'صنف محذوف')}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {open && (
                   <div className="px-4 py-3 border-t border-slate-100 bg-slate-50/50">
                     {assigned.length === 0 ? (
@@ -294,7 +359,7 @@ export default function DietSystemList() {
         message={(() => {
           const n = confirmDelete?.beneficiary_diets?.length ?? 0;
           return n > 0
-            ? `هذا النظام مسند لـ ${n} شخص، وستُزال استبعاداته من منيوهم فوراً (محظوراتهم الشخصية لا تتأثر). لا يمكن التراجع عن الحذف.`
+            ? `هذا النظام مسند لـ ${n} شخص، وستُزال استبعاداته وأصنافه الثابتة من منيوهم فوراً (محظوراتهم الشخصية لا تتأثر). لا يمكن التراجع عن الحذف.`
             : 'سيُحذف النظام وأصنافه المستبعدة. لا يمكن التراجع عن الحذف.';
         })()}
         confirmLabel="نعم، احذف"
@@ -321,19 +386,31 @@ export default function DietSystemList() {
         <DietModal
           diet={editing === 'new' ? null : editing}
           meals={meals}
+          fixedReady={fixedReady}
           existingNames={diets.filter(d => editing === 'new' || d.id !== editing.id).map(d => d.name)}
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); void load(); }}
+          approvalUser={
+            currentUser && (editing === 'new' ? addNeedsApproval : editNeedsApproval) ? currentUser : null
+          }
+          onSaved={() => { setEditing(null); myPending.refresh(); void load(); }}
         />
       )}
     </div>
   );
 }
 
-function DietModal({ diet, meals, existingNames, onClose, onSaved }: {
+/** رسالة فشل إرسال الطلب — قيد القاعدة يعني أن ترقية الأنظمة في الموافقات ما اتشغّلت */
+function approvalError(r: Extract<EnqueueResult, { ok: false }>) {
+  return isEntityTypeConstraintError(r.error) ? DIET_APPROVAL_MIGRATION_HINT : r.error;
+}
+
+function DietModal({ diet, meals, fixedReady, existingNames, approvalUser, onClose, onSaved }: {
   diet: DietSystem | null;
   meals: Meal[];
+  fixedReady: boolean;
   existingNames: string[];
+  /** موجود = الحفظ يحتاج موافقة → يُرسل طلباً بدل الكتابة المباشرة */
+  approvalUser: AppUser | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -342,6 +419,8 @@ function DietModal({ diet, meals, existingNames, onClose, onSaved }: {
   const [items, setItems] = useState<ExclusionEntry[]>(
     (diet?.exclusions ?? []).map(x => ({ meal_id: x.meal_id, alternative_meal_id: x.alternative_meal_id ?? '' })),
   );
+  const [fixedDrafts, setFixedDrafts] = useState<DietFixedDraft[]>(() => draftsFromRows(diet?.fixed_meals ?? []));
+  const [tab, setTab] = useState<'exclusions' | 'fixed'>('exclusions');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const assignedCount = diet?.beneficiary_diets?.length ?? 0;
@@ -357,6 +436,30 @@ function DietModal({ diet, meals, existingNames, onClose, onSaved }: {
       setError('يوجد نظام بنفس الاسم'); return;
     }
     setSaving(true); setError('');
+
+    if (approvalUser) {
+      const payload: DietPayload = {
+        diet: { name: trimmed, description: description.trim() || null },
+        exclusions: items.map(x => ({ meal_id: x.meal_id, alternative_meal_id: x.alternative_meal_id || null })),
+        ...(fixedReady ? {
+          fixed_meals: rowsFromDrafts(fixedDrafts).map(r => ({
+            day_of_week: r.day_of_week, meal_type: r.meal_type, meal_id: r.meal_id,
+            quantity: r.quantity, is_alternative: r.is_alternative === true,
+          })),
+        } : {}),
+      };
+      const raw = payload as unknown as Record<string, unknown>;
+      const r = diet
+        ? await enqueueGenericUpdate(supabase, approvalUser, 'diet', diet.id, trimmed, raw)
+        : await enqueueGenericCreate(supabase, approvalUser, 'diet', trimmed, raw);
+      if (!r.ok) { setError(approvalError(r)); setSaving(false); return; }
+      alert(diet
+        ? `✓ تم إرسال طلب تعديل النظام «${trimmed}» للأدمن. ينطبق بعد الموافقة.`
+        : `✓ تم إرسال طلب إنشاء النظام «${trimmed}» للأدمن. يُنشأ بعد الموافقة.`);
+      onSaved();
+      return;
+    }
+
     try {
       let dietId = diet?.id;
       if (diet) {
@@ -389,6 +492,31 @@ function DietModal({ diet, meals, existingNames, onClose, onSaved }: {
         if (e) throw e;
       }
 
+      // الأصناف الثابتة بالفرق — المزامنة للمستفيدين تجري في القاعدة
+      // (diet-fixed-meals-migration.sql) فتنعكس على كل من عنده النظام فوراً.
+      if (fixedReady) {
+        const beforeRows = new Map((diet?.fixed_meals ?? []).map(r => [fixedRowKey(r), r]));
+        const nowRows = rowsFromDrafts(fixedDrafts);
+        const nowKeys = new Set(nowRows.map(fixedRowKey));
+        const removedIds = [...beforeRows.values()].filter(r => !nowKeys.has(fixedRowKey(r))).map(r => r.id).filter(Boolean) as string[];
+        const changed = nowRows.filter(r => {
+          const b = beforeRows.get(fixedRowKey(r));
+          return !b || b.quantity !== r.quantity || (b.is_alternative === true) !== r.is_alternative;
+        });
+        if (removedIds.length > 0) {
+          const { error: e } = await supabase.from('diet_system_fixed_meals').delete().in('id', removedIds);
+          if (e) throw e;
+        }
+        if (changed.length > 0) {
+          const { error: e } = await supabase.from('diet_system_fixed_meals').upsert(
+            changed.map(r => ({ ...r, diet_id: dietId })),
+            { onConflict: 'diet_id,day_of_week,meal_type,meal_id' },
+          );
+          if (e) throw e;
+        }
+      }
+
+      const fixedName = (id: string) => mealName(id);
       void logActivity({
         action: diet ? 'update' : 'create',
         entity_type: 'diet_system',
@@ -397,6 +525,11 @@ function DietModal({ diet, meals, existingNames, onClose, onSaved }: {
         details: {
           ...(diet && diet.name !== trimmed ? { name: { from: diet.name, to: trimmed } } : {}),
           ...listDiffDetails('diet_exclusions', (diet?.exclusions ?? []).map(describe), items.map(describe)),
+          ...(fixedReady ? listDiffDetails(
+            'diet_fixed_meals',
+            draftsFromRows(diet?.fixed_meals ?? []).map(d => describeFixedDraft(d, fixedName)),
+            fixedDrafts.filter(d => d.days.length > 0).map(d => describeFixedDraft(d, fixedName)),
+          ) : {}),
           ...(assignedCount > 0 ? { beneficiaries_count: assignedCount } : {}),
         },
       });
@@ -436,18 +569,48 @@ function DietModal({ diet, meals, existingNames, onClose, onSaved }: {
             </div>
           )}
 
-          <div>
-            <h3 className="label mb-2">الأصناف المستبعدة وبدائلها</h3>
-            <div className="space-y-3">
-              <ExclusionSectionsEditor
-                meals={meals}
-                items={items}
-                onAdd={m => setItems(prev => prev.some(x => x.meal_id === m.id) ? prev : [...prev, { meal_id: m.id, alternative_meal_id: '' }])}
-                onRemove={id => setItems(prev => prev.filter(x => x.meal_id !== id))}
-                onSetAlt={(id, alt) => setItems(prev => prev.map(x => x.meal_id === id ? { ...x, alternative_meal_id: alt } : x))}
-              />
-            </div>
+          <div className="flex gap-1 border-b border-slate-200">
+            {([
+              ['exclusions', `الأصناف المستبعدة (${items.length})`],
+              ['fixed', `الأصناف الثابتة (${fixedDrafts.length})`],
+            ] as const).map(([key, label]) => (
+              <button key={key} type="button" onClick={() => setTab(key)}
+                className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors ${tab === key
+                  ? 'border-emerald-500 text-emerald-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                {label}
+              </button>
+            ))}
           </div>
+
+          {tab === 'exclusions' && (
+            <div>
+              <h3 className="label mb-2">الأصناف المستبعدة وبدائلها</h3>
+              <div className="space-y-3">
+                <ExclusionSectionsEditor
+                  meals={meals}
+                  items={items}
+                  onAdd={m => setItems(prev => prev.some(x => x.meal_id === m.id) ? prev : [...prev, { meal_id: m.id, alternative_meal_id: '' }])}
+                  onRemove={id => setItems(prev => prev.filter(x => x.meal_id !== id))}
+                  onSetAlt={(id, alt) => setItems(prev => prev.map(x => x.meal_id === id ? { ...x, alternative_meal_id: alt } : x))}
+                />
+              </div>
+            </div>
+          )}
+
+          {tab === 'fixed' && (
+            fixedReady ? (
+              <div>
+                <p className="text-xs text-slate-500 mb-3">
+                  أصناف تُضاف تلقائياً لكل من عنده هذا النظام في الأيام المختارة — تظهر في تبويب «الثابتة الأسبوعية» عنده وفي أمر التشغيل.
+                  لو عند الشخص نفس الصنف بنفس اليوم والوجبة كصنف شخصي يبقى صفاً واحداً.
+                </p>
+                <DietFixedMealsEditor meals={meals} drafts={fixedDrafts} onChange={setFixedDrafts} />
+              </div>
+            ) : (
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 px-5 py-4 rounded-xl text-sm">{FIXED_MIGRATION_HINT}</div>
+            )
+          )}
         </div>
 
         <div className="shrink-0 px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-3">
@@ -455,7 +618,7 @@ function DietModal({ diet, meals, existingNames, onClose, onSaved }: {
           <div className="flex gap-2">
             <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">إلغاء</button>
             <button onClick={save} disabled={saving} className="btn-primary disabled:opacity-50">
-              {saving ? 'جاري الحفظ…' : 'حفظ'}
+              {saving ? 'جاري الحفظ…' : approvalUser ? 'إرسال للموافقة' : 'حفظ'}
             </button>
           </div>
         </div>

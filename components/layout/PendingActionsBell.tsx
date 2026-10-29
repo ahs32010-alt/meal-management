@@ -6,9 +6,10 @@
 import { useState, useEffect, useCallback, useRef, useId } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { ENTITY_TYPE_LABELS } from '@/lib/types';
+import Link from 'next/link';
 import {
   type PendingAction,
+  PENDING_ENTITY_LABELS,
   approveAction,
   rejectAction,
 } from '@/lib/pending-actions';
@@ -138,32 +139,44 @@ export default function PendingActionsBell() {
           ) : (
             <div className="divide-y divide-slate-100">
               {items.map(pa => {
-                const isCreate = pa.action === 'create';
+                const actionTheme = pa.action === 'create'
+                  ? { label: '+ إضافة', cls: 'bg-emerald-100 text-emerald-700' }
+                  : pa.action === 'update'
+                    ? { label: '✎ تعديل', cls: 'bg-blue-100 text-blue-700' }
+                    : { label: '✕ حذف', cls: 'bg-red-100 text-red-700' };
                 return (
                   <div key={pa.id} className="px-4 py-3 hover:bg-slate-50">
                     <div className="flex items-start gap-2 mb-2">
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded-md shrink-0 ${
-                        isCreate ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
-                      }`}>
-                        {isCreate ? '+ إضافة' : '✕ حذف'}
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-md shrink-0 ${actionTheme.cls}`}>
+                        {actionTheme.label}
                       </span>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-slate-800 truncate">
                           {pa.entity_name ?? '—'}
                         </p>
                         <p className="text-[11px] text-slate-500 mt-0.5">
-                          {(ENTITY_TYPE_LABELS as Record<string, string>)[pa.entity_type] ?? pa.entity_type} · {pa.user_name ?? 'مستخدم'} · {timeAgo(pa.created_at)}
+                          {PENDING_ENTITY_LABELS[pa.entity_type] ?? pa.entity_type} · {pa.user_name ?? 'مستخدم'} · {timeAgo(pa.created_at)}
                         </p>
                       </div>
                     </div>
                     <div className="flex gap-2">
+                      {/* المراجعة تغييراً تغييراً في صفحة الموافقات — الجرس للقرار السريع فقط */}
+                      {pa.action !== 'delete' && (
+                        <Link
+                          href="/approvals"
+                          onClick={() => setOpen(false)}
+                          className="flex-1 py-1.5 text-xs font-bold text-center bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50"
+                        >
+                          مراجعة
+                        </Link>
+                      )}
                       <button
                         type="button"
                         onClick={() => handleApprove(pa)}
                         disabled={busyId === pa.id}
                         className="flex-1 py-1.5 text-xs font-bold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
                       >
-                        {busyId === pa.id ? '...' : 'قبول'}
+                        {busyId === pa.id ? '...' : 'قبول الكل'}
                       </button>
                       <button
                         type="button"

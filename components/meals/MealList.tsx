@@ -41,6 +41,8 @@ interface MealSectionProps {
   onBulkAdd: (type: MealType, isSnack: boolean) => void;
   onEdit: (meal: Meal) => void;
   onDuplicate: (meal: Meal) => void;
+  /** النسخ يكتب الصنف وتخصيصاته مباشرة — يُخفى عن المقيَّد بموافقة الإضافة */
+  canDuplicate: boolean;
   onDelete: (id: string) => void;
   onDeleteAll: (type: MealType, isSnack: boolean) => void;
   onSetCategory: (meal: Meal, category: ItemCategory) => void;
@@ -55,7 +57,7 @@ interface MealSectionProps {
   deletingAll: boolean;
 }
 
-function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll, isAdmin, canAdd, canEdit, canDelete, pendingMap }: MealSectionProps) {
+function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd, onEdit, onDuplicate, onDelete, onDeleteAll, onSetCategory, categoryUpdating, deleting, duplicating, deletingAll, isAdmin, canAdd, canDuplicate, canEdit, canDelete, pendingMap }: MealSectionProps) {
   return (
     <div className={`rounded-xl border ${colors.border} overflow-hidden`}>
       <div className={`flex items-center justify-between px-4 py-3 ${colors.bg}`}>
@@ -165,7 +167,7 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
                     </svg>
                   </button>
                 )}
-                {!isPendingCreate && canAdd && (
+                {!isPendingCreate && canDuplicate && (
                   <button
                     onClick={() => onDuplicate(meal)}
                     disabled={duplicating === meal.id}
@@ -316,6 +318,7 @@ export default function MealList() {
   const canAdd    = can(currentUser, 'meals', 'add');
   const canEdit   = can(currentUser, 'meals', 'edit');
   const canDelete = can(currentUser, 'meals', 'delete');
+  const addNeedsApproval    = needsApproval(currentUser, 'meals', 'add');
   const editNeedsApproval   = needsApproval(currentUser, 'meals', 'edit');
   const deleteNeedsApproval = needsApproval(currentUser, 'meals', 'delete');
   const myPending = useMyPending('meal');
@@ -922,6 +925,7 @@ export default function MealList() {
                 deletingAll={deletingAll}
                 isAdmin={isAdmin}
                 canAdd={canAdd}
+                canDuplicate={canAdd && !addNeedsApproval}
                 canEdit={canEdit}
                 canDelete={canDelete}
                 pendingMap={myPending}
@@ -945,6 +949,7 @@ export default function MealList() {
                 deletingAll={deletingAll}
                 isAdmin={isAdmin}
                 canAdd={canAdd}
+                canDuplicate={canAdd && !addNeedsApproval}
                 canEdit={canEdit}
                 canDelete={canDelete}
                 pendingMap={myPending}

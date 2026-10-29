@@ -25,7 +25,7 @@ export type BackupTriggerType = 'auto_daily' | 'manual' | 'pre_restore';
  * يفشل لو أُنشئ جدول جديد في supabase/*.sql ولم يدخل هنا أو في الاستثناءات.
  *
  * ⚠️ قائمة السيرفر backup_logical_tables() (للنسخ التلقائية والاستعادة الذرّية)
- * لازم تطابقها حرفياً — آخر تعريف في supabase/backup-menu-overrides-coverage-migration.sql.
+ * لازم تطابقها حرفياً — آخر تعريف في supabase/diet-fixed-meals-migration.sql.
  */
 export const BACKUP_TABLES = [
   // ── جداول مستقلة (لا تعتمد على غيرها) ──
@@ -44,6 +44,7 @@ export const BACKUP_TABLES = [
   // ── تابعة لـ meals / beneficiaries ──
   'meal_alternatives',
   'diet_system_exclusions', // ← diet_systems + meals
+  'diet_system_fixed_meals', // ← diet_systems + meals
   'beneficiary_diets',      // ← beneficiaries + diet_systems
   'exclusions',             // ← … + diet_systems (diet_id)
   'beneficiary_fixed_meals',
@@ -85,6 +86,7 @@ export const BACKUP_TABLE_LABELS: Record<BackupTableName, string> = {
   diet_systems: 'الأنظمة الغذائية',
   meal_alternatives: 'بدائل الأصناف',
   diet_system_exclusions: 'استبعادات الأنظمة الغذائية',
+  diet_system_fixed_meals: 'الأصناف الثابتة للأنظمة الغذائية',
   beneficiary_diets: 'أنظمة المستفيدين',
   exclusions: 'المحظورات',
   beneficiary_fixed_meals: 'الأصناف الثابتة',
@@ -191,6 +193,7 @@ const TABLE_KEY: Record<BackupTableName, string> = {
   sticker_settings: 'id',
   diet_systems: 'id',
   diet_system_exclusions: 'id',
+  diet_system_fixed_meals: 'id',
   beneficiary_diets: 'id',
   meal_alternatives: 'id',
   exclusions: 'id',
@@ -516,7 +519,7 @@ export async function restoreFromSnapshot(
       if (uncovered.length > 0) {
         warnings.push(
           `دالة الاستعادة على السيرفر لا تشمل: ${uncovered.join(', ')} — استُعيدت من المتصفح. ` +
-          'شغّل supabase/backup-menu-overrides-coverage-migration.sql.'
+          'شغّل supabase/diet-fixed-meals-migration.sql.'
         );
         await clientRestoreTables(supabase, snapshot, uncovered, inserted, warnings);
       }

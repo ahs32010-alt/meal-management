@@ -289,6 +289,8 @@ export const DETAIL_LABELS: Record<string, string> = {
   diets: 'الأنظمة الغذائية',
   added_diet_exclusions: 'استبعادات مُضافة للنظام',
   removed_diet_exclusions: 'استبعادات مُزالة من النظام',
+  added_diet_fixed_meals: 'أصناف ثابتة مُضافة للنظام',
+  removed_diet_fixed_meals: 'أصناف ثابتة مُزالة من النظام',
   items: 'البنود',
   granted_permissions: 'صلاحيات مُنِحت',
   revoked_permissions: 'صلاحيات سُحِبت',

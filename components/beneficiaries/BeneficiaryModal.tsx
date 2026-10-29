@@ -61,6 +61,9 @@ function buildFixedEntries(fixedMeals: Beneficiary['fixed_meals'], allMeals?: Me
   const mealById = new Map((allMeals ?? []).map(m => [m.id, m]));
   const map: Record<string, FixedEntry> = {};
   for (const fm of fixedMeals ?? []) {
+    // صفوف الأنظمة الغذائية (diet_id) تُدار من صفحة النظام وتُكتب بالمزامنة في
+    // القاعدة — لو دخلت هنا لحوّلها الحفظ لأصناف شخصية تبقى بعد إزالة النظام.
+    if (fm.diet_id) continue;
     const key = `${fm.meal_id}_${fm.meal_type}`;
     if (!map[key]) {
       // الأولوية: meals.category (المصدر الموحد) → الـcategory المخزّن على fixed_meal
@@ -366,7 +369,9 @@ function DietSystemsPicker({ diets, selected, onToggle }: {
               {on && <svg className="w-3 h-3 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
             </span>
             {d.name}
-            <span className={`text-xs font-normal ${on ? 'text-green-100' : 'text-slate-400'}`}>({d.exclusions?.length ?? 0} مستبعد)</span>
+            <span className={`text-xs font-normal ${on ? 'text-green-100' : 'text-slate-400'}`}>
+              ({d.exclusions?.length ?? 0} مستبعد{d.fixed_meals?.length ? ` · ${new Set(d.fixed_meals.map(f => `${f.meal_id}_${f.meal_type}`)).size} ثابت` : ''})
+            </span>
           </button>
         );
       })}
@@ -448,10 +453,14 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data, error } = await supabase
+      const read = (withFixed: boolean) => supabase
         .from('diet_systems')
-        .select('id, name, description, created_at, exclusions:diet_system_exclusions(meal_id, alternative_meal_id)')
+        .select(`id, name, description, created_at, exclusions:diet_system_exclusions(meal_id, alternative_meal_id)${withFixed
+          ? ', fixed_meals:diet_system_fixed_meals(day_of_week, meal_type, meal_id, quantity, is_alternative)' : ''}`)
         .order('name');
+      let { data, error } = await read(true);
+      // جدول الأصناف الثابتة للأنظمة غير موجود (diet-fixed-meals-migration) → بدونها
+      if (error && /diet_system_fixed_meals/i.test(error.message)) ({ data, error } = await read(false));
       if (!cancelled) setDietList(error ? null : ((data ?? []) as unknown as DietSystem[]));
     })();
     return () => { cancelled = true; };
@@ -476,6 +485,32 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           if (!cur.alternative_meal_id && dx.alternative_meal_id) cur.alternative_meal_id = dx.alternative_meal_id;
         } else {
           out.set(dx.meal_id, { meal_id: dx.meal_id, alternative_meal_id: dx.alternative_meal_id ?? '', dietNames: [d!.name] });
+        }
+      }
+    }
+    return [...out.values()];
+  })();
+
+  /**
+   * الأصناف الثابتة للأنظمة المختارة كما ستنطبق — للعرض فقط في تبويب الثابتة.
+   * نفس قاعدة المزامنة: صنف بنفس (اليوم، الوجبة) في أكثر من نظام يُحسب مرة.
+   */
+  const dietFixed = (() => {
+    const out = new Map<string, { meal_id: string; meal_type: MealType; days: Set<number>; quantity: number; is_alternative: boolean; dietNames: string[] }>();
+    const seen = new Set<string>();
+    for (const id of selectedDietIds) {
+      const d = dietList?.find(x => x.id === id);
+      for (const f of d?.fixed_meals ?? []) {
+        const dayKey = `${f.day_of_week}|${f.meal_type}|${f.meal_id}`;
+        if (seen.has(dayKey)) continue;
+        seen.add(dayKey);
+        const key = `${f.meal_id}_${f.meal_type}`;
+        const cur = out.get(key);
+        if (cur) {
+          cur.days.add(f.day_of_week);
+          if (!cur.dietNames.includes(d!.name)) cur.dietNames.push(d!.name);
+        } else {
+          out.set(key, { meal_id: f.meal_id, meal_type: f.meal_type, days: new Set([f.day_of_week]), quantity: f.quantity ?? 1, is_alternative: f.is_alternative === true, dietNames: [d!.name] });
         }
       }
     }
@@ -1215,6 +1250,34 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
           {/* ── Tab: Fixed Weekly ── */}
           {activeTab === 'fixed' && (
             <div className="p-6 space-y-4">
+              {dietFixed.length > 0 && (
+                <div className="border border-teal-200 bg-teal-50/50 rounded-xl px-4 py-3">
+                  <p className="font-semibold text-sm text-slate-700 mb-2">
+                    أصناف ثابتة من النظام الغذائي ({dietFixed.length})
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {dietFixed.map(f => {
+                      const m = mealById(f.meal_id);
+                      if (!m) return null;
+                      const days = f.days.size === 7 ? 'كل الأيام' : DAYS_ORDER.filter(d => f.days.has(d)).map(d => DAY_LABELS[d]).join('، ');
+                      return (
+                        <span key={`${f.meal_id}_${f.meal_type}`} title={f.dietNames.join('، ')}
+                          className="text-xs bg-white border border-teal-200 text-slate-700 px-2.5 py-1 rounded-lg">
+                          <span className="font-semibold">{m.name}</span>
+                          <span className="text-slate-400"> · {MEAL_TYPE_LABELS[f.meal_type]} · {days}</span>
+                          {f.quantity > 1 && <span className="text-slate-500"> ×{f.quantity}</span>}
+                          {f.is_alternative && <span className="text-emerald-600"> · بديل</span>}
+                          <span className="text-teal-600"> · {f.dietNames.join('، ')}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-2">
+                    تُضاف تلقائياً من النظام الغذائي — تُعدَّل من صفحة «النظام الغذائي» ← الأصناف الثابتة، وتختفي لو أُزيل النظام عن الشخص.
+                  </p>
+                </div>
+              )}
+
               {/* إضافات أيام محددة — قادمة من تبويب المنيو المخصّص */}
               <SlotDecisionsPanel
                 groups={slotAddGroups}

@@ -13,7 +13,39 @@ import { updateDetails, valueDetails, listDiffDetails } from './activity-diff';
 
 // نوع الكيان في طلبات الموافقة — أوسع من EntityType الأصلي عشان نغطي
 // المستفيدين والمرافقين والأصناف وبنود قائمة الطعام
-export type PendingEntityType = EntityType | 'meal' | 'menu_item';
+export type PendingEntityType = EntityType | 'meal' | 'menu_item' | 'diet';
+
+/** تسميات أنواع الكيانات في شاشات الموافقة (الجرس + الصفحة) */
+export const PENDING_ENTITY_LABELS: Record<PendingEntityType, string> = {
+  beneficiary: 'مستفيد',
+  companion: 'مرافق',
+  meal: 'صنف',
+  menu_item: 'بند منيو',
+  diet: 'نظام غذائي',
+};
+
+/**
+ * طلب على «نظام غذائي» — الحالة المطلوبة كاملة (مثل CreatePayload للمستفيد):
+ * بيانات النظام + قائمة استبعاداته كما يبيها المستخدم بعد الحفظ.
+ */
+export interface DietPayload {
+  diet: { name?: string; description?: string | null };
+  exclusions: Array<{ meal_id: string; alternative_meal_id: string | null }>;
+  /**
+   * أصناف النظام الثابتة (صف لكل يوم). غيابها = الطلب ما يمسّها (ترقية
+   * diet-fixed-meals ما اتشغّلت وقت الإرسال).
+   */
+  fixed_meals?: Array<{ day_of_week: number; meal_type: string; meal_id: string; quantity: number; is_alternative: boolean }>;
+}
+
+/** الصفحة ما تقدر ترسل طلب نظام غذائي لأن ترقية القاعدة ما اتشغّلت */
+export const DIET_APPROVAL_MIGRATION_HINT =
+  'طلبات الموافقة على الأنظمة الغذائية تحتاج تشغيل الملف supabase/pending-actions-diet-migration.sql في Supabase SQL Editor.';
+
+/** خطأ قيد entity_type — يعني أن نوع الكيان الجديد ما أُضيف للقيد بعد */
+export function isEntityTypeConstraintError(msg: string): boolean {
+  return /pending_actions_entity_type_check|violates check constraint/i.test(msg);
+}
 
 export interface PendingAction {
   id: string;
@@ -296,6 +328,7 @@ function tableFor(entityType: PendingEntityType): string {
     case 'companion': return 'beneficiaries';
     case 'meal':      return 'meals';
     case 'menu_item': return 'menu_items';
+    case 'diet':      return 'diet_systems';
   }
 }
 
@@ -339,6 +372,7 @@ function fixedLabels(rows: FixedRow[], name: (id?: string | null) => string) {
 
 /** نوع الكيان في سجل النشاط — بنود المنيو تُسجَّل تحت «صنف» كما في شاشة المنيو */
 function activityEntityOf(t: PendingEntityType): ActivityEntityType {
+  if (t === 'diet') return 'diet_system' as ActivityEntityType;
   return (t === 'menu_item' ? 'meal' : t) as ActivityEntityType;
 }
 
@@ -348,6 +382,8 @@ export async function approveAction(
   pa: PendingAction,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
+    if (pa.entity_type === 'diet') return await approveDietAction(supabase, admin, pa);
+
     // مسار الأصناف وبنود المنيو — payload عادي على الجدول مباشرة
     if (pa.entity_type === 'meal' || pa.entity_type === 'menu_item') {
       const table = tableFor(pa.entity_type);
@@ -364,8 +400,10 @@ export async function approveAction(
         logDetails = valueDetails(pa.payload);
       } else if (pa.action === 'update') {
         if (!pa.entity_id || !pa.payload) return { ok: false, error: 'payload أو entity_id مفقود' };
-        const { error } = await supabase.from(table).update(pa.payload).eq('id', pa.entity_id);
-        if (error) return { ok: false, error: error.message };
+        if (Object.keys(pa.payload).length > 0) {
+          const { error } = await supabase.from(table).update(pa.payload).eq('id', pa.entity_id);
+          if (error) return { ok: false, error: error.message };
+        }
         // المقارنة محصورة بمفاتيح الـpayload: الطلب ما يمسّ غيرها
         logDetails = updateDetails(beforeRow, pa.payload, Object.keys(pa.payload));
       } else if (pa.action === 'delete') {
@@ -467,9 +505,11 @@ export async function approveAction(
         .select('meal_id, meal_type, day_of_week, quantity, is_alternative')
         .eq('beneficiary_id', id);
 
-      // تحديث البيانات الأساسية للمستفيد
-      const { error: updErr } = await supabase.from('beneficiaries').update(cp.beneficiary).eq('id', id);
-      if (updErr) return { ok: false, error: updErr.message };
+      // تحديث البيانات الأساسية للمستفيد — الموافقة الجزئية قد لا تحمل أي حقل
+      if (Object.keys(cp.beneficiary).length > 0) {
+        const { error: updErr } = await supabase.from('beneficiaries').update(cp.beneficiary).eq('id', id);
+        if (updErr) return { ok: false, error: updErr.message };
+      }
 
       // استبدال المحظورات (نحذف ثم نضيف لتطابق الـbehavior في BeneficiaryModal)
       const { error: delExErr } = await supabase.from('exclusions').delete().eq('beneficiary_id', id);
@@ -561,4 +601,116 @@ export async function rejectAction(
     reviewed_at: new Date().toISOString(),
     reject_reason: reason ?? null,
   }).eq('id', pa.id);
+}
+
+async function markApproved(supabase: SupabaseClient, admin: AppUser, pa: PendingAction) {
+  const { error } = await supabase
+    .from('pending_actions')
+    .update({ status: 'approved', reviewed_by: admin.id, reviewed_at: new Date().toISOString() })
+    .eq('id', pa.id);
+  return error ? { ok: false as const, error: error.message } : { ok: true as const };
+}
+
+/**
+ * تنفيذ طلب «نظام غذائي». الاستبعادات تُطبَّق بالفرق مع الموجود حالياً (نفس
+ * DietModal) — فتبقى صفوف القاعدة ثابتة والمزامنة مع منيو المستفيدين تجري
+ * في القاعدة على التغيير فقط.
+ */
+async function approveDietAction(
+  supabase: SupabaseClient,
+  admin: AppUser,
+  pa: PendingAction,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const p = pa.payload as unknown as DietPayload | null;
+  let dietId = pa.entity_id;
+  let details: Record<string, unknown> = {};
+
+  if (pa.action === 'delete') {
+    if (!dietId) return { ok: false, error: 'entity_id مفقود' };
+    const { error } = await supabase.from('diet_systems').delete().eq('id', dietId);
+    if (error) return { ok: false, error: error.message };
+  } else {
+    if (!p?.diet) return { ok: false, error: 'payload مفقود' };
+    let before: Array<{ meal_id: string; alternative_meal_id: string | null }> = [];
+    if (pa.action === 'create') {
+      const { data, error } = await supabase.from('diet_systems')
+        .insert({ name: p.diet.name, description: p.diet.description ?? null }).select('id').single();
+      if (error) return { ok: false, error: /duplicate|unique/i.test(error.message) ? 'يوجد نظام بنفس الاسم' : error.message };
+      dietId = (data as { id: string }).id;
+    } else {
+      if (!dietId) return { ok: false, error: 'entity_id مفقود' };
+      const { data: cur, error: curErr } = await supabase.from('diet_system_exclusions')
+        .select('meal_id, alternative_meal_id').eq('diet_id', dietId);
+      if (curErr) return { ok: false, error: curErr.message };
+      before = (cur ?? []) as typeof before;
+      if (Object.keys(p.diet).length > 0) {
+        const { error } = await supabase.from('diet_systems').update(p.diet).eq('id', dietId);
+        if (error) return { ok: false, error: /duplicate|unique/i.test(error.message) ? 'يوجد نظام بنفس الاسم' : error.message };
+      }
+    }
+
+    const beforeMap = new Map(before.map(x => [x.meal_id, x.alternative_meal_id ?? null]));
+    const nowMap = new Map((p.exclusions ?? []).map(x => [x.meal_id, x.alternative_meal_id ?? null]));
+    const removed = [...beforeMap.keys()].filter(id => !nowMap.has(id));
+    const upserts = [...nowMap].filter(([id, alt]) => !beforeMap.has(id) || beforeMap.get(id) !== alt);
+    if (removed.length > 0) {
+      const { error } = await supabase.from('diet_system_exclusions').delete()
+        .eq('diet_id', dietId).in('meal_id', removed);
+      if (error) return { ok: false, error: `تعديل النظام تمّ لكن حذف الاستبعادات فشل: ${error.message}` };
+    }
+    if (upserts.length > 0) {
+      const { error } = await supabase.from('diet_system_exclusions').upsert(
+        upserts.map(([meal_id, alternative_meal_id]) => ({ diet_id: dietId, meal_id, alternative_meal_id })),
+        { onConflict: 'diet_id,meal_id' },
+      );
+      if (error) return { ok: false, error: `تعديل النظام تمّ لكن حفظ الاستبعادات فشل: ${error.message}` };
+    }
+
+    // الأصناف الثابتة بالفرق (نفس DietModal) — المزامنة للمستفيدين في القاعدة
+    if (p.fixed_meals) {
+      const key = (r: { day_of_week: number; meal_type: string; meal_id: string }) => `${r.day_of_week}|${r.meal_type}|${r.meal_id}`;
+      type FxRow = { id: string; day_of_week: number; meal_type: string; meal_id: string; quantity: number; is_alternative: boolean | null };
+      let curFx: FxRow[] = [];
+      if (pa.action === 'update') {
+        const { data, error } = await supabase.from('diet_system_fixed_meals')
+          .select('id, day_of_week, meal_type, meal_id, quantity, is_alternative').eq('diet_id', dietId);
+        if (error) return { ok: false, error: `قراءة أصناف النظام الثابتة فشلت: ${error.message}` };
+        curFx = (data ?? []) as FxRow[];
+      }
+      const curMap = new Map(curFx.map(r => [key(r), r]));
+      const nowKeys = new Set(p.fixed_meals.map(key));
+      const removedIds = curFx.filter(r => !nowKeys.has(key(r))).map(r => r.id);
+      const changed = p.fixed_meals.filter(r => {
+        const b = curMap.get(key(r));
+        return !b || b.quantity !== r.quantity || (b.is_alternative === true) !== r.is_alternative;
+      });
+      if (removedIds.length > 0) {
+        const { error } = await supabase.from('diet_system_fixed_meals').delete().in('id', removedIds);
+        if (error) return { ok: false, error: `حذف أصناف النظام الثابتة فشل: ${error.message}` };
+      }
+      if (changed.length > 0) {
+        const { error } = await supabase.from('diet_system_fixed_meals').upsert(
+          changed.map(r => ({ ...r, diet_id: dietId })),
+          { onConflict: 'diet_id,day_of_week,meal_type,meal_id' },
+        );
+        if (error) return { ok: false, error: `حفظ أصناف النظام الثابتة فشل: ${error.message}` };
+      }
+    }
+
+    const names = await mealNameMap(supabase, [...before, ...(p.exclusions ?? [])].flatMap(x => [x.meal_id, x.alternative_meal_id]));
+    const nm = (id?: string | null) => (id ? (names.get(id) ?? 'صنف محذوف') : '—');
+    details = {
+      ...(p.diet.name !== undefined ? { name: p.diet.name } : {}),
+      ...listDiffDetails('diet_exclusions', exclusionLabels(before, nm), exclusionLabels(p.exclusions ?? [], nm)),
+    };
+  }
+
+  void logActivity({
+    action: pa.action,
+    entity_type: activityEntityOf(pa.entity_type),
+    entity_id: dietId,
+    entity_name: pa.entity_name,
+    details: { ...details, requested_by: pa.user_name, source: 'approval' },
+  });
+  return markApproved(supabase, admin, pa);
 }
