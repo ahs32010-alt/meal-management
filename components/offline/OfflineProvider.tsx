@@ -12,7 +12,7 @@
 import { useEffect } from 'react';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { initNetworkStatus } from '@/lib/offline/status';
-import { registerServiceWorker, warmPages } from '@/lib/offline/register-sw';
+import { isDevHost, registerServiceWorker, warmPages } from '@/lib/offline/register-sw';
 import OfflineBanner from './OfflineBanner';
 
 const WARMED_KEY = 'kha:warmed';
@@ -28,6 +28,10 @@ export default function OfflineProvider() {
   useEffect(() => {
     if (loading || !user) return;
     if (typeof window === 'undefined' || navigator.onLine === false) return;
+    // على `next dev` كل صفحة تُبنى عند أول طلب — التجهيز كان يجبر الخادم يبني
+    // كل صفحات النظام (HTML + RSC لكل واحدة) بداية كل جلسة، فيزاحم الصفحة اللي
+    // فاتحها المستخدم ويبطئها ثوانٍ. والـSW أصلاً ما يُسجَّل هنا فما فيه مخزون يستفيد.
+    if (isDevHost()) return;
 
     // مرة واحدة لكل جلسة تبويب — التجهيز يسحب كل الصفحات، وتكراره عبث.
     try {
