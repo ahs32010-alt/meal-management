@@ -82,7 +82,8 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** خيارات الستيكر: «لا يفضل السمك» وأخواتها. */
 const STICKER_WORDS: Array<{ flag: StickerFlagKey; words: string[] }> = [
   { flag: 'no_fish', words: ['سمك', 'السمك'] },
-  { flag: 'no_pasta_sandwich', words: ['مكرونه', 'مكرونة', 'باستا', 'ساندويش', 'سندويش'] },
+  { flag: 'no_pasta', words: ['مكرونه', 'مكرونة', 'باستا'] },
+  { flag: 'no_sandwich', words: ['ساندويش', 'سندويش', 'ساندوتش', 'سندوتش'] },
   { flag: 'low_carb', words: ['كاربوهيدرات', 'كارب', 'نشويات', 'الكارب'] },
 ];
 const STICKER_MARK = ['يفضل', 'تفضل', 'يحب', 'قليل', 'خفف'];

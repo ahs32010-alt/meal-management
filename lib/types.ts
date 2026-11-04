@@ -72,7 +72,8 @@ export interface Beneficiary {
   notes?: string;
   // خيارات الستيكر — تظهر كرموز في ستيكرات الغداء والعشاء (انظر lib/sticker-flags.ts)
   no_fish?: boolean;
-  no_pasta_sandwich?: boolean;
+  no_pasta?: boolean;
+  no_sandwich?: boolean;
   low_carb?: boolean;
   /**
    * «وجبات غداء وعشاء مخصصة» — علامة للفرز والتمييز في صفحة ستيكرات الغداء

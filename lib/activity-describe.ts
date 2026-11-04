@@ -118,6 +118,7 @@ const ENTITY_OBJECT_LABELS: Record<string, string> = {
   recipe_item: 'مكوّناً في وصفة',
   order_cost: 'تكلفة أمر تشغيل',
   diet_system: 'نظاماً غذائياً',
+  sticker_flag: 'أصناف خيار ستيكر',
 };
 
 export interface ActivityLike {
@@ -229,7 +230,8 @@ export const DETAIL_LABELS: Record<string, string> = {
   diet_type: 'نوع الحمية',
   notes: 'الملاحظات',
   no_fish: 'بدون سمك',
-  no_pasta_sandwich: 'بدون معكرونة/ساندويتش',
+  no_pasta: 'بدون مكرونة',
+  no_sandwich: 'بدون ساندويش',
   low_carb: 'قليل الكربوهيدرات',
   custom_ld_meals: 'وجبات غداء وعشاء مخصصة',
   is_active: 'نشط',
@@ -291,6 +293,8 @@ export const DETAIL_LABELS: Record<string, string> = {
   removed_diet_exclusions: 'استبعادات مُزالة من النظام',
   added_diet_fixed_meals: 'أصناف ثابتة مُضافة للنظام',
   removed_diet_fixed_meals: 'أصناف ثابتة مُزالة من النظام',
+  added_meals: 'أصناف مُضافة لقائمة الخيار',
+  removed_meals: 'أصناف مُزالة من قائمة الخيار',
   items: 'البنود',
   granted_permissions: 'صلاحيات مُنِحت',
   revoked_permissions: 'صلاحيات سُحِبت',

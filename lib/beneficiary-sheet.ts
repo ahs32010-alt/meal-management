@@ -43,6 +43,12 @@ export const COL_MENU_OVERRIDES = 'تعديلات المنيو لخانات مح
 /** عمود لكل خيار ستيكر، بنفس تسميته في واجهة تخصيص المستفيد */
 export const STICKER_FLAG_COLUMNS = STICKER_FLAGS.map(f => ({ key: f.key, col: f.label }));
 
+/**
+ * عمود الخيار القديم قبل فصله لخيارين (sticker-flags-split-migration) — الملفات
+ * المصدَّرة قبل الفصل تحمله، فيُقرأ للخيارين معاً ما لم يحمل الملف عموديهما.
+ */
+export const LEGACY_PASTA_SANDWICH_COL = 'لا يفضل المكرونة ولا الساندويش';
+
 const MEAL_COLS = [
   { label: 'الفطور', type: 'breakfast' as MealType },
   { label: 'الغداء', type: 'lunch'     as MealType },
@@ -166,7 +172,8 @@ export interface SheetBeneficiary {
   notes?: string | null;
   is_active?: boolean | null;
   no_fish?: boolean | null;
-  no_pasta_sandwich?: boolean | null;
+  no_pasta?: boolean | null;
+  no_sandwich?: boolean | null;
   low_carb?: boolean | null;
   custom_ld_meals?: boolean | null;
   /** أسماء الأنظمة الغذائية المسندة — غيابها = عمود فارغ */

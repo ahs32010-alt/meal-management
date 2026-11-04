@@ -27,7 +27,6 @@ interface Props {
 }
 
 type Tab = 'info' | 'exclusions' | 'fixed' | 'menu';
-
 interface ExclusionEntry {
   meal_id: string;
   alternative_meal_id: string;
@@ -138,7 +137,7 @@ const slotLabel = (ov: MenuOverrideEntry) =>
  */
 const LOGGED_BENEFICIARY_FIELDS = [
   'name', 'english_name', 'code', 'category', 'villa', 'diet_type', 'notes',
-  'no_fish', 'no_pasta_sandwich', 'low_carb', 'custom_ld_meals', 'is_active',
+  'no_fish', 'no_pasta', 'no_sandwich', 'low_carb', 'custom_ld_meals', 'is_active',
 ];
 
 const OVERRIDE_ACTION_LABELS: Record<MenuOverrideEntry['action'], string> = {
@@ -430,7 +429,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const [dietType, setDietType] = useState(beneficiary?.diet_type ?? '');
   const [notes, setNotes] = useState(beneficiary?.notes ?? '');
   const [noFish, setNoFish] = useState(beneficiary?.no_fish ?? false);
-  const [noPastaSandwich, setNoPastaSandwich] = useState(beneficiary?.no_pasta_sandwich ?? false);
+  const [noPasta, setNoPasta] = useState(beneficiary?.no_pasta ?? false);
+  const [noSandwich, setNoSandwich] = useState(beneficiary?.no_sandwich ?? false);
   const [lowCarb, setLowCarb] = useState(beneficiary?.low_carb ?? false);
   const [customLdMeals, setCustomLdMeals] = useState(beneficiary?.custom_ld_meals ?? false);
   const [isActive, setIsActive] = useState(beneficiary?.is_active ?? true);
@@ -730,7 +730,10 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
       code: code.trim(), category: category.trim(),
       villa: villa.trim() || null, diet_type: dietType.trim() || null,
       notes: notes.trim() || null,
-      no_fish: noFish, no_pasta_sandwich: noPastaSandwich, low_carb: lowCarb,
+      no_fish: noFish,
+      no_pasta: noPasta,
+      no_sandwich: noSandwich,
+      low_carb: lowCarb,
       custom_ld_meals: customLdMeals,
       is_active: isActive,
     };
@@ -976,7 +979,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
             diet_type: beneficiary.diet_type,
             notes: beneficiary.notes,
             no_fish: beneficiary.no_fish,
-            no_pasta_sandwich: beneficiary.no_pasta_sandwich,
+            no_pasta: beneficiary.no_pasta,
+            no_sandwich: beneficiary.no_sandwich,
             low_carb: beneficiary.low_carb,
             custom_ld_meals: beneficiary.custom_ld_meals,
             is_active: beneficiary.is_active,
@@ -1170,7 +1174,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                 <div className="space-y-2">
                   {([
                     { state: noFish,          set: setNoFish,          key: 'no_fish' },
-                    { state: noPastaSandwich, set: setNoPastaSandwich, key: 'no_pasta_sandwich' },
+                    { state: noPasta,         set: setNoPasta,         key: 'no_pasta' },
+                    { state: noSandwich,      set: setNoSandwich,      key: 'no_sandwich' },
                     { state: lowCarb,         set: setLowCarb,         key: 'low_carb' },
                   ] as const).map(({ state, set, key }) => {
                     const flag = STICKER_FLAGS.find(f => f.key === key)!;
@@ -1178,7 +1183,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                       <label key={key} className="flex items-center gap-2.5 cursor-pointer select-none">
                         <input type="checkbox" checked={state} onChange={e => set(e.target.checked)}
                           className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-                        <span className="text-lg leading-none w-5 text-center">{flag.symbol}</span>
+                        <span className="text-sm font-bold leading-none min-w-[2.25rem] text-center" dir="ltr">{flag.symbol}</span>
                         <span className="text-sm text-slate-700">{flag.label}</span>
                       </label>
                     );

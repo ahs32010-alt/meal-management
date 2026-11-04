@@ -341,7 +341,7 @@ function tableFor(entityType: PendingEntityType): string {
 /** حقول المستفيد التي تدخل مقارنة قبل/بعد — بلا الأعمدة التقنية */
 const APPROVAL_BENEFICIARY_FIELDS = [
   'name', 'english_name', 'code', 'category', 'villa', 'diet_type', 'notes',
-  'no_fish', 'no_pasta_sandwich', 'low_carb', 'custom_ld_meals', 'is_active',
+  'no_fish', 'no_pasta', 'no_sandwich', 'low_carb', 'custom_ld_meals', 'is_active',
 ];
 
 /** أسماء الأصناف لمجموعة معرّفات — استعلام واحد بدل معرّفات صمّاء في السجل */

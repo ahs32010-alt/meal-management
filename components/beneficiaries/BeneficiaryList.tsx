@@ -15,6 +15,7 @@ import {
   EXCLUSION_COLUMNS,
   FIXED_COLUMNS,
   STICKER_FLAG_COLUMNS,
+  LEGACY_PASTA_SANDWICH_COL,
   COL_CUSTOM_LD,
   buildBeneficiaryRow,
   normalizeSheetRow,
@@ -137,6 +138,11 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   // كل الأصناف بلا فلترة فئة — تُستخدم فقط في بناء/فحص ملف Excel
   const [allMealsForSheet, setAllMealsForSheet] = useState<{ id: string; name: string; type: MealType; is_snack: boolean }[]>([]);
   const [editingBeneficiary, setEditingBeneficiary] = useState<Beneficiary | null>(null);
+  // التفاصيل (محظورات/ثوابت/أنظمة) تُقرأ في مرحلة ثانية بعد رسم القائمة —
+  // راجع fetchData. النافذة والتصدير ينتظرانها لأنهما يكتبان/يصدّران منها.
+  const [detailsReady, setDetailsReady] = useState(false);
+  const detailsPromiseRef = useRef<Promise<Beneficiary[] | null> | null>(null);
+  const [openingId, setOpeningId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<'name' | 'code' | 'category' | 'villa' | 'diet_type' | 'fixed_count' | 'excluded_count' | 'notes'>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -191,11 +197,14 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       let withFixedDiet = true;
       // علامة «وجبات غداء وعشاء مخصصة» (custom-ld-meals-migration) — تُسقط وحدها لو غابت
       let withCustomLd = true;
-      const fetchBens = (withFixedCategory: boolean, withEntityType: boolean, withFlags: boolean) => {
-        const flagCols = (withFlags ? ', no_fish, no_pasta_sandwich, low_carb, is_active' : '') +
+      // details=false → أعمدة المستفيد وحدها (خفيفة، تُرسم فوراً).
+      // details=true  → مع المحظورات والثوابت والأنظمة — بلا id/beneficiary_id
+      // للصفوف المتداخلة: ما يستخدمها أحد، وهي ~٧٠ بايت × آلاف الصفوف.
+      const fetchBens = (withFixedCategory: boolean, withEntityType: boolean, withFlags: boolean, details: boolean) => {
+        const flagCols = (withFlags ? ', no_fish, no_pasta, no_sandwich, low_carb, is_active' : '') +
           (withFlags && withCustomLd ? ', custom_ld_meals' : '');
         const fixedCols =
-          `id, beneficiary_id, day_of_week, meal_type, meal_id, quantity` +
+          `day_of_week, meal_type, meal_id, quantity` +
           `${withFixedCategory ? ', category, suppress_if_meal_ids' : ''}${withFixedAlt ? ', is_alternative' : ''}` +
           `${withDiets && withFixedDiet ? ', diet_id' : ''}`;
         return fetchAllRows((from, to) => {
@@ -203,9 +212,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
           .from('beneficiaries')
           .select(`
             id, name, english_name, code, category, villa, diet_type,
-            fixed_items, notes, created_at${withEntityType ? ', entity_type' : ''}${flagCols},
-            exclusions(id, beneficiary_id, meal_id, alternative_meal_id${withDiets ? ', diet_id' : ''}),
-            fixed_meals:beneficiary_fixed_meals(${fixedCols})${withDiets ? ', diets:beneficiary_diets(diet_id)' : ''}
+            fixed_items, notes, created_at${withEntityType ? ', entity_type' : ''}${flagCols}
+            ${details ? `, exclusions(meal_id, alternative_meal_id${withDiets ? ', diet_id' : ''}),
+            fixed_meals:beneficiary_fixed_meals(${fixedCols})${withDiets ? ', diets:beneficiary_diets(diet_id)' : ''}` : ''}
           `)
           .order('name')
           .order('id')
@@ -217,45 +226,45 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       // سلسلة إسقاط الأعمدة للمستفيدين — تُغلَّف في دالة حتى تنطلق **بالتوازي**
       // مع قراءة الأصناف. القراءتان مستقلّتان تماماً، وكانتا متسلسلتين فتدفع
       // الصفحة رحلة شبكة كاملة (~٤٥٠ms) بلا سبب.
-      const loadBens = async (): Promise<{
+      const loadBens = async (details: boolean): Promise<{
         result: Awaited<ReturnType<typeof fetchBens>>;
         withFlags: boolean;
         companionsNeedMigration?: boolean;
       }> => {
-        let res = await fetchBens(true, true, true);
+        let res = await fetchBens(true, true, true, details);
         if (res.error && /diet_id/i.test(res.error.message)) {
           withFixedDiet = false;
-          res = await fetchBens(true, true, true);
+          res = await fetchBens(true, true, true, details);
         }
         if (res.error && /diet_id|beneficiary_diets/i.test(res.error.message)) {
           withDiets = false;
-          res = await fetchBens(true, true, true);
+          res = await fetchBens(true, true, true, details);
         }
         if (res.error && /custom_ld_meals/i.test(res.error.message)) {
           withCustomLd = false;
-          res = await fetchBens(true, true, true);
+          res = await fetchBens(true, true, true, details);
         }
         // عمود is_alternative غير موجود (الترقية ما اتشغّلت) → نسقطه وحده
         if (res.error && /is_alternative/i.test(res.error.message)) {
           withFixedAlt = false;
-          res = await fetchBens(true, true, true);
+          res = await fetchBens(true, true, true, details);
         }
         // أعمدة خيارات الستيكر (no_fish...) غير موجودة → نعيد بدونها
         let withFlags = true;
-        if (res.error && /no_fish|no_pasta_sandwich|low_carb|is_active/i.test(res.error.message)) {
+        if (res.error && /no_fish|no_pasta|no_sandwich|low_carb|is_active/i.test(res.error.message)) {
           withFlags = false;
-          res = await fetchBens(true, true, false);
+          res = await fetchBens(true, true, false, details);
         }
         // entity_type column missing → migration not yet run.
         if (res.error && /entity_type|column/i.test(res.error.message)) {
           // Companions view requires the migration. Show an empty state with hint.
           if (entityType === 'companion') return { result: res, withFlags, companionsNeedMigration: true };
-          res = await fetchBens(true, false, withFlags);
+          res = await fetchBens(true, false, withFlags, details);
         }
         if (res.error && /category|column/i.test(res.error.message)) {
-          res = await fetchBens(false, true, withFlags);
+          res = await fetchBens(false, true, withFlags, details);
           if (res.error && /entity_type|column/i.test(res.error.message)) {
-            res = await fetchBens(false, false, withFlags);
+            res = await fetchBens(false, false, withFlags, details);
           }
         }
         return { result: res, withFlags };
@@ -287,8 +296,20 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       const loadAllMeals = () => fetchAllRows<{ id: string; name: string; type: MealType; is_snack: boolean }>(
         (from, to) => supabase.from('meals').select('id, name, type, is_snack').order('id').range(from, to));
 
-      // القراءات معاً — لا واحدة تنتظر الأخرى
-      const [bensOut, mealsResult, allMealsRes] = await Promise.all([loadBens(), loadMeals(), loadAllMeals()]);
+      // مرحلتان بالتوازي:
+      //   ① أعمدة المستفيدين وحدها (~٤٠ كيلوبايت) → القائمة تُرسم فوراً.
+      //   ② المحظورات والثوابت والأنظمة (~٧٠٠٠ محظور) → تُدمج لما توصل.
+      // كانت قراءة واحدة تنتظر ② كاملة قبل رسم أي صف.
+      setDetailsReady(false);
+      const allMealsP = loadAllMeals();
+      const detailsP: Promise<Beneficiary[] | null> = Promise.all([loadBens(true), allMealsP])
+        .then(([out, all]) => out.result.data
+          ? attachMeals(out.result.data as unknown as Beneficiary[], all.data ?? [])
+          : null)
+        .catch(() => null);
+      detailsPromiseRef.current = detailsP;
+
+      const [bensOut, mealsResult, allMealsRes] = await Promise.all([loadBens(false), loadMeals(), allMealsP]);
 
       if (bensOut.companionsNeedMigration) {
         alert(
@@ -304,14 +325,30 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
 
       if (!allMealsRes.error && allMealsRes.data) setAllMealsForSheet(allMealsRes.data);
 
-      // ✅ FIX 1: لازم نحفظ المستفيدين فعلياً
-      const freshBens = bensResult.data
-        ? attachMeals(bensResult.data as unknown as Beneficiary[], allMealsRes.data ?? [])
-        : null;
+      // ① الأساس: نرسم الصفوف، ونبقي تفاصيل اللقطة السابقة معروضة لين توصل
+      // الطازجة (بدل ما تومض الخانات فاضية). النافذة لا تفتح عليها — تنتظر ②.
+      const baseBens = bensResult.data ? (bensResult.data as unknown as Beneficiary[]) : null;
       const freshMeals = mealsResult.data ? (mealsResult.data as unknown as Meal[]) : null;
-      if (freshBens) setBeneficiaries(freshBens);
+      if (baseBens) {
+        setBeneficiaries(prev => {
+          const prevById = new Map(prev.map(b => [b.id, b]));
+          return baseBens.map(b => {
+            const old = prevById.get(b.id);
+            return old ? { ...b, exclusions: old.exclusions, fixed_meals: old.fixed_meals, diets: old.diets } : b;
+          });
+        });
+      }
       if (freshMeals) setMeals(freshMeals);
-      if (freshBens && freshMeals) writeSnapshot(snapKey, { bens: freshBens, meals: freshMeals });
+      setLoading(false);
+
+      // ② التفاصيل
+      const detailed = await detailsP;
+      if (detailsPromiseRef.current !== detailsP) return; // تحميل أحدث بدأ بعدنا
+      if (detailed) {
+        setBeneficiaries(detailed);
+        if (freshMeals) writeSnapshot(snapKey, { bens: detailed, meals: freshMeals });
+      }
+      setDetailsReady(true);
 
     } catch (err) {
       console.error('Fetch error:', err);
@@ -358,7 +395,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
             ? {
                 ...valueDetails(ben as unknown as Record<string, unknown>, [
                   'name', 'english_name', 'code', 'category', 'villa', 'diet_type',
-                  'notes', 'no_fish', 'no_pasta_sandwich', 'low_carb', 'is_active',
+                  'notes', 'no_fish', 'no_pasta', 'no_sandwich', 'low_carb', 'is_active',
                 ]),
                 exclusions_count: ben.exclusions?.length ?? 0,
                 fixed_meals_count: ben.fixed_meals?.length ?? 0,
@@ -371,10 +408,22 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     });
   };
 
-  const handleEdit = useCallback((b: Beneficiary) => {
-    setEditingBeneficiary(b);
+  // ⚠️ النافذة تحفظ بالمسح ثم الإدراج من حالتها — لو فُتحت على صف بلا
+  // تفاصيله (أو بتفاصيل لقطة قديمة) لمسح الحفظُ محظوراته وثوابته. فننتظر
+  // مرحلة التفاصيل ونفتح على الصف الطازج منها.
+  const handleEdit = useCallback(async (b: Beneficiary) => {
+    let row = b;
+    if (!detailsReady) {
+      setOpeningId(b.id);
+      const detailed = await detailsPromiseRef.current;
+      setOpeningId(null);
+      const fresh = detailed?.find(x => x.id === b.id);
+      if (!fresh) { setNotice('⚠ تعذّر تحميل تفاصيل هذا السجل — حدّث الصفحة وحاول مرة ثانية.'); return; }
+      row = fresh;
+    }
+    setEditingBeneficiary(row);
     setIsModalOpen(true);
-  }, []);
+  }, [detailsReady]);
   // رابط ‎?edit=<id>‎ (من لوحة التحكم) يفتح نافذة التعديل مباشرة
   useEditParam(beneficiaries, fresh, handleEdit);
 
@@ -419,6 +468,10 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
   };
 
   const handleExport = async () => {
+    if (!detailsReady) {
+      setNotice('⏳ لحظات — جاري تحميل المحظورات والأصناف الثابتة، ثم صدّر.');
+      return;
+    }
     // الصيغة من lib/beneficiary-sheet — نفسها التي تستعملها ورقة النسخة
     // الاحتياطية، فما تعود الاثنتان تتباعدان.
     //
@@ -734,7 +787,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                   <td className="table-cell text-slate-600">{b.villa ?? '—'}</td>
                   <td className="table-cell text-slate-600">{b.diet_type ?? '—'}</td>
                   <td className="table-cell">
-                    {(b.fixed_meals ?? []).length === 0 ? (
+                    {b.fixed_meals === undefined ? (
+                      <span className="text-slate-300 text-xs">…</span>
+                    ) : b.fixed_meals.length === 0 ? (
                       <span className="text-slate-300 text-xs">لا يوجد</span>
                     ) : (() => {
                       const map = new Map<string, { name: string; days: number[] }>();
@@ -761,12 +816,14 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                     })()}
                   </td>
                   <td className="table-cell">
-                    {(b.exclusions ?? []).length === 0 ? (
+                    {b.exclusions === undefined ? (
+                      <span className="text-slate-300 text-xs">…</span>
+                    ) : b.exclusions.length === 0 ? (
                       <span className="text-slate-300 text-xs">لا يوجد</span>
                     ) : (
                       <PillGroup
                         pills={(b.exclusions ?? []).map(e => ({
-                          key: e.id,
+                          key: e.meal_id,
                           className: 'bg-red-50 text-red-700 border-red-100',
                           label: e.meals?.name ?? '—',
                         }))}
@@ -779,8 +836,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                       {can(currentUser, permPage, 'edit') && (
                         <button
                           onClick={() => handleEdit(b)}
-                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                          title="تعديل"
+                          disabled={openingId === b.id}
+                          className={`p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-60 ${openingId === b.id ? 'animate-pulse' : ''}`}
+                          title={openingId === b.id ? 'جاري تحميل التفاصيل…' : 'تعديل'}
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -968,6 +1026,11 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                   // بدونها: الإضافة تأخذ افتراضي القاعدة (مفعّل، والخيارات مطفأة)،
                   // و«تحديث الموجود» لا يعيد تفعيل المعطّل ولا يمسح خياراته.
                   ...(fileHas(COL_ACTIVE) ? { is_active: parseYesNo(row[COL_ACTIVE], true) } : {}),
+                  // ملف قديم بعمود «المكرونة ولا الساندويش» الموحّد → للخيارين معاً
+                  ...(fileHas(LEGACY_PASTA_SANDWICH_COL) ? {
+                    no_pasta: parseYesNo(row[LEGACY_PASTA_SANDWICH_COL], false),
+                    no_sandwich: parseYesNo(row[LEGACY_PASTA_SANDWICH_COL], false),
+                  } : {}),
                   ...Object.fromEntries(
                     STICKER_FLAG_COLUMNS
                       .filter(f => fileHas(f.col))

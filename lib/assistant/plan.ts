@@ -98,7 +98,8 @@ interface PersonRow {
   is_active?: boolean | null;
   entity_type?: string | null;
   no_fish?: boolean | null;
-  no_pasta_sandwich?: boolean | null;
+  no_pasta?: boolean | null;
+  no_sandwich?: boolean | null;
   low_carb?: boolean | null;
 }
 

@@ -31,7 +31,7 @@ const OPTIONAL_COLUMNS: Record<string, string[]> = {
   beneficiary_fixed_meals: ['category', 'suppress_if_meal_ids', 'is_alternative'],
   menu_items: ['entity_type', 'multiplier', 'extra_quantity'],
   meals: ['category', 'entity_type'],
-  beneficiaries: ['is_active', 'entity_type', 'no_fish', 'no_pasta_sandwich', 'low_carb'],
+  beneficiaries: ['is_active', 'entity_type', 'no_fish', 'no_pasta', 'no_sandwich', 'low_carb'],
   daily_orders: ['entity_type', 'week_number', 'day_of_week'],
   order_items: ['category', 'multiplier', 'extra_quantity', 'display_name'],
 };

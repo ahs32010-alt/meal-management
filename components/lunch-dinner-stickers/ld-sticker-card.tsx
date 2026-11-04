@@ -312,7 +312,7 @@ export default function StickerCard({ ben, headerUrl, widthCm, heightCm, bgColor
           <div dir="rtl" className="text-right leading-tight shrink-0" style={{ fontSize: 10 * s2 }}>
             {flags.map(f => (
               <div key={f.key} className="font-semibold whitespace-nowrap">
-                <span style={{ fontSize: 13 * s2 }}>{f.symbol}</span> {f.label}
+                <span dir="ltr" className="font-bold" style={{ fontSize: 11 * s2 }}>{f.symbol}</span> {f.label}
               </div>
             ))}
           </div>

@@ -25,7 +25,7 @@ export type BackupTriggerType = 'auto_daily' | 'manual' | 'pre_restore';
  * يفشل لو أُنشئ جدول جديد في supabase/*.sql ولم يدخل هنا أو في الاستثناءات.
  *
  * ⚠️ قائمة السيرفر backup_logical_tables() (للنسخ التلقائية والاستعادة الذرّية)
- * لازم تطابقها حرفياً — آخر تعريف في supabase/diet-fixed-meals-migration.sql.
+ * لازم تطابقها حرفياً — آخر تعريف في supabase/sticker-flag-meals-removal-migration.sql.
  */
 export const BACKUP_TABLES = [
   // ── جداول مستقلة (لا تعتمد على غيرها) ──
@@ -519,7 +519,7 @@ export async function restoreFromSnapshot(
       if (uncovered.length > 0) {
         warnings.push(
           `دالة الاستعادة على السيرفر لا تشمل: ${uncovered.join(', ')} — استُعيدت من المتصفح. ` +
-          'شغّل supabase/diet-fixed-meals-migration.sql.'
+          'شغّل supabase/sticker-flag-meals-removal-migration.sql.'
         );
         await clientRestoreTables(supabase, snapshot, uncovered, inserted, warnings);
       }

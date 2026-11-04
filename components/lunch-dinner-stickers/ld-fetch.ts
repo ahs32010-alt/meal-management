@@ -3,7 +3,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import type { Beneficiary } from '@/lib/types';
 
 const COLS = 'id, name, english_name, code, category, villa, diet_type, notes, created_at';
-const FLAG_COLS = 'no_fish, no_pasta_sandwich, low_carb';
+const FLAG_COLS = 'no_fish, no_pasta, no_sandwich, low_carb';
 
 /**
  * يقرأ بيانات الستيكر لكل المستفيدين النشِطين.
