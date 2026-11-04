@@ -124,6 +124,11 @@ export interface DietSystem {
   id: string;
   name: string;
   description?: string | null;
+  /**
+   * «لا تعكس الأصناف على المستفيد» (diet-display-only-migration) — true = النظام
+   * للعرض فقط ومحظوراته/بدائله/ثوابته لا تُنسخ للمستفيد. غائب = قبل الترقية (ينعكس).
+   */
+  display_only?: boolean;
   created_at: string;
   exclusions?: DietSystemExclusion[];
   /** الأصناف الثابتة للنظام (diet-fixed-meals-migration) — صف لكل يوم */

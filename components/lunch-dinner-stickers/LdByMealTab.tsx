@@ -151,7 +151,8 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
       // الاسم/الفيلا/الملاحظات. فالبيانات الحيّة تفوز، واللقطة تسدّ النقص فقط —
       // بهذا يخرج نفس الشخص بنفس الستيكر في التبويبين.
       const full = benMap.get(detail.beneficiary.id);
-      const ben: Beneficiary = full ? { ...detail.beneficiary, ...full } : detail.beneficiary;
+      // النظام من الأنظمة الأساسية فقط (ld-fetch) — النص القديم في بيانات الأمر لا يُستخدم
+      const ben: Beneficiary = full ? { ...detail.beneficiary, ...full } : { ...detail.beneficiary, diet_type: '' };
 
       // الفصل بالتصنيف — دالة نقيّة مشتركة، مختبَرة في tests/ld-split.test.ts
       return splitDetailByCategory(detail).map(group => {

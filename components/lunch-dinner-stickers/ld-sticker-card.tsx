@@ -27,11 +27,30 @@ export const DIET_TYPE_EN: Record<string, string> = {
   'قليل الدهون': 'Low fat diet',
   'كلوي': 'Renal diet',
   'نباتي': 'Vegetarian diet',
+  // الأنظمة الغذائية الأساسية (صفحة «النظام الغذائي»)
+  'قليل الكربوهيدرات': 'Low carb',
+  'شبه مهروس': 'Semi-pureed',
+  'حمية السكري _ ماقبل السكري': 'Diabetic / Pre-diabetic',
+  'انيميا الفول_والبقوليات': 'G6PD (fava & legumes)',
+  'قليل السعرات': 'Low calorie',
+  'عالي الالياف': 'High fiber',
+  'حساسية القمح _ خالي من الغلوتين': 'Gluten free',
+  'خالي من اللاكتوز': 'Lactose free',
+  'حمية قليل البيورين': 'Low purine',
+  'حساسية الباذنجان': 'Eggplant allergy',
+  'عالي بالحديد': 'High iron',
+  'حساسية السمك': 'Fish allergy',
 };
 
+/**
+ * سطرا النظام في الستيكر. أكثر من نظام («أ - ب») → ترجمة كل جزء؛ لو جزء
+ * ما له ترجمة يبقى السطر الإنجليزي فاضياً بدل ترجمة ناقصة.
+ */
 export function dietLines(diet?: string): { ar: string; en: string } {
   const ar = (diet ?? '').trim() || 'نظام غذائي عادي';
-  return { ar, en: DIET_TYPE_EN[ar] ?? '' };
+  if (DIET_TYPE_EN[ar]) return { ar, en: DIET_TYPE_EN[ar] };
+  const parts = ar.split(' - ').map(p => DIET_TYPE_EN[p.trim()]);
+  return { ar, en: parts.length > 1 && parts.every(Boolean) ? parts.join(' - ') : '' };
 }
 
 // ── نص يتكيّف تلقائياً ليبقى في سطر واحد داخل عرض الحاوية (يتصغّر/يتكبّر) ──────

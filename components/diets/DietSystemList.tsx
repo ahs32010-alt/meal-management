@@ -67,23 +67,32 @@ export default function DietSystemList() {
   const [importOpen, setImportOpen] = useState(false);
   // false = جدول الأصناف الثابتة للأنظمة غير موجود (الترقية ما اتشغّلت)
   const [fixedReady, setFixedReady] = useState(true);
+  // false = عمود «لا تعكس الأصناف على المستفيد» غير موجود (diet-display-only-migration)
+  const [displayReady, setDisplayReady] = useState(true);
 
   const load = useCallback(async () => {
     setError('');
     const [dRes, mRes, bRes] = await Promise.all([
       // الأصناف الثابتة (diet-fixed-meals-migration) — نرجع بدونها لو الجدول غير موجود
       (async () => {
+        let withDisplay = true;
         const read = (withFixed: boolean) => supabase
           .from('diet_systems')
-          .select(`id, name, description, created_at, exclusions:diet_system_exclusions(id, meal_id, alternative_meal_id)${withFixed
+          .select(`id, name, description${withDisplay ? ', display_only' : ''}, created_at, exclusions:diet_system_exclusions(id, meal_id, alternative_meal_id)${withFixed
             ? ', fixed_meals:diet_system_fixed_meals(id, day_of_week, meal_type, meal_id, quantity, is_alternative)' : ''}, beneficiary_diets(beneficiary_id)`)
           .order('name');
-        const r = await read(true);
-        if (r.error && /diet_system_fixed_meals/i.test(r.error.message)) {
-          setFixedReady(false);
-          return read(false);
+        let withFixed = true;
+        let r = await read(withFixed);
+        if (r.error && /display_only/i.test(r.error.message)) {
+          withDisplay = false;
+          r = await read(withFixed);
         }
-        setFixedReady(true);
+        if (r.error && /diet_system_fixed_meals/i.test(r.error.message)) {
+          withFixed = false;
+          r = await read(withFixed);
+        }
+        setDisplayReady(withDisplay);
+        setFixedReady(withFixed);
         return r;
       })(),
       // entity_type يميّز صنف المستفيدين عن صنف المرافقين بنفس الاسم في ملف
@@ -281,6 +290,17 @@ export default function DietSystemList() {
                     </h3>
                     {d.description && <p className="text-xs text-slate-500 mt-0.5">{d.description}</p>}
                     <div className="flex gap-2 mt-2 text-xs">
+                      {displayReady && (d.display_only !== false ? (
+                        <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200"
+                          title="محظوراته وبدائله وأصنافه الثابتة لا تنعكس على المستفيدين">
+                          👁 للعرض فقط
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200"
+                          title="محظوراته وبدائله وأصنافه الثابتة تنعكس على كل من عنده النظام">
+                          ⇄ ينعكس على المستفيد
+                        </span>
+                      ))}
                       <span className="px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
                         {d.exclusions?.length ?? 0} صنف مستبعد
                       </span>
@@ -387,6 +407,7 @@ export default function DietSystemList() {
           diet={editing === 'new' ? null : editing}
           meals={meals}
           fixedReady={fixedReady}
+          displayReady={displayReady}
           existingNames={diets.filter(d => editing === 'new' || d.id !== editing.id).map(d => d.name)}
           onClose={() => setEditing(null)}
           approvalUser={
@@ -404,10 +425,11 @@ function approvalError(r: Extract<EnqueueResult, { ok: false }>) {
   return isEntityTypeConstraintError(r.error) ? DIET_APPROVAL_MIGRATION_HINT : r.error;
 }
 
-function DietModal({ diet, meals, fixedReady, existingNames, approvalUser, onClose, onSaved }: {
+function DietModal({ diet, meals, fixedReady, displayReady, existingNames, approvalUser, onClose, onSaved }: {
   diet: DietSystem | null;
   meals: Meal[];
   fixedReady: boolean;
+  displayReady: boolean;
   existingNames: string[];
   /** موجود = الحفظ يحتاج موافقة → يُرسل طلباً بدل الكتابة المباشرة */
   approvalUser: AppUser | null;
@@ -416,6 +438,8 @@ function DietModal({ diet, meals, fixedReady, existingNames, approvalUser, onClo
 }) {
   const [name, setName] = useState(diet?.name ?? '');
   const [description, setDescription] = useState(diet?.description ?? '');
+  // الافتراضي: للعرض فقط — الأصناف ما تنعكس على المستفيد إلا لو شِيل الخيار
+  const [displayOnly, setDisplayOnly] = useState(diet?.display_only ?? true);
   const [items, setItems] = useState<ExclusionEntry[]>(
     (diet?.exclusions ?? []).map(x => ({ meal_id: x.meal_id, alternative_meal_id: x.alternative_meal_id ?? '' })),
   );
@@ -439,7 +463,7 @@ function DietModal({ diet, meals, fixedReady, existingNames, approvalUser, onClo
 
     if (approvalUser) {
       const payload: DietPayload = {
-        diet: { name: trimmed, description: description.trim() || null },
+        diet: { name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}) },
         exclusions: items.map(x => ({ meal_id: x.meal_id, alternative_meal_id: x.alternative_meal_id || null })),
         ...(fixedReady ? {
           fixed_meals: rowsFromDrafts(fixedDrafts).map(r => ({
@@ -464,11 +488,11 @@ function DietModal({ diet, meals, fixedReady, existingNames, approvalUser, onClo
       let dietId = diet?.id;
       if (diet) {
         const { error: e } = await supabase.from('diet_systems')
-          .update({ name: trimmed, description: description.trim() || null }).eq('id', diet.id);
+          .update({ name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}) }).eq('id', diet.id);
         if (e) throw e;
       } else {
         const { data, error: e } = await supabase.from('diet_systems')
-          .insert({ name: trimmed, description: description.trim() || null }).select('id').single();
+          .insert({ name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}) }).select('id').single();
         if (e) throw e;
         dietId = (data as { id: string }).id;
       }
@@ -524,6 +548,8 @@ function DietModal({ diet, meals, fixedReady, existingNames, approvalUser, onClo
         entity_name: trimmed,
         details: {
           ...(diet && diet.name !== trimmed ? { name: { from: diet.name, to: trimmed } } : {}),
+          ...(displayReady && (diet?.display_only ?? true) !== displayOnly
+            ? { display_only: { from: diet ? (diet.display_only ?? true) : null, to: displayOnly } } : {}),
           ...listDiffDetails('diet_exclusions', (diet?.exclusions ?? []).map(describe), items.map(describe)),
           ...(fixedReady ? listDiffDetails(
             'diet_fixed_meals',
@@ -563,9 +589,26 @@ function DietModal({ diet, meals, fixedReady, existingNames, approvalUser, onClo
             </div>
           </div>
 
-          {assignedCount > 0 && (
-            <div className="bg-green-50 border border-green-200 text-green-800 text-xs rounded-lg px-3 py-2">
-              هذا النظام مسند لـ {assignedCount} شخص — أي تعديل هنا ينعكس على منيوهم فور الحفظ.
+          {displayReady && (
+            <label className={`flex items-start gap-3 cursor-pointer select-none border rounded-xl p-3 transition-colors ${displayOnly ? 'border-slate-300 bg-slate-50' : 'border-amber-300 bg-amber-50'}`}>
+              <input type="checkbox" checked={displayOnly} onChange={e => setDisplayOnly(e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+              <span>
+                <span className="block text-sm font-semibold text-slate-700">لا تعكس الأصناف على المستفيد</span>
+                <span className="block text-xs text-slate-500 mt-0.5">
+                  {displayOnly
+                    ? 'النظام للعرض فقط: يُختار للمستفيد بدون ما تنكتب محظوراته وبدائله وأصنافه الثابتة في بياناته.'
+                    : 'الخيار مشال: محظورات النظام وبدائله وأصنافه الثابتة تنعكس على كل من عنده النظام فور الحفظ.'}
+                </span>
+              </span>
+            </label>
+          )}
+
+          {assignedCount > 0 && (!displayReady || !displayOnly || diet?.display_only === false) && (
+            <div className={`${displayOnly ? 'bg-slate-50 border-slate-200 text-slate-700' : 'bg-green-50 border-green-200 text-green-800'} border text-xs rounded-lg px-3 py-2`}>
+              {!displayReady || !displayOnly
+                ? <>هذا النظام مسند لـ {assignedCount} شخص — أي تعديل هنا ينعكس على منيوهم فور الحفظ.</>
+                : <>هذا النظام مسند لـ {assignedCount} شخص — بالحفظ تنشال أصنافه من بياناتهم ويصير للعرض فقط.</>}
             </div>
           )}
 

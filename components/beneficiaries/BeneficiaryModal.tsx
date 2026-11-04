@@ -369,7 +369,9 @@ function DietSystemsPicker({ diets, selected, onToggle }: {
             </span>
             {d.name}
             <span className={`text-xs font-normal ${on ? 'text-green-100' : 'text-slate-400'}`}>
-              ({d.exclusions?.length ?? 0} مستبعد{d.fixed_meals?.length ? ` · ${new Set(d.fixed_meals.map(f => `${f.meal_id}_${f.meal_type}`)).size} ثابت` : ''})
+              {d.display_only === true
+                ? '(للعرض فقط)'
+                : `(${d.exclusions?.length ?? 0} مستبعد${d.fixed_meals?.length ? ` · ${new Set(d.fixed_meals.map(f => `${f.meal_id}_${f.meal_type}`)).size} ثابت` : ''})`}
             </span>
           </button>
         );
@@ -453,12 +455,15 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      let withDisplay = true;
       const read = (withFixed: boolean) => supabase
         .from('diet_systems')
-        .select(`id, name, description, created_at, exclusions:diet_system_exclusions(meal_id, alternative_meal_id)${withFixed
+        .select(`id, name, description${withDisplay ? ', display_only' : ''}, created_at, exclusions:diet_system_exclusions(meal_id, alternative_meal_id)${withFixed
           ? ', fixed_meals:diet_system_fixed_meals(day_of_week, meal_type, meal_id, quantity, is_alternative)' : ''}`)
         .order('name');
       let { data, error } = await read(true);
+      // عمود «لا تعكس الأصناف» غير موجود (diet-display-only-migration) → كل الأنظمة تنعكس
+      if (error && /display_only/i.test(error.message)) { withDisplay = false; ({ data, error } = await read(true)); }
       // جدول الأصناف الثابتة للأنظمة غير موجود (diet-fixed-meals-migration) → بدونها
       if (error && /diet_system_fixed_meals/i.test(error.message)) ({ data, error } = await read(false));
       if (!cancelled) setDietList(error ? null : ((data ?? []) as unknown as DietSystem[]));
@@ -468,6 +473,11 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const toggleDiet = (id: string) =>
     setSelectedDietIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
+  /** الأنظمة المختارة اللي تنعكس أصنافها على المستفيد — «للعرض فقط» ما تدخل */
+  const reflectingDiets = selectedDietIds
+    .map(id => dietList?.find(x => x.id === id))
+    .filter((d): d is DietSystem => !!d && d.display_only !== true);
+
   /**
    * استبعادات الأنظمة المختارة كما ستنطبق — نفس قاعدة المزامنة في القاعدة:
    * المحظور الشخصي يغلب، وصنف في أكثر من نظام يُحسب مرة (الأولوية لمن له بديل).
@@ -475,16 +485,15 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const dietExclusions = (() => {
     const personal = new Set(exclusions.map(e => e.meal_id));
     const out = new Map<string, { meal_id: string; alternative_meal_id: string; dietNames: string[] }>();
-    for (const id of selectedDietIds) {
-      const d = dietList?.find(x => x.id === id);
-      for (const dx of d?.exclusions ?? []) {
+    for (const d of reflectingDiets) {
+      for (const dx of d.exclusions ?? []) {
         if (personal.has(dx.meal_id)) continue;
         const cur = out.get(dx.meal_id);
         if (cur) {
-          cur.dietNames.push(d!.name);
+          cur.dietNames.push(d.name);
           if (!cur.alternative_meal_id && dx.alternative_meal_id) cur.alternative_meal_id = dx.alternative_meal_id;
         } else {
-          out.set(dx.meal_id, { meal_id: dx.meal_id, alternative_meal_id: dx.alternative_meal_id ?? '', dietNames: [d!.name] });
+          out.set(dx.meal_id, { meal_id: dx.meal_id, alternative_meal_id: dx.alternative_meal_id ?? '', dietNames: [d.name] });
         }
       }
     }
@@ -498,9 +507,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const dietFixed = (() => {
     const out = new Map<string, { meal_id: string; meal_type: MealType; days: Set<number>; quantity: number; is_alternative: boolean; dietNames: string[] }>();
     const seen = new Set<string>();
-    for (const id of selectedDietIds) {
-      const d = dietList?.find(x => x.id === id);
-      for (const f of d?.fixed_meals ?? []) {
+    for (const d of reflectingDiets) {
+      for (const f of d.fixed_meals ?? []) {
         const dayKey = `${f.day_of_week}|${f.meal_type}|${f.meal_id}`;
         if (seen.has(dayKey)) continue;
         seen.add(dayKey);
@@ -508,9 +516,9 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
         const cur = out.get(key);
         if (cur) {
           cur.days.add(f.day_of_week);
-          if (!cur.dietNames.includes(d!.name)) cur.dietNames.push(d!.name);
+          if (!cur.dietNames.includes(d.name)) cur.dietNames.push(d.name);
         } else {
-          out.set(key, { meal_id: f.meal_id, meal_type: f.meal_type, days: new Set([f.day_of_week]), quantity: f.quantity ?? 1, is_alternative: f.is_alternative === true, dietNames: [d!.name] });
+          out.set(key, { meal_id: f.meal_id, meal_type: f.meal_type, days: new Set([f.day_of_week]), quantity: f.quantity ?? 1, is_alternative: f.is_alternative === true, dietNames: [d.name] });
         }
       }
     }
@@ -1154,7 +1162,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
               <div className="border border-green-200 rounded-xl p-4 bg-green-50/40">
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <label className="label mb-0">النظام الغذائي الأساسي</label>
-                  {selectedDietIds.length > 0 && (
+                  {reflectingDiets.length > 0 && (
                     <span className="text-xs text-green-700">
                       يستبعد {dietExclusions.length} صنف — التفاصيل في تبويب المحظورات
                     </span>
@@ -1162,7 +1170,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                 </div>
                 <DietSystemsPicker diets={dietList} selected={selectedDietIds} onToggle={toggleDiet} />
                 <p className="text-[11px] text-slate-500 mt-2">
-                  اختر نظاماً أو أكثر — استبعادات النظام وبدائله تنطبق على منيو هذا الشخص وكل تقاريره تلقائياً.
+                  اختر نظاماً أو أكثر. النظام «للعرض فقط» يُسجَّل للشخص بدون ما يغيّر محظوراته — أما النظام اللي شِيل منه خيار «لا تعكس الأصناف» فمحظوراته وبدائله وأصنافه الثابتة تنطبق على منيوه تلقائياً.
                 </p>
               </div>
               <div><label className="label">ملاحظات</label>

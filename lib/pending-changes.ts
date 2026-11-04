@@ -49,6 +49,7 @@ const FIELD_LABELS: Record<string, string> = {
   custom_ld_meals: 'وجبات غداء/عشاء مخصّصة',
   is_active: 'مفعّل',
   description: 'الوصف',
+  display_only: 'لا تعكس الأصناف على المستفيد',
   type: 'الوجبة',
   is_snack: 'سناك',
   meal_id: 'الصنف',
@@ -283,14 +284,14 @@ async function beneficiaryChangeSet(supabase: SupabaseClient, pa: PendingAction)
  */
 async function dietContext(supabase: SupabaseClient, dietId: string): Promise<ChangeSet['context']> {
   const [dRes, exRes, fxRes, bRes] = await Promise.all([
-    supabase.from('diet_systems').select('name, description').eq('id', dietId).maybeSingle(),
+    supabase.from('diet_systems').select('*').eq('id', dietId).maybeSingle(),
     supabase.from('diet_system_exclusions').select('meal_id, alternative_meal_id').eq('diet_id', dietId),
     // الجدول غائب قبل diet-fixed-meals-migration → خطأ نتجاهله
     supabase.from('diet_system_fixed_meals').select('day_of_week, meal_type, meal_id, quantity, is_alternative').eq('diet_id', dietId),
     supabase.from('beneficiary_diets').select('beneficiaries(name)').eq('diet_id', dietId),
   ]);
   if (!dRes.data) return undefined;
-  const d = dRes.data as { name: string; description: string | null };
+  const d = dRes.data as { name: string; description: string | null; display_only?: boolean };
   const ex = (exRes.data ?? []) as ExRow[];
   const fx = (fxRes.error ? [] : fxRes.data ?? []) as DietFx[];
   const meals = await nameMap(supabase, 'meals', [...ex.flatMap(e => [e.meal_id, e.alternative_meal_id]), ...fx.map(r => r.meal_id)]);
@@ -317,6 +318,10 @@ async function dietContext(supabase: SupabaseClient, dietId: string): Promise<Ch
     title: `النظام الغذائي «${d.name}» حالياً`,
     lines: [
       ...(d.description ? [{ label: 'الوصف', value: d.description }] : []),
+      ...(d.display_only === undefined ? [] : [{
+        label: 'الانعكاس على المستفيد',
+        value: d.display_only ? 'للعرض فقط — لا تنعكس أصنافه على المستفيدين' : 'تنعكس محظوراته وبدائله وأصنافه الثابتة على المستفيدين',
+      }]),
       {
         label: `الأصناف المستبعدة (${ex.length})`,
         value: ex.length === 0 ? 'لا شيء'
@@ -340,7 +345,7 @@ async function dietChangeSet(supabase: SupabaseClient, pa: PendingAction): Promi
   let curFx: DietFx[] = [];
   if (!isCreate && pa.entity_id) {
     const [dRes, exRes, fxRes] = await Promise.all([
-      supabase.from('diet_systems').select('name, description').eq('id', pa.entity_id).maybeSingle(),
+      supabase.from('diet_systems').select('*').eq('id', pa.entity_id).maybeSingle(),
       supabase.from('diet_system_exclusions').select('meal_id, alternative_meal_id').eq('diet_id', pa.entity_id),
       p.fixed_meals
         ? supabase.from('diet_system_fixed_meals').select('day_of_week, meal_type, meal_id, quantity, is_alternative').eq('diet_id', pa.entity_id)
