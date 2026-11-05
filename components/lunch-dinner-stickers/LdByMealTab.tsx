@@ -24,7 +24,7 @@ import { fetchStickerBeneficiaries } from './ld-fetch';
 import { splitDetailByCategory } from './ld-split';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import {
-  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, TierSectionHeader, PdfModeControl, DietOrderPanel, HeaderControls, HiddenColorsControl,
+  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietGroupHeader, TierSectionHeader, PdfModeControl, DietOrderPanel, HeaderControls, HiddenColorsControl,
   SizeFields, customLdFilterSuffix, matchesCustomLdFilter, type CustomLdFilter,
   colorFilterSuffix, matchesColorFilter, type ColorFilter, type LdSettings,
 } from './ld-settings';
@@ -187,11 +187,6 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
     () => customFiltered.filter(r => isColored(r.ben)).length,
     [customFiltered, isColored],
   );
-  const dietTypes = useMemo(() => {
-    const set = new Set<string>();
-    rows.forEach(r => { const d = r.ben.diet_type?.trim(); if (d) set.add(d); });
-    return [...set].sort((a, b) => a.localeCompare(b, 'ar'));
-  }, [rows]);
 
   // المرئي = المُصدَّر: فلتر اللون ثم الترتيب حسب الأنظمة الغذائية
   // فلتر الأبيض/الملوّن أولاً — عليه تُبنى شرائح «إخفاء لون» بأعدادها
@@ -203,11 +198,6 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
   );
   const customLdCount = useMemo(() => customFiltered.filter(r => r.ben.custom_ld_meals === true).length, [customFiltered]);
   const colorChips = useMemo(() => colorsInUse(colorFiltered, dietOfRow, dietColors), [colorFiltered, dietColors]);
-  const dietCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    customFiltered.forEach(r => { const d = dietOfRow(r); if (d) m.set(d, (m.get(d) ?? 0) + 1); });
-    return m;
-  }, [customFiltered]);
   const visibleRows = useMemo(() => {
     const filtered = colorFiltered.filter(r => !hiddenColors.includes(stickerColorKey(dietOfRow(r), dietColors)));
     // ترتيب ثابت دائماً: كل الأنظمة ← Ⓡ ← وجبات مخصصة (الأنظمة أبجدياً والعادي أولاً)
@@ -358,11 +348,10 @@ export default function LdByMealTab({ settings }: { settings: LdSettings }) {
             </div>
 
             <HiddenColorsControl colors={colorChips} settings={settings} />
-            {/* الترتيب والألوان قسمان منفصلان؛ الترتيب يُخفى من الإعدادات */}
-            <div className={`grid gap-4 items-start max-w-5xl ${settings.showDietOrder ? 'lg:grid-cols-2' : 'max-w-2xl'}`}>
-              {settings.showDietOrder && <DietOrderPanel groups={tierGroups} settings={settings} />}
-              <DietColorsPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />
-            </div>
+            {/* ألوان الأنظمة تُختار داخل كل نظام في صفحة الأنظمة الغذائية — هنا الترتيب فقط */}
+            {settings.showDietOrder && (
+              <div className="max-w-2xl"><DietOrderPanel groups={tierGroups} settings={settings} /></div>
+            )}
           </>
         )}
       </div>

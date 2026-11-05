@@ -233,6 +233,7 @@ export const DETAIL_LABELS: Record<string, string> = {
   no_pasta: 'بدون مكرونة',
   no_sandwich: 'بدون ساندويش',
   display_only: 'لا تعكس الأصناف على المستفيد',
+  color: 'لون الستيكر',
   low_carb: 'قليل الكربوهيدرات',
   custom_ld_meals: 'وجبات غداء وعشاء مخصصة',
   is_active: 'نشط',

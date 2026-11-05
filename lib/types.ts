@@ -129,6 +129,8 @@ export interface DietSystem {
    * للعرض فقط ومحظوراته/بدائله/ثوابته لا تُنسخ للمستفيد. غائب = قبل الترقية (ينعكس).
    */
   display_only?: boolean;
+  /** لون ستيكر الغداء والعشاء لمن عنده النظام (Hex) — null = أبيض */
+  color?: string | null;
   created_at: string;
   exclusions?: DietSystemExclusion[];
   /** الأصناف الثابتة للنظام (diet-fixed-meals-migration) — صف لكل يوم */

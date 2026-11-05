@@ -50,6 +50,7 @@ const FIELD_LABELS: Record<string, string> = {
   is_active: 'مفعّل',
   description: 'الوصف',
   display_only: 'لا تعكس الأصناف على المستفيد',
+  color: 'لون الستيكر',
   type: 'الوجبة',
   is_snack: 'سناك',
   meal_id: 'الصنف',

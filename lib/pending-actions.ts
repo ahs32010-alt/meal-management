@@ -29,7 +29,7 @@ export const PENDING_ENTITY_LABELS: Record<PendingEntityType, string> = {
  * بيانات النظام + قائمة استبعاداته كما يبيها المستخدم بعد الحفظ.
  */
 export interface DietPayload {
-  diet: { name?: string; description?: string | null; display_only?: boolean };
+  diet: { name?: string; description?: string | null; display_only?: boolean; color?: string | null };
   exclusions: Array<{ meal_id: string; alternative_meal_id: string | null }>;
   /**
    * أصناف النظام الثابتة (صف لكل يوم). غيابها = الطلب ما يمسّها (ترقية
@@ -634,7 +634,7 @@ async function approveDietAction(
     let before: Array<{ meal_id: string; alternative_meal_id: string | null }> = [];
     if (pa.action === 'create') {
       const { data, error } = await supabase.from('diet_systems')
-        .insert({ name: p.diet.name, description: p.diet.description ?? null, ...(p.diet.display_only !== undefined ? { display_only: p.diet.display_only } : {}) }).select('id').single();
+        .insert({ name: p.diet.name, description: p.diet.description ?? null, ...(p.diet.display_only !== undefined ? { display_only: p.diet.display_only } : {}), ...(p.diet.color !== undefined ? { color: p.diet.color } : {}) }).select('id').single();
       if (error) return { ok: false, error: /duplicate|unique/i.test(error.message) ? 'يوجد نظام بنفس الاسم' : error.message };
       dietId = (data as { id: string }).id;
     } else {

@@ -2,21 +2,22 @@
 
 /**
  * إعدادات ستيكرات الغداء/العشاء المشتركة بين التبويبين («ثابتة» و«حسب الوجبة»):
- * صورة الهيدر + ألوان الأنظمة الغذائية. الحالة تُرفع لمكوّن الصفحة مرّة واحدة
+ * صورة الهيدر + ألوان الأنظمة الغذائية (تُختار داخل كل نظام في صفحة الأنظمة). الحالة تُرفع لمكوّن الصفحة مرّة واحدة
  * عبر `useLdStickerSettings` — فما يتكرّر التحميل ولا تختلف الألوان بين تبويب وتبويب.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import {
   TIER_LABELS, moveDiet, moveDietTo, NO_DIET, tierKey, type StickerTier,
   WITHIN_DIET_SORT_LABELS, type WithinDietSort,
-  colorsBackground, joinColors, splitColors, MAX_STICKER_COLORS,
+  colorsBackground,
 } from './ld-diet-order';
+import { fetchDietLabels } from './ld-fetch';
 import ColorPicker from '@/components/shared/ColorPicker';
 
 export const HEADER_KEY = 'ldStickerHeaderUrl';
-export const DIET_COLORS_KEY = 'ldDietColors';
+export const DIET_COLORS_KEY = 'ldDietColorsV2'; // V2: ألوان من الأنظمة الغذائية (القديم كان مربوطاً بالنص اليدوي)
 export const DIET_ORDER_KEY = 'ldDietOrder';
 export const HIDDEN_COLORS_KEY = 'ldHiddenColors';
 export const WITHIN_SORT_KEY = 'ldWithinDietSort';
@@ -74,8 +75,8 @@ export interface LdSettings {
   uploading: boolean;
   uploadHeader: (file: File) => Promise<void>;
   removeHeader: () => void;
+  /** لون كل نظام كما يظهر على الستيكر (اسم النظام أو «نظام - نظام» ← ألوانه مفصولة بفاصلة) — من الأنظمة الغذائية */
   dietColors: Record<string, string>;
-  setDietColor: (diet: string, color: string | null) => void;
   /** ترتيب الأنظمة الغذائية — مشترك لكل المستخدمين (sticker_settings) */
   dietOrder: string[];
   setDietOrder: (order: string[]) => void;
@@ -134,35 +135,29 @@ export function useLdStickerSettings(): LdSettings {
         }
       }
     })();
-    // المصدر الرئيسي: قاعدة البيانات (لو الجدول موجود)
+    // ألوان الأنظمة: من الأنظمة الغذائية نفسها (diet_systems.color). من عنده أكثر
+    // من نظام ملوّن ← ستيكره أشرطة بألوان أنظمته بنفس ترتيب أسمائها.
     (async () => {
-      const { data, error } = await supabase.from('lunch_dinner_diet_colors').select('diet_type, color');
-      if (!error && data) {
-        const map: Record<string, string> = {};
-        for (const row of data as { diet_type: string; color: string }[]) map[row.diet_type] = row.color;
-        setDietColors(map);
-        try { localStorage.setItem(DIET_COLORS_KEY, JSON.stringify(map)); } catch {}
+      const [sysRes, labels] = await Promise.all([
+        supabase.from('diet_systems').select('name, color'),
+        fetchDietLabels(),
+      ]);
+      if (sysRes.error || !sysRes.data) return;
+      const colorOf = new Map<string, string>();
+      for (const r of sysRes.data as { name: string; color: string | null }[]) {
+        const c = r.color?.trim();
+        if (c) colorOf.set(r.name.trim(), c);
       }
-    })();
-  }, []);
-
-  const setDietColor = useCallback((diet: string, color: string | null) => {
-    // تحديث فوري + كاش محلي
-    setDietColors(prev => {
-      const next = { ...prev };
-      if (color) next[diet] = color; else delete next[diet];
-      try { localStorage.setItem(DIET_COLORS_KEY, JSON.stringify(next)); } catch {}
-      return next;
-    });
-    // حفظ دائم في قاعدة البيانات
-    (async () => {
-      try {
-        if (color) {
-          await supabase.from('lunch_dinner_diet_colors').upsert({ diet_type: diet, color }, { onConflict: 'diet_type' });
-        } else {
-          await supabase.from('lunch_dinner_diet_colors').delete().eq('diet_type', diet);
-        }
-      } catch { /* الكاش المحلي يحفظ الحالة لو فشل الاتصال */ }
+      const map: Record<string, string> = {};
+      const add = (label: string) => {
+        if (!label || map[label] !== undefined) return;
+        const cs = label.split(' - ').map(n => colorOf.get(n.trim())).filter(Boolean) as string[];
+        if (cs.length) map[label] = cs.join(',');
+      };
+      colorOf.forEach((_, name) => add(name));
+      labels.forEach(add);
+      setDietColors(map);
+      try { localStorage.setItem(DIET_COLORS_KEY, JSON.stringify(map)); } catch {}
     })();
   }, []);
 
@@ -216,7 +211,7 @@ export function useLdStickerSettings(): LdSettings {
   }, []);
 
   return {
-    headerUrl, uploading, uploadHeader, removeHeader, dietColors, setDietColor, dietOrder, setDietOrder,
+    headerUrl, uploading, uploadHeader, removeHeader, dietColors, dietOrder, setDietOrder,
     hiddenColors, toggleHiddenColor, showAllColors,
     showDietOrder, setShowDietOrder, sharedSettings,
     withinSort, setWithinSort,
@@ -404,165 +399,103 @@ export function DietOrderPanel({ groups, settings, defaultOpen }: {
   );
 }
 
-// ── ألوان الأنظمة الغذائية ────────────────────────────────────────────────────
-/** لون ستيكر كل نظام + زر 👁 لإخفاء لونه من المعاينة والتصدير — مستقل عن الترتيب */
-export function DietColorsPanel({ dietTypes, settings, counts }: {
-  dietTypes: string[];
-  settings: LdSettings;
-  counts?: Map<string, number>;
+// ── منتقي لون ستيكر النظام (يُستخدم داخل نافذة النظام الغذائي) ───────────────
+/** زر لون + نافذة صغيرة: منتقي حرّ أو ألوان جاهزة، و«بدون لون» = أبيض */
+export function StickerColorField({ value, onChange }: {
+  value: string | null;
+  onChange: (color: string | null) => void;
 }) {
-  const { dietColors, setDietColor, hiddenColors, toggleHiddenColor } = settings;
-  const [openColorFor, setOpenColorFor] = useState<{ diet: string; band: number } | null>(null);
-  const [colorTab, setColorTab] = useState<'custom' | 'preset'>('custom');
-  if (dietTypes.length === 0) return null;
-  const sorted = [...dietTypes].sort((a, b) => a.localeCompare(b, 'ar'));
+  // موضع النافذة ثابت على الشاشة ومحصور داخلها — فما تطلع برّا الصفحة مهما كان مكان الزر
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [colorTab, setColorTab] = useState<'custom' | 'preset'>('preset');
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const open = pos !== null;
+  const selected = value ?? undefined;
+  const close = () => setPos(null);
+  const pick = (hex: string) => { onChange(hex); close(); };
+
+  const place = useCallback(() => {
+    const b = btnRef.current?.getBoundingClientRect();
+    if (!b) return;
+    const pw = popRef.current?.offsetWidth ?? 300;
+    const ph = popRef.current?.offsetHeight ?? 320;
+    const m = 8;
+    const left = Math.min(Math.max(m, b.right - pw), window.innerWidth - pw - m);
+    const below = b.bottom + m;
+    const top = below + ph <= window.innerHeight - m ? below : Math.max(m, b.top - ph - m);
+    setPos({ top, left });
+  }, []);
+
+  // بعد أول رسم نعرف مقاس النافذة الفعلي فنعيد الحساب، ونتابع التمرير وتغيير المقاس
+  useLayoutEffect(() => {
+    if (!open) return;
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
+  }, [open, colorTab, place]);
 
   return (
-    <Collapsible
-      title="ألوان الأنظمة الغذائية"
-      hint={`${Object.keys(dietColors).filter(d => dietTypes.includes(d)).length} ملوّن من ${dietTypes.length}`}
-      icon={
-        <svg className="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343" />
-        </svg>
-      }
-    >
-      <p className="text-[11px] text-slate-500 py-2">لون خلفية الستيكر لكل نظام. «+» يضيف لوناً ثانياً فينقسم الستيكر (الأول فوق والثاني تحت…). زر 👁 يخفي ستيكرات ذلك اللون من المعاينة والتصدير.</p>
-      <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg">
-        {sorted.map(diet => {
-          const value = dietColors[diet];
-          const bands = splitColors(value);
-          const colorKey = value ? value.toLowerCase() : NO_DIET;
-          const hidden = hiddenColors.includes(colorKey);
-          const count = counts?.get(diet);
-          // الشريط المفتوح للتعديل في هذا الصف (فهرسه = موضعه من فوق لتحت)
-          const openBand = openColorFor?.diet === diet ? openColorFor.band : null;
-          const selected = openBand !== null ? bands[openBand] : undefined;
-          const setBand = (bi: number, hex: string | null) => {
-            const next = [...bands];
-            if (hex) next[bi] = hex; else next.splice(bi, 1);
-            setDietColor(diet, joinColors(next));
-          };
-          const pick = (hex: string) => { setBand(openBand ?? 0, hex); setOpenColorFor(null); };
-          return (
-            <div key={diet} className={`flex items-center gap-2 px-2 py-1.5 ${hidden ? 'bg-slate-50' : ''}`}>
-              <span className={`flex items-center gap-2 font-medium text-sm flex-1 min-w-0 ${hidden ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
-                <span className="w-3.5 h-3.5 rounded-full ring-1 ring-black/10 shrink-0" style={{ background: colorsBackground(value) }} />
-                <span className="truncate" title={diet}>{diet}</span>
-                {count !== undefined && <span className="text-[11px] text-slate-400 font-normal shrink-0">({count})</span>}
-              </span>
-              <button
-                type="button"
-                onClick={() => toggleHiddenColor(colorKey)}
-                title={hidden ? 'إظهار هذا اللون' : 'إخفاء هذا اللون من المعاينة والتصدير'}
-                aria-pressed={hidden}
-                className={`p-1 rounded shrink-0 ${hidden ? 'text-rose-500 hover:bg-rose-50' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'}`}
-              >
-                {hidden ? (
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>
-                ) : (
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                )}
-              </button>
-              <div className="relative shrink-0 flex items-center gap-1">
-                {/* لون واحد لكل شريط — الأول فوق والأخير تحت. «+» يقسم الستيكر لشريط إضافي */}
-                {bands.length === 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => setOpenColorFor(openBand === 0 ? null : { diet, band: 0 })}
-                    className="flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-xs font-medium text-slate-600 transition-colors"
-                  >
-                    <span className="w-4 h-4 rounded shrink-0" style={{ border: '1.5px dashed #cbd5e1' }} />
-                    <span>بدون لون</span>
-                  </button>
-                ) : (
-                  <div className="flex items-center gap-0.5 p-0.5 rounded-lg border border-slate-200">
-                    {bands.map((c, bi) => (
-                      <button
-                        key={bi}
-                        type="button"
-                        onClick={() => setOpenColorFor(openBand === bi ? null : { diet, band: bi })}
-                        title={bands.length > 1 ? `لون الجزء ${bi + 1} من ${bands.length} (من فوق)` : 'اللون'}
-                        className={`w-5 h-5 rounded transition-transform hover:scale-110 ${openBand === bi ? 'ring-2 ring-violet-500 ring-offset-1' : ''}`}
-                        style={{ background: c, boxShadow: '0 0 0 1px rgba(0,0,0,0.12)' }}
-                      />
-                    ))}
-                  </div>
-                )}
-                {bands.length > 0 && bands.length < MAX_STICKER_COLORS && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDietColor(diet, joinColors([...bands, '#FFFFFF']));
-                      setOpenColorFor({ diet, band: bands.length });
-                    }}
-                    title="إضافة لون: يُقسم الستيكر لأجزاء أفقية (فوق/تحت)"
-                    className="w-6 h-6 flex items-center justify-center rounded-lg border border-dashed border-slate-300 text-slate-500 hover:text-violet-700 hover:border-violet-300 text-sm font-bold"
-                  >
-                    +
-                  </button>
-                )}
-                  {openBand !== null && (
-                    <>
-                      <div className="fixed inset-0 z-10" onClick={() => setOpenColorFor(null)} />
-                      <div className="absolute z-20 left-0 top-full mt-2 p-3 bg-white rounded-2xl shadow-xl border border-slate-100" style={{ width: 'max-content' }}>
-                        {bands.length > 1 && (
-                          <div className="text-xs font-bold text-slate-600 mb-2 text-center">
-                            لون الجزء {openBand + 1} من {bands.length} {openBand === 0 ? '(فوق)' : openBand === bands.length - 1 ? '(تحت)' : ''}
-                          </div>
-                        )}
-                        {/* تبويبان: منتقي حرّ (يبقى مفتوحاً للتعديل) + الألوان الجاهزة (تُغلق عند الاختيار) */}
-                        <div className="flex border-b border-slate-200 mb-3" role="tablist">
-                          {(['custom', 'preset'] as const).map(t => (
-                            <button key={t} type="button" role="tab" aria-selected={colorTab === t}
-                              onClick={() => setColorTab(t)}
-                              className={`flex-1 pb-2 text-sm font-bold border-b-[3px] -mb-px transition-colors ${
-                                colorTab === t ? 'border-violet-500 text-slate-800' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
-                              {t === 'custom' ? 'لون ثابت' : 'ألوان جاهزة'}
-                            </button>
-                          ))}
-                        </div>
-                        {colorTab === 'custom' ? (
-                          <ColorPicker value={selected} onChange={hex => setBand(openBand, hex)} />
-                        ) : (
-                          <>
-                            <div className="text-[10px] font-semibold text-slate-400 mb-1">ألوان قياسية</div>
-                            <div className="flex gap-1 mb-3">
-                              {STANDARD_COLORS.map(c => (
-                                <ColorSwatch key={c} color={c} selected={selected} onPick={pick} />
-                              ))}
-                            </div>
-                            <div className="text-[10px] font-semibold text-slate-400 mb-1">تدرّجات</div>
-                            <div className="flex gap-1">
-                              {RAMP_COLUMNS.map((col, ci) => (
-                                <div key={ci} className="flex flex-col gap-1">
-                                  {col.map(c => (
-                                    <ColorSwatch key={c} color={c} selected={selected} onPick={pick} />
-                                  ))}
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => { setBand(openBand, null); setOpenColorFor(null); }}
-                          className="mt-3 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                        >
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                          {bands.length > 1 ? 'حذف هذا اللون' : 'بدون لون'}
-                        </button>
-                      </div>
-                    </>
-                  )}
-              </div>
+    <div className="inline-flex items-center gap-2">
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => (open ? close() : place())}
+        className="flex items-center gap-2 pl-2 pr-2.5 py-1.5 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-sm font-medium text-slate-600 transition-colors"
+      >
+        <span className="w-5 h-5 rounded shrink-0"
+          style={value ? { background: value, boxShadow: '0 0 0 1px rgba(0,0,0,0.12)' } : { border: '1.5px dashed #cbd5e1' }} />
+        <span>{value ? value.toUpperCase() : 'بدون لون (أبيض)'}</span>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[60]" onClick={close} />
+          <div ref={popRef} className="fixed z-[61] p-3 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-y-auto"
+            style={{ top: pos.top, left: pos.left, width: 'max-content', maxWidth: 'calc(100vw - 16px)', maxHeight: 'calc(100vh - 16px)' }}>
+            <div className="flex border-b border-slate-200 mb-3" role="tablist">
+              {(['preset', 'custom'] as const).map(t => (
+                <button key={t} type="button" role="tab" aria-selected={colorTab === t}
+                  onClick={() => setColorTab(t)}
+                  className={`flex-1 pb-2 text-sm font-bold border-b-[3px] -mb-px transition-colors ${
+                    colorTab === t ? 'border-violet-500 text-slate-800' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
+                  {t === 'custom' ? 'لون ثابت' : 'ألوان جاهزة'}
+                </button>
+              ))}
             </div>
-          );
-        })}
-      </div>
-    </Collapsible>
+            {colorTab === 'custom' ? (
+              <ColorPicker value={selected} onChange={hex => onChange(hex)} />
+            ) : (
+              <>
+                <div className="text-[10px] font-semibold text-slate-400 mb-1">ألوان قياسية</div>
+                <div className="flex gap-1 mb-3">
+                  {STANDARD_COLORS.map(c => (
+                    <ColorSwatch key={c} color={c} selected={selected} onPick={pick} />
+                  ))}
+                </div>
+                <div className="text-[10px] font-semibold text-slate-400 mb-1">تدرّجات</div>
+                <div className="flex gap-1">
+                  {RAMP_COLUMNS.map((col, ci) => (
+                    <div key={ci} className="flex flex-col gap-1">
+                      {col.map(c => (
+                        <ColorSwatch key={c} color={c} selected={selected} onPick={pick} />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => { onChange(null); close(); }}
+              className="mt-3 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+            >
+              بدون لون
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

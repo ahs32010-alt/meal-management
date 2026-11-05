@@ -12,7 +12,7 @@ import type { PdfMode } from './ld-pdf-export';
 import { fetchStickerBeneficiaries } from './ld-fetch';
 import { readSnapshot, writeSnapshot } from '@/lib/view-snapshot';
 import {
-  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietColorsPanel, DietGroupHeader, TierSectionHeader, PdfModeControl, DietOrderPanel, HeaderControls, HiddenColorsControl,
+  ColorFilterControl, CustomLdBadge, CustomLdFilterControl, DietGroupHeader, TierSectionHeader, PdfModeControl, DietOrderPanel, HeaderControls, HiddenColorsControl,
   SizeFields, customLdFilterSuffix, matchesCustomLdFilter, type CustomLdFilter,
   colorFilterSuffix, matchesColorFilter, type ColorFilter, type LdSettings,
 } from './ld-settings';
@@ -44,12 +44,6 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
     else nodesRef.current.delete(id);
   }, []);
 
-  // كل الأنظمة الغذائية المسجّلة (قيم diet_type المميّزة)
-  const dietTypes = useMemo(() => {
-    const set = new Set<string>();
-    beneficiaries.forEach(b => { const d = b.diet_type?.trim(); if (d) set.add(d); });
-    return [...set].sort((a, b) => a.localeCompare(b, 'ar'));
-  }, [beneficiaries]);
 
   // هل الستيكر ملوّن (نظامه الغذائي له لون)؟
   const isColored = (b: Beneficiary) => !!(b.diet_type?.trim() && dietColors[b.diet_type.trim()]);
@@ -71,11 +65,6 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
   );
   const customLdCount = useMemo(() => beneficiaries.filter(b => b.custom_ld_meals === true).length, [beneficiaries]);
   const colorChips = useMemo(() => colorsInUse(colorFiltered, dietOf, dietColors), [colorFiltered, dietColors]);
-  const dietCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    beneficiaries.forEach(b => { const d = dietOf(b); if (d) m.set(d, (m.get(d) ?? 0) + 1); });
-    return m;
-  }, [beneficiaries]);
   const visibleBeneficiaries = useMemo(() => {
     const filtered = colorFiltered.filter(b => !hiddenColors.includes(stickerColorKey(dietOf(b), dietColors)));
     // ترتيب ثابت دائماً: كل الأنظمة ← Ⓡ ← وجبات مخصصة (الأنظمة أبجدياً والعادي أولاً)
@@ -198,13 +187,11 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
           </p>
         </div>
 
-        {/* ألوان الأنظمة الغذائية — قسم قابل للطيّ */}
         <HiddenColorsControl colors={colorChips} settings={settings} />
-        {/* الترتيب والألوان قسمان منفصلان؛ الترتيب يُخفى من الإعدادات */}
-        <div className={`grid gap-4 items-start max-w-5xl ${settings.showDietOrder ? 'lg:grid-cols-2' : 'max-w-2xl'}`}>
-          {settings.showDietOrder && <DietOrderPanel groups={tierGroups} settings={settings} />}
-          <DietColorsPanel dietTypes={dietTypes} settings={settings} counts={dietCounts} />
-        </div>
+        {/* ألوان الأنظمة تُختار داخل كل نظام في صفحة الأنظمة الغذائية — هنا الترتيب فقط */}
+        {settings.showDietOrder && (
+          <div className="max-w-2xl"><DietOrderPanel groups={tierGroups} settings={settings} /></div>
+        )}
       </div>
 
       {error && (
@@ -219,7 +206,7 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
         <div className="py-16 text-center text-slate-400 text-sm">لا يوجد مستفيدون.</div>
       ) : visibleBeneficiaries.length === 0 ? (
         <div className="py-16 text-center text-slate-400 text-sm">
-          {colorFilter === 'colored' ? 'لا توجد ستيكرات ملوّنة — حدّد ألوان الأنظمة الغذائية أولاً.' : 'لا توجد ستيكرات بيضاء.'}
+          {colorFilter === 'colored' ? 'لا توجد ستيكرات ملوّنة — حدّد لون كل نظام من صفحة الأنظمة الغذائية.' : 'لا توجد ستيكرات بيضاء.'}
         </div>
       ) : (
         <div className="flex flex-wrap gap-4 justify-center md:justify-start">

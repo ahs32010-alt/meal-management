@@ -17,6 +17,7 @@ import type { DietSystem, Meal } from '@/lib/types';
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER } from '@/lib/types';
 import ExclusionSectionsEditor, { type ExclusionEntry } from '@/components/shared/ExclusionSectionsEditor';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
+import { StickerColorField } from '@/components/lunch-dinner-stickers/ld-settings';
 import DietFixedMealsEditor, { draftsFromRows, rowsFromDrafts, fixedRowKey, type DietFixedDraft } from '@/components/diets/DietFixedMealsEditor';
 import type { ImportMode } from '@/components/shared/ImportModeDialog';
 import { exportXLSX } from '@/lib/xlsx-utils';
@@ -69,6 +70,8 @@ export default function DietSystemList() {
   const [fixedReady, setFixedReady] = useState(true);
   // false = عمود «لا تعكس الأصناف على المستفيد» غير موجود (diet-display-only-migration)
   const [displayReady, setDisplayReady] = useState(true);
+  // false = عمود لون الستيكر غير موجود (diet-system-color-migration)
+  const [colorReady, setColorReady] = useState(true);
 
   const load = useCallback(async () => {
     setError('');
@@ -76,13 +79,18 @@ export default function DietSystemList() {
       // الأصناف الثابتة (diet-fixed-meals-migration) — نرجع بدونها لو الجدول غير موجود
       (async () => {
         let withDisplay = true;
+        let withColor = true;
         const read = (withFixed: boolean) => supabase
           .from('diet_systems')
-          .select(`id, name, description${withDisplay ? ', display_only' : ''}, created_at, exclusions:diet_system_exclusions(id, meal_id, alternative_meal_id)${withFixed
+          .select(`id, name, description${withDisplay ? ', display_only' : ''}${withColor ? ', color' : ''}, created_at, exclusions:diet_system_exclusions(id, meal_id, alternative_meal_id)${withFixed
             ? ', fixed_meals:diet_system_fixed_meals(id, day_of_week, meal_type, meal_id, quantity, is_alternative)' : ''}, beneficiary_diets(beneficiary_id)`)
           .order('name');
         let withFixed = true;
         let r = await read(withFixed);
+        if (r.error && /color/i.test(r.error.message)) {
+          withColor = false;
+          r = await read(withFixed);
+        }
         if (r.error && /display_only/i.test(r.error.message)) {
           withDisplay = false;
           r = await read(withFixed);
@@ -92,6 +100,7 @@ export default function DietSystemList() {
           r = await read(withFixed);
         }
         setDisplayReady(withDisplay);
+        setColorReady(withColor);
         setFixedReady(withFixed);
         return r;
       })(),
@@ -289,7 +298,15 @@ export default function DietSystemList() {
                       {!myPending.hasDelete(d.id) && myPending.hasUpdate(d.id) && <span className="pending-badge pending-badge-update mr-2">⏳ تعديل</span>}
                     </h3>
                     {d.description && <p className="text-xs text-slate-500 mt-0.5">{d.description}</p>}
-                    <div className="flex gap-2 mt-2 text-xs">
+                    <div className="flex flex-wrap gap-2 mt-2 text-xs">
+                      {colorReady && (
+                        <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white text-slate-600 border border-slate-200"
+                          title="لون ستيكر الغداء والعشاء لمن عنده هذا النظام">
+                          <span className="w-3 h-3 rounded-full shrink-0"
+                            style={d.color ? { background: d.color, boxShadow: '0 0 0 1px rgba(0,0,0,0.15)' } : { border: '1.5px dashed #cbd5e1' }} />
+                          {d.color ? 'لون الستيكر' : 'ستيكر أبيض'}
+                        </span>
+                      )}
                       {displayReady && (d.display_only !== false ? (
                         <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200"
                           title="محظوراته وبدائله وأصنافه الثابتة لا تنعكس على المستفيدين">
@@ -408,6 +425,7 @@ export default function DietSystemList() {
           meals={meals}
           fixedReady={fixedReady}
           displayReady={displayReady}
+          colorReady={colorReady}
           existingNames={diets.filter(d => editing === 'new' || d.id !== editing.id).map(d => d.name)}
           onClose={() => setEditing(null)}
           approvalUser={
@@ -425,11 +443,12 @@ function approvalError(r: Extract<EnqueueResult, { ok: false }>) {
   return isEntityTypeConstraintError(r.error) ? DIET_APPROVAL_MIGRATION_HINT : r.error;
 }
 
-function DietModal({ diet, meals, fixedReady, displayReady, existingNames, approvalUser, onClose, onSaved }: {
+function DietModal({ diet, meals, fixedReady, displayReady, colorReady, existingNames, approvalUser, onClose, onSaved }: {
   diet: DietSystem | null;
   meals: Meal[];
   fixedReady: boolean;
   displayReady: boolean;
+  colorReady: boolean;
   existingNames: string[];
   /** موجود = الحفظ يحتاج موافقة → يُرسل طلباً بدل الكتابة المباشرة */
   approvalUser: AppUser | null;
@@ -440,6 +459,7 @@ function DietModal({ diet, meals, fixedReady, displayReady, existingNames, appro
   const [description, setDescription] = useState(diet?.description ?? '');
   // الافتراضي: للعرض فقط — الأصناف ما تنعكس على المستفيد إلا لو شِيل الخيار
   const [displayOnly, setDisplayOnly] = useState(diet?.display_only ?? true);
+  const [color, setColor] = useState<string | null>(diet?.color ?? null);
   const [items, setItems] = useState<ExclusionEntry[]>(
     (diet?.exclusions ?? []).map(x => ({ meal_id: x.meal_id, alternative_meal_id: x.alternative_meal_id ?? '' })),
   );
@@ -463,7 +483,7 @@ function DietModal({ diet, meals, fixedReady, displayReady, existingNames, appro
 
     if (approvalUser) {
       const payload: DietPayload = {
-        diet: { name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}) },
+        diet: { name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}), ...(colorReady ? { color } : {}) },
         exclusions: items.map(x => ({ meal_id: x.meal_id, alternative_meal_id: x.alternative_meal_id || null })),
         ...(fixedReady ? {
           fixed_meals: rowsFromDrafts(fixedDrafts).map(r => ({
@@ -488,11 +508,11 @@ function DietModal({ diet, meals, fixedReady, displayReady, existingNames, appro
       let dietId = diet?.id;
       if (diet) {
         const { error: e } = await supabase.from('diet_systems')
-          .update({ name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}) }).eq('id', diet.id);
+          .update({ name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}), ...(colorReady ? { color } : {}) }).eq('id', diet.id);
         if (e) throw e;
       } else {
         const { data, error: e } = await supabase.from('diet_systems')
-          .insert({ name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}) }).select('id').single();
+          .insert({ name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}), ...(colorReady ? { color } : {}) }).select('id').single();
         if (e) throw e;
         dietId = (data as { id: string }).id;
       }
@@ -550,6 +570,8 @@ function DietModal({ diet, meals, fixedReady, displayReady, existingNames, appro
           ...(diet && diet.name !== trimmed ? { name: { from: diet.name, to: trimmed } } : {}),
           ...(displayReady && (diet?.display_only ?? true) !== displayOnly
             ? { display_only: { from: diet ? (diet.display_only ?? true) : null, to: displayOnly } } : {}),
+          ...(colorReady && (diet?.color ?? null) !== color
+            ? { color: { from: diet?.color ?? null, to: color } } : {}),
           ...listDiffDetails('diet_exclusions', (diet?.exclusions ?? []).map(describe), items.map(describe)),
           ...(fixedReady ? listDiffDetails(
             'diet_fixed_meals',
@@ -588,6 +610,18 @@ function DietModal({ diet, meals, fixedReady, displayReady, existingNames, appro
               <input value={description} onChange={e => setDescription(e.target.value)} className="input-field" placeholder="ملاحظة قصيرة عن النظام" />
             </div>
           </div>
+
+          {colorReady && (
+            <div className="flex items-center gap-3 flex-wrap border border-slate-200 rounded-xl p-3">
+              <div className="flex-1 min-w-[12rem]">
+                <span className="block text-sm font-semibold text-slate-700">لون ستيكر الغداء والعشاء</span>
+                <span className="block text-xs text-slate-500 mt-0.5">
+                  خلفية ستيكر كل من عنده هذا النظام. من عنده أكثر من نظام ملوّن ينقسم ستيكره بألوان أنظمته.
+                </span>
+              </div>
+              <StickerColorField value={color} onChange={setColor} />
+            </div>
+          )}
 
           {displayReady && (
             <label className={`flex items-start gap-3 cursor-pointer select-none border rounded-xl p-3 transition-colors ${displayOnly ? 'border-slate-300 bg-slate-50' : 'border-amber-300 bg-amber-50'}`}>
