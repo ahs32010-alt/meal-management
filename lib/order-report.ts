@@ -457,8 +457,12 @@ export async function buildOrderReport(
     itemFinalCounts[id] = (mainQty[id] || 0) * mult + (extraQtyMap[id] ?? 0) + (altQty[id] || 0) + (fixedQty[id] || 0);
   }
 
+  // `select('*')` يجيب عمود snapshot نفسه — لو رجّعناه، كل حفظ جديد يخزّن اللقطة
+  // السابقة داخل اللقطة الجديدة فيكبر الصف والرد مع كل فتح. ولا أحد يقرأه من هنا.
+  const { snapshot: _previousSnapshot, ...orderWithoutSnapshot } = order as Record<string, unknown>;
+
   return {
-    order,
+    order: orderWithoutSnapshot,
     itemsSummary,
     beneficiaryDetails,
     mainMealsSummary,

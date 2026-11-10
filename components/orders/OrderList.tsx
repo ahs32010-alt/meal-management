@@ -57,8 +57,9 @@ export default function OrderList() {
 
   const fetchData = useCallback(async () => {
     // آخر لقطة تُرسم فوراً، والطلب يستبدلها بمجرّد وصوله — راجع lib/view-snapshot.ts
-    const snap = readSnapshot<{ orders: DailyOrder[]; meals: Meal[] }>('orders');
-    if (snap) { setOrders(snap.orders); setMeals(snap.meals); setLoading(false); }
+    const snap = readSnapshot<{ orders: DailyOrder[]; meals: Meal[]; counts?: Record<EntityType, EntityCounts> }>('orders');
+    // الأعداد مع اللقطة: بدونها كانت الأرقام تطلع أصفار لين توصل المحظورات
+    if (snap) { setOrders(snap.orders); setMeals(snap.meals); if (snap.counts) setCounts(snap.counts); setLoading(false); }
     else { setLoading(true); }
     try {
       // Try with the snapshot + entity_type columns first; fall back if either
@@ -210,6 +211,9 @@ export default function OrderList() {
       }
 
       setCounts(nextCounts);
+      if (freshOrders && freshMeals && bensResult.data && exclusionsResult.data) {
+        writeSnapshot('orders', { orders: freshOrders, meals: freshMeals, counts: nextCounts });
+      }
     } catch (err) {
       console.error('Fetch error:', err);
     } finally {

@@ -1,6 +1,6 @@
 'use client';
 
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
 
 // ─── أنواع البيانات ───────────────────────────────────────────────────────────
@@ -168,7 +168,7 @@ export interface BackupRow {
 }
 
 // مدة الاحتفاظ بالنسخ التلقائية بالأيام — الأقدم تُحذف (نفس سياسة
-// create_daily_backup في backup-daily-7days-migration.sql).
+// create_daily_backup في backup-nightly-fix-migration.sql).
 // النسخ اليدوية و pre_restore لا تُحذف تلقائياً (تُترك للمستخدم).
 export const AUTO_BACKUP_RETENTION_DAYS = 7;
 
@@ -213,8 +213,30 @@ const TABLE_KEY: Record<BackupTableName, string> = {
 };
 
 /**
- * يجمع لقطة كاملة من كل الجداول المعنية. يتجاهل بهدوء أي جدول/عمود غير
- * موجود (مثلاً لو ما اتشغّل migration بعد) — يُسجّل صفر صفوف لذلك الجدول.
+ * أعمدة daily_orders في النسخة — كل شيء عدا snapshot.
+ *
+ * لقطات التقارير ثقيلة (٣٨٩ أمراً × مئات الكيلوبايت)، فقراءتها دفعة واحدة كانت
+ * تفشل وتُحفظ النسخة بـ٠ أوامر، وتجميعها في السيرفر كان يُسقط قاعدة البيانات.
+ * تُحفظ اللقطات صفاً بصف في order_snapshot_archive وتعود تلقائياً عند الاستعادة
+ * (backup-nightly-fix-migration.sql). أي عمود جديد لازم يُضاف هنا — يتحقق منه
+ * tests/backup-coverage.test.ts.
+ */
+export const DAILY_ORDERS_BACKUP_COLUMNS =
+  'id, date, meal_type, created_at, week_number, snapshot_at, day_of_week, entity_type';
+
+/** الجدول غير موجود أصلاً (ترقيته ما اتشغّلت) — الحالة الوحيدة المقبولة لتخطّيه. */
+export function isMissingTableError(error: { code?: string; message?: string }): boolean {
+  return (
+    error.code === '42P01' ||
+    error.code === 'PGRST205' ||
+    /relation .* does not exist|could not find the table/i.test(error.message ?? '')
+  );
+}
+
+/**
+ * يجمع لقطة كاملة من كل الجداول المعنية. يتخطى الجدول غير الموجود فقط (ترقيته
+ * ما اتشغّلت بعد) ويسجّله بصفر صفوف. أما تعذّر قراءة جدول موجود فيوقف النسخة
+ * كلها بخطأ صريح: نسخة بلا جدول أخطر من عدم وجود نسخة، لأن الاستعادة تمسحه.
  *
  * ⚠️ القراءة على دفعات إلزامية هنا: PostgREST يقصّ أي استعلام عند ١٠٠٠ صف
  * **بدون أي خطأ**. جدول exclusions وحده تعدّى ١٦٠٠ صف، فكانت النسخة تُحفظ
@@ -231,29 +253,30 @@ export async function createSnapshot(supabase: SupabaseClient): Promise<{
 }> {
   const tables: BackupSnapshot['tables'] = {} as BackupSnapshot['tables'];
   const counts: BackupSummary['counts'] = {} as BackupSummary['counts'];
+  const readFailures: string[] = [];
 
   for (const t of BACKUP_TABLES) {
     try {
+      const columns = t === 'daily_orders' ? DAILY_ORDERS_BACKUP_COLUMNS : '*';
       const { data, error } = await fetchAllRows<Record<string, unknown>>((from, to) =>
-        supabase.from(t).select('*').order(TABLE_KEY[t]).range(from, to));
-      if (error) {
-        if (process.env.NODE_ENV !== 'production') {
-          console.warn(`backup: skipping ${t}:`, error.message);
-        }
-        tables[t] = [];
-        counts[t] = 0;
+        supabase.from(t).select(columns).order(TABLE_KEY[t]).range(from, to) as unknown as PromiseLike<{
+          data: Record<string, unknown>[] | null;
+          error: PostgrestError | null;
+        }>);
+      if (error && !isMissingTableError(error)) {
+        readFailures.push(`${t}: ${error.message}`);
         continue;
       }
       const rows = data ?? [];
       tables[t] = rows;
       counts[t] = rows.length;
     } catch (err) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn(`backup: error fetching ${t}:`, err);
-      }
-      tables[t] = [];
-      counts[t] = 0;
+      readFailures.push(`${t}: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  if (readFailures.length > 0) {
+    throw new Error(`تعذّرت قراءة ${readFailures.length} جدول، ولم تُحفظ النسخة — ${readFailures.join(' • ')}`);
   }
 
   const total = Object.values(counts).reduce((s, n) => s + n, 0);
@@ -350,7 +373,8 @@ export async function saveBackup(
   if (!data) throw new Error('insert returned no data');
 
   // استبقاء آخر N تلقائية فقط (اليدوية و pre_restore تُترك للمستخدم).
-  if (opts.triggerType === 'auto_daily') {
+  // نسخة فشل تحقّقها لا تُزيح نسخاً أقدم ربما تكون سليمة.
+  if (opts.triggerType === 'auto_daily' && summary.verified !== false) {
     await pruneOldAutoBackups(supabase);
   }
 

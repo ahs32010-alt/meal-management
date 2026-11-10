@@ -5,7 +5,7 @@
  * (كان هو محتوى صفحة ستيكرات الغداء والعشاء كلها قبل إضافة تبويب «حسب الوجبة»).
  */
 
-import { Fragment, useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Fragment, memo, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Beneficiary } from '@/lib/types';
 import StickerCard from './ld-sticker-card';
 import type { PdfMode } from './ld-pdf-export';
@@ -18,6 +18,27 @@ import {
 } from './ld-settings';
 import { TIER_LABELS, colorsInUse, sortByTierAndDiet, stickerColorKey, stickerTier, tierDietGroups } from './ld-diet-order';
 // `./ld-word-export` pulls in the docx package (~140KB). Loaded lazily on demand.
+
+/**
+ * ستيكر واحد — محفوظ بـmemo عشان ما تنرسم كل الستيكرات (ومعها قياس النصوص
+ * الثقيل) مع كل حركة في الصفحة، مثل تقدّم تصدير الـPDF أو الكتابة في المقاس.
+ */
+const FixedSticker = memo(function FixedSticker({ ben, headerUrl, widthCm, heightCm, bgColor, setNode }: {
+  ben: Beneficiary;
+  headerUrl: string | null;
+  widthCm: number;
+  heightCm: number;
+  bgColor?: string;
+  setNode: (id: string, el: HTMLDivElement | null) => void;
+}) {
+  const innerRef = useCallback((el: HTMLDivElement | null) => setNode(ben.id, el), [ben.id, setNode]);
+  return (
+    <div className="relative">
+      {ben.custom_ld_meals && <CustomLdBadge />}
+      <StickerCard ben={ben} headerUrl={headerUrl} widthCm={widthCm} heightCm={heightCm} bgColor={bgColor} innerRef={innerRef} />
+    </div>
+  );
+});
 
 export default function LdFixedTab({ settings }: { settings: LdSettings }) {
   const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
@@ -224,12 +245,8 @@ export default function LdFixedTab({ settings }: { settings: LdSettings }) {
                     index={[...groupCounts.keys()].indexOf(groupKeyOf(ben)) + 1} />
                 )}
                 {/* الشارة خارج عقدة الستيكر (innerRef) — لا تدخل الـPDF */}
-                <div className="relative">
-                  {ben.custom_ld_meals && <CustomLdBadge />}
-                  <StickerCard ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
-                    bgColor={diet ? dietColors[diet] : undefined}
-                    innerRef={el => setNode(ben.id, el)} />
-                </div>
+                <FixedSticker ben={ben} headerUrl={headerUrl} widthCm={w} heightCm={h}
+                  bgColor={diet ? dietColors[diet] : undefined} setNode={setNode} />
               </Fragment>
             );
           })}

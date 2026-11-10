@@ -115,7 +115,13 @@ export default function DashboardHome() {
   // ── Fetch stats + today's orders + recent orders (with item counts) ─────
   const fetchStats = useCallback(async () => {
     const today = todayISO();
-    const [bensRes, compRes, meals, orders, excls, todayRes, recentRes] = await Promise.all([
+    const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
+    // كل طلبات اللوحة موجة واحدة: ما فيها طلب يعتمد على غيره، وكانت موجتين متتاليتين
+    // تكلّفان رحلة شبكة زائدة. فشل أي طلب يفضّي قسمه بس (عمود ناقص أو صلاحية).
+    const [
+      bensRes, compRes, meals, orders, excls, todayRes, recentRes,
+      peopleRes, mealsRes, actRes, peopleWeek, mealsWeek, inactiveRes, backupRes,
+    ] = await Promise.all([
       supabase.from('beneficiaries').select('id', { count: 'exact', head: true }).eq('entity_type', 'beneficiary'),
       supabase.from('beneficiaries').select('id', { count: 'exact', head: true }).eq('entity_type', 'companion'),
       supabase.from('meals').select('id', { count: 'exact', head: true }),
@@ -123,6 +129,16 @@ export default function DashboardHome() {
       supabase.from('exclusions').select('id', { count: 'exact', head: true }),
       supabase.from('daily_orders').select('id, date, meal_type, order_items(id)').eq('date', today),
       supabase.from('daily_orders').select('id, date, meal_type, order_items(id)').order('date', { ascending: false }).limit(6),
+      supabase.from('beneficiaries').select('id, name, code, entity_type, is_active, created_at')
+        .order('created_at', { ascending: false }).limit(6),
+      supabase.from('meals').select('id, name, type, is_snack, entity_type, created_at')
+        .order('created_at', { ascending: false }).limit(6),
+      supabase.from('activity_log').select('id, user_name, user_email, action, entity_type, entity_name, details, created_at')
+        .order('created_at', { ascending: false }).limit(8),
+      supabase.from('beneficiaries').select('id', { count: 'exact', head: true }).gte('created_at', weekAgo),
+      supabase.from('meals').select('id', { count: 'exact', head: true }).gte('created_at', weekAgo),
+      supabase.from('beneficiaries').select('id, name, entity_type').eq('is_active', false).order('name').limit(50),
+      supabase.from('backups').select('created_at, trigger_type').order('created_at', { ascending: false }).limit(1),
     ]);
 
     // لو عمود entity_type ما يطلع (الـmigration ما اتشغّل)، نرجع للسلوك القديم
@@ -153,21 +169,6 @@ export default function DashboardHome() {
     setTodaysOrders((todayRes.data ?? []).map(mapRow));
     setRecentOrders((recentRes.data ?? []).map(mapRow));
 
-    // ── آخر الإضافات + التنبيهات — كل طلب مستقل، وفشل أي واحد (عمود ناقص
-    //    قبل migration، أو صلاحية) يفضّي قسمه بس بدون ما يكسر بقية اللوحة.
-    const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
-    const [peopleRes, mealsRes, actRes, peopleWeek, mealsWeek, inactiveRes, backupRes] = await Promise.all([
-      supabase.from('beneficiaries').select('id, name, code, entity_type, is_active, created_at')
-        .order('created_at', { ascending: false }).limit(6),
-      supabase.from('meals').select('id, name, type, is_snack, entity_type, created_at')
-        .order('created_at', { ascending: false }).limit(6),
-      supabase.from('activity_log').select('id, user_name, user_email, action, entity_type, entity_name, details, created_at')
-        .order('created_at', { ascending: false }).limit(8),
-      supabase.from('beneficiaries').select('id', { count: 'exact', head: true }).gte('created_at', weekAgo),
-      supabase.from('meals').select('id', { count: 'exact', head: true }).gte('created_at', weekAgo),
-      supabase.from('beneficiaries').select('id, name, entity_type').eq('is_active', false).order('name').limit(50),
-      supabase.from('backups').select('created_at, trigger_type').order('created_at', { ascending: false }).limit(1),
-    ]);
     setRecentPeople(((peopleRes.data ?? []) as any[]).map(r => ({
       ...r, entity_type: r.entity_type ?? 'beneficiary', is_active: r.is_active !== false,
     })));

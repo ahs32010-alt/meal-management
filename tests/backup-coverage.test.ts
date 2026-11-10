@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   BACKUP_TABLES,
   BACKUP_TABLE_LABELS,
+  createSnapshot,
+  DAILY_ORDERS_BACKUP_COLUMNS,
+  isMissingTableError,
   restoreFromSnapshot,
   rowsForClientInsert,
   snapshotMissingTables,
@@ -22,6 +26,7 @@ const INTENTIONALLY_EXCLUDED = [
   'activity_log',        // السجل لا يتأثر
   'pending_actions',     // طابور موافقات لحظي
   'backup_job_log',      // سجل تشغيلات النسخة الليلية نفسها — لا يُستعاد
+  'order_snapshot_archive', // لقطات التقارير خارج النسخة — تعود بـtrigger عند الاستعادة
   'telegram_link_codes', // ربط حسابات تيليجرام بالمستخدمين — يتبع app_users
   'telegram_links',
   'telegram_pending',
@@ -259,5 +264,96 @@ describe('أوراق Excel المقروءة', () => {
     const meta = buildBackupMetaRows(snap);
     expect(meta).toContainEqual({ 'الحقل': 'عدد تعديلات منيو المستفيدين (beneficiary_menu_overrides)', 'القيمة': '1' });
     expect(meta).toHaveLength(2 + BACKUP_TABLES.length);
+  });
+});
+
+describe('createSnapshot — قراءة الجداول', () => {
+  type Failure = { code?: string; message: string };
+
+  /** عميل وهمي: كل جدول يرجّع صفوفه، ويسجّل الأعمدة المطلوبة من daily_orders. */
+  function fakeClient(rows: Record<string, unknown[]>, failures: Record<string, Failure> = {}) {
+    const selected: Record<string, string> = {};
+    const supabase = {
+      rpc: async () => ({ data: null, error: { message: 'no rpc' } }),
+      from: (t: string) => {
+        const result = () => failures[t]
+          ? { data: null, count: null, error: failures[t] }
+          : { data: rows[t] ?? [], count: (rows[t] ?? []).length, error: null };
+        const q = {
+          select: (cols: string, opts?: { head?: boolean }) => {
+            if (!opts?.head) selected[t] = cols;
+            return q;
+          },
+          order: () => q,
+          range: () => q,
+          then: (resolve: (v: unknown) => unknown) => resolve(result()),
+        };
+        return q;
+      },
+    } as unknown as SupabaseClient;
+    return { supabase, selected };
+  }
+
+  it('لا تطلب عمود snapshot الثقيل من daily_orders وتحفظ بقية الأعمدة', async () => {
+    const { supabase, selected } = fakeClient({ daily_orders: [{ id: 'o1' }] });
+    const { summary } = await createSnapshot(supabase);
+    expect(selected.daily_orders).toBe(DAILY_ORDERS_BACKUP_COLUMNS);
+    expect(selected.daily_orders.split(',').map(c => c.trim())).not.toContain('snapshot');
+    expect(summary.counts.daily_orders).toBe(1);
+    expect(summary.verified).toBe(true);
+  });
+
+  it('تعذّر قراءة جدول موجود يوقف النسخة بدل حفظها ناقصة', async () => {
+    const { supabase } = fakeClient({}, {
+      daily_orders: { code: '57014', message: 'canceling statement due to statement timeout' },
+    });
+    await expect(createSnapshot(supabase)).rejects.toThrow(/daily_orders.*statement timeout/);
+  });
+
+  it('الجدول غير الموجود فقط يُتخطى بصفر صفوف', async () => {
+    const { supabase } = fakeClient({}, {
+      sticker_splits: { code: '42P01', message: 'relation "public.sticker_splits" does not exist' },
+    });
+    const { snapshot, summary } = await createSnapshot(supabase);
+    expect(snapshot.tables.sticker_splits).toEqual([]);
+    expect(summary.counts.sticker_splits).toBe(0);
+  });
+
+  it('isMissingTableError لا يخلط غياب عمود بغياب جدول', () => {
+    expect(isMissingTableError({ code: 'PGRST205', message: "Could not find the table 'public.x'" })).toBe(true);
+    expect(isMissingTableError({ code: '42703', message: 'column daily_orders.foo does not exist' })).toBe(false);
+  });
+
+  it('DAILY_ORDERS_BACKUP_COLUMNS تغطي كل عمود أضافته ملفات الترقية', () => {
+    const columns = new Set(DAILY_ORDERS_BACKUP_COLUMNS.split(',').map(c => c.trim()));
+    // snapshot مستبعد عمداً، و week_of_month أُعيد تسميته إلى week_number
+    const ignored = new Set(['snapshot', 'week_of_month']);
+    const missing: string[] = [];
+    for (const f of readdirSync(SUPABASE_DIR).filter(n => n.endsWith('.sql'))) {
+      const sql = readFileSync(join(SUPABASE_DIR, f), 'utf8');
+      for (const m of sql.matchAll(/alter table (?:public\.)?daily_orders\s+add column (?:if not exists )?([a-z_]+)/gi)) {
+        const col = m[1].toLowerCase();
+        if (!columns.has(col) && !ignored.has(col)) missing.push(`${f}: ${col}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+});
+
+describe('الجدولة الليلية', () => {
+  const sql = readFileSync(join(SUPABASE_DIR, 'backup-nightly-fix-migration.sql'), 'utf8');
+
+  it('المهمة وزر تغيير الوقت يشغّلان الإجراء الذي يسجّل البداية', () => {
+    const schedules = [...sql.matchAll(/cron\.schedule\([^\n]*/g)].map(m => m[0]);
+    expect(schedules).toHaveLength(2);
+    for (const s of schedules) {
+      expect(s).toContain('call public.run_daily_backup()');
+      expect(s).not.toContain('select public.create_daily_backup');
+    }
+  });
+
+  it('لا تدخل لقطات التقارير ولا الأرشيف في النسخة الخام', () => {
+    expect(sql).toContain("table_name not in ('backups', 'order_snapshot_archive')");
+    expect(sql).toContain("column_name <> 'snapshot'");
   });
 });

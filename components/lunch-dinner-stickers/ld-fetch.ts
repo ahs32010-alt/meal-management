@@ -28,6 +28,9 @@ export async function fetchStickerBeneficiaries(
         .order('name').order('id').range(from, to);
     });
 
+  // أسماء الأنظمة ما تعتمد على المستفيدين — تنطلق معهم بدل رحلة شبكة بعدهم
+  const labelsPromise = fetchDietLabels();
+
   // تدرّج: مع الأعمدة الجديدة → بدونها (الـmigration ما اشتغل) → بدون entity_type
   // custom_ld_meals (علامة فرز «وجبات غداء وعشاء مخصصة») اختياري قبل ترقيته
   let res = await attempt(`${COLS}, ${FLAG_COLS}, custom_ld_meals, is_active, entity_type`, entityFilter);
@@ -45,14 +48,22 @@ export async function fetchStickerBeneficiaries(
   // النظام الغذائي في الستيكر = «النظام الغذائي الأساسي» (beneficiary_diets) لا
   // الخانة النصية القديمة: نكتب أسماء أنظمته في diet_type فتمشي عليها الطباعة
   // والترتيب والألوان وملف Word كما هي. بلا نظام = فاضي («نظام غذائي عادي»).
-  const labels = await fetchDietLabels();
+  const labels = await labelsPromise;
   return { data: rows.map(b => ({ ...b, diet_type: labels.get(b.id) ?? '' })), error: null };
 }
 
 const NORMAL_DIET = 'نظام غذائي عادي';
 
 /** المستفيد ← أسماء أنظمته الأساسية مرتّبة («نظام غذائي عادي» أولاً) ومفصولة بـ « - » */
-export async function fetchDietLabels(): Promise<Map<string, string>> {
+export function fetchDietLabels(): Promise<Map<string, string>> {
+  // الستيكرات والإعدادات يطلبونها في نفس اللحظة عند الفتح — طلب واحد يكفيهم
+  labelsInflight ??= readDietLabels().finally(() => { labelsInflight = null; });
+  return labelsInflight;
+}
+
+let labelsInflight: Promise<Map<string, string>> | null = null;
+
+async function readDietLabels(): Promise<Map<string, string>> {
   const res = await fetchAllRows((from, to) =>
     supabase.from('beneficiary_diets').select('beneficiary_id, diet_id, diet_systems(name)')
       .order('beneficiary_id').order('diet_id').range(from, to));

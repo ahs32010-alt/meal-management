@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase-client';
@@ -127,6 +127,9 @@ function attachMeals(
     fixed_meals: (b.fixed_meals ?? []).map(fm => ({ ...fm, meals: byId.get(fm.meal_id) })),
   })) as unknown as Beneficiary[];
 }
+
+// مقارن واحد مشترك: أسرع بكثير من localeCompare داخل الفرز وبنفس النتيجة
+const AR_COLLATOR = new Intl.Collator('ar', { numeric: true, sensitivity: 'base' });
 
 export default function BeneficiaryList({ entityType = 'beneficiary' }: BeneficiaryListProps = {}) {
   const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
@@ -527,11 +530,8 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     exportXLSX(rows, `${fileLabel}_${new Date().toISOString().slice(0, 10)}.xlsx`, entityPlural);
   };
 
-  const filtered = beneficiaries.filter(b => {
-    if (!search.trim()) return true;
-
-    const q = search.trim().toLowerCase();
-
+  // نص البحث لكل مستفيد يُبنى مرة وحدة لكل تحميل، مو مع كل حرف ورسم
+  const searchIndex = useMemo(() => beneficiaries.map(b => {
     const exclusionMealNames = (b.exclusions ?? [])
       .map(e => e.meals?.name ?? '').join(' ');
     const alternativeMealNames = (b.exclusions ?? [])
@@ -553,15 +553,21 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       fixedMealNames,
     ].filter(Boolean).join(' ').toLowerCase();
 
-    return haystack.includes(q);
-  });
+    return { b, haystack };
+  }), [beneficiaries]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return beneficiaries;
+    return searchIndex.filter(x => x.haystack.includes(q)).map(x => x.b);
+  }, [beneficiaries, searchIndex, search]);
 
   const toggleSort = (key: typeof sortKey) => {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortKey(key); setSortDir('asc'); }
   };
 
-  const sorted = [...filtered].sort((a, b) => {
+  const sorted = useMemo(() => [...filtered].sort((a, b) => {
     // Numeric sorts (counts)
     if (sortKey === 'fixed_count') {
       const av = (a.fixed_meals ?? []).length;
@@ -588,9 +594,9 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
     if (aEmpty && !bEmpty) return 1;
     if (!aEmpty && bEmpty) return -1;
 
-    const cmp = av.localeCompare(bv, 'ar', { numeric: true, sensitivity: 'base' });
+    const cmp = AR_COLLATOR.compare(av, bv);
     return sortDir === 'asc' ? cmp : -cmp;
-  });
+  }), [filtered, sortKey, sortDir]);
 
   const pagination = usePagination(sorted, {
     pageSize: 50,

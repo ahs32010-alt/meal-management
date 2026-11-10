@@ -24,6 +24,26 @@ function fakeSupabase(tables: Record<string, unknown[]>): SupabaseClient {
 
 const meal = (id: string, name: string, is_snack = false) => ({ id, name, english_name: '', type: 'main', is_snack });
 
+describe('buildOrderReport — عمود snapshot', () => {
+  it('لا تدخل اللقطة السابقة داخل التقرير الجديد', async () => {
+    const rice = meal('rice', 'رز');
+    const supabase = fakeSupabase({
+      daily_orders: [{
+        id: 'o1', date: '2026-10-01', meal_type: 'lunch', day_of_week: 4, week_number: 2, entity_type: 'beneficiary',
+        snapshot: { order: { snapshot: { order: {} } } },
+        order_items: [{ id: 'i1', meal_id: 'rice', display_name: null, extra_quantity: 0, category: 'hot', multiplier: 1, meals: rice }],
+      }],
+      beneficiaries: [{ id: 'a', name: 'أ', code: '1', category: '', created_at: '', exclusions: [], fixed_meals: [] }],
+      meals: [rice],
+    });
+
+    const r = await buildOrderReport(supabase, 'o1') as { order: Record<string, unknown> };
+    expect(r.order).not.toHaveProperty('snapshot');
+    // بقية بيانات الأمر تبقى كما هي — الواجهات تقرأها من report.order
+    expect(r.order).toMatchObject({ id: 'o1', meal_type: 'lunch', week_number: 2 });
+  });
+});
+
 describe('buildOrderReport — اسم الصنف في الأمر (display_name)', () => {
   it('الاسم المعدّل يبقى في إحصاء الأصناف حتى لو كان الصنف بديلاً لمستفيد', async () => {
     const rice = meal('rice', 'رز');

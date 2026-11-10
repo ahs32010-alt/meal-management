@@ -1369,7 +1369,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                     const meal = mealById(fe.meal_id);
                     if (!meal) return null;
                     const isSnackEntry = meal.is_snack;
-                    const labelColor = isSnackEntry ? 'text-purple-700 bg-purple-50' : {
+                    // لون الوجبة دائماً — السناك له شارة مستقلة جنبها، فيبان لأي وجبة هو
+                    const labelColor = {
                       breakfast: 'text-amber-700 bg-amber-50',
                       lunch: 'text-emerald-700 bg-emerald-50',
                       dinner: 'text-blue-700 bg-blue-50',
@@ -1382,8 +1383,13 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                           <div className="flex items-center gap-2">
                             <span className="font-bold text-sm text-slate-800">{meal.name}</span>
                             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${labelColor}`}>
-                              {isSnackEntry ? 'سناك' : MEAL_TYPE_LABELS[fe.meal_type]}
+                              {MEAL_TYPE_LABELS[fe.meal_type]}
                             </span>
+                            {isSnackEntry && (
+                              <span className="text-xs font-semibold px-2 py-0.5 rounded-full text-purple-700 bg-purple-50">
+                                سناك
+                              </span>
+                            )}
                             {/* علامة «صنف بديل» — تنقل الصنف من جدول الأصناف اليومية
                                 الثابتة إلى جدول الأصناف البديلة في أمر التشغيل */}
                             <button

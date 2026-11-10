@@ -398,6 +398,10 @@ export default function MenuView() {
     if (loadedMeals) setMeals(loadedMeals);
     if (loadedItems && loadedMeals) writeSnapshot(snapKey, { items: loadedItems, meals: loadedMeals });
 
+    // الجدول يظهر الآن بدون انتظار الأعداد (أبطأ قراءة في الصفحة) — benReady يحمي
+    // خانة العدد لين توصل الأرقام، فما ينعرض ولا ينحفظ رقم ناقص.
+    setLoading(false);
+
     // جلب إجمالي المستفيدين والمحظورات لعرض الأعداد الفعلية في الخلايا
     try {
       const [bensRes, exclRes, inactiveSet] = await countsPromise;
@@ -422,8 +426,6 @@ export default function MenuView() {
     } catch {
       setCountsWarning('تعذّرت قراءة أعداد المستفيدين/المحظورات — الأعداد المعروضة غير مؤكدة، وتعديل العدد معطّل حتى تُقرأ.');
     }
-
-    setLoading(false);
 
     // إصلاح ذاتي صامت لصفوف قديمة أرقامها متضاربة (بقايا استيراد بمنطق قديم):
     // نُثبّت الفئة على فئة الصنف ونجعل الـposition متسلسلاً بلا فجوات. الترتيب

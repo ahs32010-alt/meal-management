@@ -146,6 +146,9 @@ export async function confirmOffline(): Promise<boolean> {
 
 /** رجعت بيانات طازجة من الخادم — نحدّث ختم آخر مزامنة. */
 export function markDataFresh(at: number = Date.now()) {
+  // الصفحة تطلق عشرات القراءات دفعة وحدة: ختم واحد بالثانية يكفي، بدل كتابة
+  // localStorage وإعادة رسم الشريط مع كل قراءة. المقطوع يمر دائماً ليرجع online.
+  if (state.online && state.lastSyncAt !== null && at - state.lastSyncAt >= 0 && at - state.lastSyncAt < 1000) return;
   stopProbing();
   if (typeof window !== 'undefined') {
     try {
