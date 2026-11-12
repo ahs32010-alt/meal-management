@@ -336,6 +336,12 @@ export default function MealList() {
   const editNeedsApproval   = needsApproval(currentUser, 'meals', 'edit');
   const deleteNeedsApproval = needsApproval(currentUser, 'meals', 'delete');
   const myPending = useMyPending('meal');
+  // «أقسام المطبخ» صلاحية مستقلة: من يملكها وحدها يرى تبويب الأقسام فقط،
+  // ومن يملك الأصناف وحدها لا يرى زر الأقسام.
+  const canViewMeals    = can(currentUser, 'meals', 'view');
+  const canViewSections = can(currentUser, 'kitchen_sections', 'view');
+  const effectiveView: ViewMode = !canViewMeals && canViewSections ? 'by_section'
+                                : !canViewSections ? 'by_meal' : viewMode;
 
   // كل ما تغيّر الـtab نخزن الاختيار ونعيد التحميل.
   const switchEntity = useCallback((next: EntityType) => {
@@ -912,7 +918,8 @@ export default function MealList() {
         </div>
       </div>
 
-      {/* تبديل طريقة العرض */}
+      {/* تبديل طريقة العرض — يظهر فقط لمن يملك الصلاحيتين */}
+      {canViewMeals && canViewSections && (
       <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl w-fit">
         {([['by_meal', 'حسب الوجبة'], ['by_section', 'أقسام المطبخ']] as [ViewMode, string][]).map(([mode, label]) => (
           <button
@@ -927,16 +934,19 @@ export default function MealList() {
           </button>
         ))}
       </div>
+      )}
 
-      {viewMode === 'by_section' && (
+      {effectiveView === 'by_section' && canViewSections && (
         <KitchenSectionsView
           meals={meals}
           search={search}
-          canManage={canEdit && !editNeedsApproval}
+          canAdd={can(currentUser, 'kitchen_sections', 'add')}
+          canEdit={can(currentUser, 'kitchen_sections', 'edit')}
+          canDelete={can(currentUser, 'kitchen_sections', 'delete')}
         />
       )}
 
-      {viewMode === 'by_meal' && MEAL_TYPES.map(mealType => {
+      {effectiveView === 'by_meal' && MEAL_TYPES.map(mealType => {
         const colors = TYPE_COLORS[mealType];
         return (
           <div key={mealType} className="space-y-3">

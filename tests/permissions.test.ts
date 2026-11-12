@@ -42,3 +42,34 @@ describe('emptyPermissions()', () => {
     expect(p.settings).toEqual({ view: false, add: false, edit: false, delete: false });
   });
 });
+
+describe('صلاحيات أقسام المطبخ وحصر الأقسام', () => {
+  it('تظهر في جدول الصلاحيات بإجراءاتها', async () => {
+    const { PAGES, PAGE_AVAILABLE_ACTIONS } = await import('@/lib/permissions');
+    expect(PAGES.map(p => p.key)).toEqual(expect.arrayContaining(['kitchen_sections', 'kitchen_report']));
+    expect(PAGE_AVAILABLE_ACTIONS.kitchen_sections).toEqual(['view', 'add', 'edit', 'delete']);
+    expect(PAGE_AVAILABLE_ACTIONS.kitchen_report).toEqual(['view']);
+  });
+
+  it('صلاحية الجزء وحدها تفتح الصفحة الأم (الرابط في القائمة)', async () => {
+    const { canOpenPage } = await import('@/lib/permissions');
+    const u = baseUser({ permissions: { kitchen_sections: { view: true, add: false, edit: false, delete: false } } });
+    expect(canOpenPage(u, 'meals')).toBe(true);
+    expect(can(u, 'meals', 'view')).toBe(false);
+    expect(canOpenPage(u, 'reports')).toBe(false);
+    const r = baseUser({ permissions: { kitchen_report: { view: true, add: false, edit: false, delete: false } } });
+    expect(canOpenPage(r, 'reports')).toBe(true);
+    expect(canOpenPage(r, 'meals')).toBe(false);
+  });
+
+  it('أقسام المطبخ تنفّذ مباشرة — بلا خيار موافقة', async () => {
+    const { needsApproval, isApprovalAvailable } = await import('@/lib/permissions');
+    const u = baseUser({
+      permissions: { kitchen_sections: { view: true, add: true, edit: true, delete: true } },
+      approval_required: { kitchen_sections: { add: true, edit: true, delete: true } },
+    });
+    expect(needsApproval(u, 'kitchen_sections', 'edit')).toBe(false);
+    expect(isApprovalAvailable('kitchen_sections', 'add')).toBe(false);
+    expect(isApprovalAvailable('meals', 'add')).toBe(true);
+  });
+});

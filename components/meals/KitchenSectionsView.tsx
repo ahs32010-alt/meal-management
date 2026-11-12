@@ -36,8 +36,12 @@ interface Props {
   /** أصناف التبويب الحالي (مستفيدين أو مرافقين) — كما حمّلتها صفحة الأصناف */
   meals: Meal[];
   search: string;
-  /** إنشاء/تعديل الأقسام وتوزيع الأصناف عليها */
-  canManage: boolean;
+  /** صلاحيات «أقسام المطبخ»: إضافة قسم */
+  canAdd: boolean;
+  /** تعديل اسم/لون/ترتيب القسم + توزيع الأصناف عليه */
+  canEdit: boolean;
+  /** حذف قسم */
+  canDelete: boolean;
 }
 
 function MealTypeBadge({ meal }: { meal: Meal }) {
@@ -237,7 +241,7 @@ function AssignMealsModal({
 }
 
 // ── العرض الرئيسي ────────────────────────────────────────────────────────────
-export default function KitchenSectionsView({ meals, search, canManage }: Props) {
+export default function KitchenSectionsView({ meals, search, canAdd, canEdit, canDelete }: Props) {
   const [sections, setSections] = useState<KitchenSection[]>([]);
   const [sectionByMeal, setSectionByMeal] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -423,7 +427,7 @@ export default function KitchenSectionsView({ meals, search, canManage }: Props)
         <p className="text-sm text-slate-500">
           {sections.length} قسم · {assignedCount} صنف موزّع · {meals.length - assignedCount} بدون قسم
         </p>
-        {canManage && (
+        {canAdd && (
           <button onClick={() => setFormFor('new')} className="btn-primary text-sm">+ قسم جديد</button>
         )}
       </div>
@@ -441,12 +445,17 @@ export default function KitchenSectionsView({ meals, search, canManage }: Props)
                   <span className="font-bold text-sm text-slate-800 truncate">{s.name}</span>
                   <span className="badge text-xs bg-white border border-slate-200 text-slate-600">{total} صنف</span>
                 </div>
-                {canManage && (
+                {(canEdit || canDelete) && (
                   <div className="flex items-center gap-0.5 shrink-0">
+                    {canEdit && <>
                     <button onClick={() => moveSection(s, -1)} disabled={idx === 0 || busy === s.id} title="تقديم" className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-white rounded-lg disabled:opacity-30">▲</button>
                     <button onClick={() => moveSection(s, 1)} disabled={idx === sections.length - 1 || busy === s.id} title="تأخير" className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-white rounded-lg disabled:opacity-30">▼</button>
                     <button onClick={() => setFormFor(s)} title="تعديل القسم" className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg">✎</button>
+                    </>}
+                    {canDelete && (
                     <button onClick={() => deleteSection(s)} disabled={busy === s.id} title="حذف القسم" className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-30">🗑</button>
+                    )}
+                    {canEdit && (
                     <button
                       onClick={() => setAssignFor(s)}
                       className="mr-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border text-white hover:opacity-90"
@@ -454,6 +463,7 @@ export default function KitchenSectionsView({ meals, search, canManage }: Props)
                     >
                       + أصناف
                     </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -467,7 +477,7 @@ export default function KitchenSectionsView({ meals, search, canManage }: Props)
                         <span className="font-medium text-sm text-slate-800">{m.name}</span>
                         <MealTypeBadge meal={m} />
                       </div>
-                      {canManage && (
+                      {canEdit && (
                         <button
                           onClick={() => setMealSection(m, null)}
                           disabled={busy === m.id}
@@ -503,7 +513,7 @@ export default function KitchenSectionsView({ meals, search, canManage }: Props)
                     <span className="font-medium text-sm text-slate-800">{m.name}</span>
                     <MealTypeBadge meal={m} />
                   </div>
-                  {canManage && sections.length > 0 && (
+                  {canEdit && sections.length > 0 && (
                     <select
                       value=""
                       disabled={busy === m.id}

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { can, type PageKey } from '@/lib/permissions';
+import { canOpenPage, type PageKey } from '@/lib/permissions';
 
 interface TabItem {
   href: string;
@@ -59,7 +59,7 @@ export default function BottomNav({ onMore }: { onMore: () => void }) {
   const pathname = usePathname();
   const { user: currentUser } = useCurrentUser();
 
-  const visibleTabs = TABS.filter(t => can(currentUser, t.page, 'view'));
+  const visibleTabs = TABS.filter(t => canOpenPage(currentUser, t.page));
 
   // "More" highlights when on a page that's not in the bottom tabs
   const onMorePage = !visibleTabs.some(t => t.href === '/' ? pathname === '/' : pathname.startsWith(t.href));

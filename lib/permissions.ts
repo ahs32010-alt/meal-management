@@ -10,12 +10,14 @@ export type PageKey =
   | 'beneficiaries'
   | 'companions'
   | 'meals'
+  | 'kitchen_sections'
   | 'diets'
   | 'menu'
   | 'orders'
   | 'delivery_orders'
   | 'costs'
   | 'reports'
+  | 'kitchen_report'
   | 'stickers'
   | 'lunch_dinner_stickers'
   | 'assistant'
@@ -51,12 +53,14 @@ export const PAGES: { key: PageKey; label: string; href: string }[] = [
   { key: 'beneficiaries', label: 'المستفيدون',   href: '/beneficiaries' },
   { key: 'companions',    label: 'المرافقون',    href: '/companions' },
   { key: 'meals',         label: 'الأصناف',      href: '/meals' },
+  { key: 'kitchen_sections', label: 'أقسام المطبخ (داخل الأصناف)', href: '/meals' },
   { key: 'diets',         label: 'النظام الغذائي', href: '/diets' },
   { key: 'menu',          label: 'قائمة الطعام', href: '/menu' },
   { key: 'orders',          label: 'أوامر التشغيل', href: '/orders' },
   { key: 'delivery_orders', label: 'أوامر التسليم', href: '/delivery-orders' },
   { key: 'costs',           label: 'الأسعار والتكاليف', href: '/costs' },
   { key: 'reports',         label: 'التقارير',     href: '/reports' },
+  { key: 'kitchen_report',  label: 'حصر الأقسام (داخل التقارير)', href: '/reports' },
   { key: 'stickers',      label: 'ستيكرات الفطور', href: '/stickers' },
   { key: 'lunch_dinner_stickers', label: 'ستيكرات الغداء والعشاء', href: '/lunch-dinner-stickers' },
   { key: 'assistant',     label: 'المساعد الذكي', href: '/assistant' },
@@ -79,6 +83,9 @@ export const PAGE_AVAILABLE_ACTIONS: Record<PageKey, PermissionAction[]> = {
   beneficiaries: ['view', 'add', 'edit', 'delete'],
   companions:    ['view', 'add', 'edit', 'delete'],
   meals:         ['view', 'add', 'edit', 'delete'],
+  // أقسام المطبخ (تبويب داخل صفحة الأصناف): add = قسم جديد،
+  // edit = اسم/لون/ترتيب القسم + توزيع الأصناف عليه، delete = حذف القسم.
+  kitchen_sections: ['view', 'add', 'edit', 'delete'],
   diets:         ['view', 'add', 'edit', 'delete'],
   menu:          ['view', 'edit'],
   orders:          ['view', 'add', 'edit', 'delete'],
@@ -87,11 +94,37 @@ export const PAGE_AVAILABLE_ACTIONS: Record<PageKey, PermissionAction[]> = {
   // edit يشمل أيضاً اعتماد (تجميد) تكلفة أمر التشغيل.
   costs:           ['view', 'add', 'edit', 'delete'],
   reports:         ['view'],
+  // حصر أقسام المطبخ (وضع داخل صفحة التقارير) — مستقل عن «التقارير»
+  kitchen_report:  ['view'],
   stickers:      ['view'],
   lunch_dinner_stickers: ['view'],
   assistant:     ['view'],
   settings:      ['view', 'edit'],
 };
+
+/**
+ * صلاحيات تعيش داخل صفحة أخرى: من يملك «عرض» أحدها يدخل الصفحة الأم ولو
+ * بلا صلاحية عليها، ويرى الجزء الخاص به فقط.
+ */
+export const SUB_PAGES: Partial<Record<PageKey, PageKey[]>> = {
+  meals: ['kitchen_sections'],
+  reports: ['kitchen_report'],
+};
+
+/** هل يدخل الصفحة (رابطها في القائمة)؟ صلاحية عرضها أو عرض جزء منها */
+export function canOpenPage(user: AppUser | null, page: PageKey): boolean {
+  return can(user, page, 'view') || (SUB_PAGES[page] ?? []).some(p => can(user, p, 'view'));
+}
+
+/**
+ * صفحات لا تدعم طابور «يحتاج موافقة» — التنفيذ عليها مباشر دائماً، فلا
+ * يُعرض خيار الموافقة لها في إدارة المستخدمين.
+ */
+export const NO_APPROVAL_PAGES: PageKey[] = ['kitchen_sections'];
+
+export function isApprovalAvailable(page: PageKey, action: PermissionAction): boolean {
+  return !NO_APPROVAL_PAGES.includes(page) && isActionAvailable(page, action);
+}
 
 // مساعد: هل هذا الإجراء متاح أصلاً على هذه الصفحة؟
 export function isActionAvailable(page: PageKey, action: PermissionAction): boolean {
@@ -123,5 +156,6 @@ export function needsApproval(
   if (!user) return false;
   if (user.is_admin) return false;
   if (!can(user, page, action)) return false;
+  if (NO_APPROVAL_PAGES.includes(page)) return false;
   return Boolean(user.approval_required?.[page]?.[action]);
 }

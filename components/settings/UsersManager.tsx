@@ -7,6 +7,7 @@ import {
   emptyPermissions,
   PAGE_AVAILABLE_ACTIONS,
   isActionAvailable,
+  isApprovalAvailable,
   type AppUser,
   type PageKey,
   type PagePermission,
@@ -451,7 +452,7 @@ export default function UsersManager() {
                           const row = form.permissions[p.key];
                           const apprRow = form.approvalRequired[p.key] ?? {};
                           // نعرض فقط الصفحات اللي فيها إجراء يحتاج موافقة (أي يحتمل: add/edit/delete)
-                          const hasAnyApprovable = (['add', 'edit', 'delete'] as const).some(a => isActionAvailable(p.key, a));
+                          const hasAnyApprovable = (['add', 'edit', 'delete'] as const).some(a => isApprovalAvailable(p.key, a));
                           if (!hasAnyApprovable) {
                             return (
                               <tr key={p.key} className="border-t border-slate-100 opacity-50">
@@ -464,7 +465,7 @@ export default function UsersManager() {
                             <tr key={p.key} className="border-t border-slate-100 hover:bg-slate-50/50">
                               <td className="px-4 py-2 font-medium text-slate-700">{p.label}</td>
                               {(['add', 'edit', 'delete'] as const).map(a => {
-                                const avail = isActionAvailable(p.key, a);
+                                const avail = isApprovalAvailable(p.key, a);
                                 const allowed = !!row[a];
                                 if (!avail) {
                                   return (

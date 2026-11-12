@@ -8,7 +8,7 @@ import { supabase } from '@/lib/supabase-client';
 import { useCurrentUser, clearCurrentUserCache } from '@/lib/use-current-user';
 import { clearSnapshots } from '@/lib/view-snapshot';
 import { purgeDataCache } from '@/lib/offline/data-cache';
-import { can, type PageKey } from '@/lib/permissions';
+import { canOpenPage, type PageKey } from '@/lib/permissions';
 import ThemeToggle from '@/components/layout/ThemeToggle';
 import { usePendingCount } from '@/lib/use-pending-count';
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
@@ -192,7 +192,7 @@ export default function Sidebar({ open = true, desktopOpen = true, onClose, onTo
     : navItems.filter(item =>
         (item.page as string) === '__public__'
           ? !!currentUser
-          : can(currentUser, item.page, 'view')
+          : canOpenPage(currentUser, item.page)
       );
 
   useEffect(() => { onClose?.(); }, [pathname]);

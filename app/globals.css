@@ -968,3 +968,11 @@ html { scroll-behavior: smooth; }
 .pending-badge-update { background: rgb(254, 243, 199); color: rgb(146, 64, 14); }
 .pending-badge-delete { background: rgb(254, 226, 226); color: rgb(153, 27, 27); }
 .pending-badge-create { background: rgb(220, 252, 231); color: rgb(6, 95, 70); }
+
+/* ── حصر أقسام المطبخ (التقارير) — خط أكبر للطباعة لأنها تُسلَّم للمطبخ ── */
+@media print {
+  #report-content.kitchen-print { font-size: 10pt; }
+  #report-content.kitchen-print h1 { font-size: 15pt; }
+  #report-content.kitchen-print th,
+  #report-content.kitchen-print td { font-size: 10pt; padding: 3px 6px; }
+}

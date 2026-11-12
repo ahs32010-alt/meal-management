@@ -10,7 +10,10 @@ import { MENU_DAYS, WEEK_NUMBERS, WEEK_TITLES } from '@/lib/menu-utils';
 import type { MenuPeriodReport } from '@/lib/menu-period-report';
 import OrderSelect from '@/components/shared/OrderSelect';
 import FixedExtrasView from '@/components/reports/FixedExtrasView';
+import KitchenSectionsReportView from '@/components/reports/KitchenSectionsReportView';
 import { periodPrintHref } from '@/components/reports/period-print-url';
+import { useCurrentUser } from '@/lib/use-current-user';
+import { can } from '@/lib/permissions';
 
 // ── Styles ──────────────────────────────────────────────────────────────────
 const MEAL_TYPE_STYLES: Record<string, string> = {
@@ -43,7 +46,7 @@ interface FullReport {
   fixedSummary: MealCount[];
 }
 
-type Mode = 'daily' | 'period' | 'extras';
+type Mode = 'daily' | 'period' | 'extras' | 'sections';
 
 // ── SummaryPair ──────────────────────────────────────────────────────────────
 function SummaryPair({
@@ -255,6 +258,18 @@ const emptySelections = (): Selections =>
 export default function ReportView({ initialOrderId }: Props) {
   const [mode, setMode] = useState<Mode>('daily');
 
+  // «حصر الأقسام» صلاحية مستقلة عن «التقارير»: من يملكها وحدها يرى هذا
+  // الوضع فقط، ومن لا يملكها لا يرى زرّه.
+  const { user: currentUser, loading: userLoading } = useCurrentUser();
+  const canReports = can(currentUser, 'reports', 'view');
+  const canKitchenReport = can(currentUser, 'kitchen_report', 'view');
+  const kitchenOnly = !userLoading && !canReports && canKitchenReport;
+  useEffect(() => {
+    if (userLoading) return;
+    if (kitchenOnly && mode !== 'sections') setMode('sections');
+    if (!canKitchenReport && mode === 'sections') setMode('daily');
+  }, [userLoading, kitchenOnly, canKitchenReport, mode]);
+
   // ── Daily state ──────────────────────────────────────────────────────────
   const [orders, setOrders] = useState<DailyOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState(initialOrderId || '');
@@ -379,11 +394,12 @@ export default function ReportView({ initialOrderId }: Props) {
         <div>
           <h1 className="text-2xl font-bold text-slate-800">التقارير</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            {mode === 'daily' ? 'تقرير تفصيلي لأمر التشغيل' : mode === 'extras' ? 'حصر الأصناف اليومية الإضافية لفترة بالتاريخ' : 'إحصاء الأصناف من قائمة الطعام'}
+            {mode === 'daily' ? 'تقرير تفصيلي لأمر التشغيل' : mode === 'sections' ? 'حصر الأصناف موزّعة على أقسام المطبخ' : mode === 'extras' ? 'حصر الأصناف اليومية الإضافية لفترة بالتاريخ' : 'إحصاء الأصناف من قائمة الطعام'}
           </p>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex bg-slate-100 rounded-xl p-1 gap-0.5 no-print">
+            {!kitchenOnly && <>
             <button
               onClick={() => setMode('daily')}
               className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'daily' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
@@ -402,6 +418,15 @@ export default function ReportView({ initialOrderId }: Props) {
             >
               حصر الإضافات
             </button>
+            </>}
+            {canKitchenReport && (
+            <button
+              onClick={() => setMode('sections')}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${mode === 'sections' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              حصر الأقسام
+            </button>
+            )}
           </div>
           {mode === 'daily' && report && (
             <button
@@ -854,6 +879,17 @@ export default function ReportView({ initialOrderId }: Props) {
 
       {/* ══════════════════════ FIXED EXTRAS MODE ══════════════════════════ */}
       {mode === 'extras' && <FixedExtrasView />}
+
+      {/* ══════════════════════ KITCHEN SECTIONS MODE ══════════════════════ */}
+      {/* نفس اختيار الأسابيع والأيام المستخدم في «فترة زمنية» (مشترك بينهما) */}
+      {mode === 'sections' && canKitchenReport && (
+        <KitchenSectionsReportView
+          grid={<WeekDayGrid selections={selections} onChange={setSelections} />}
+          selections={selections}
+          totalSelectedDays={totalSelectedDays}
+          onClear={() => setSelections(emptySelections())}
+        />
+      )}
     </div>
   );
 }
