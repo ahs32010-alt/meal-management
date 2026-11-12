@@ -16,6 +16,9 @@ import type { KitchenSectionsReport, KitchenSectionBlock, KitchenDay } from '@/l
 const DAY_SHORT: Record<number, string> = {
   6: 'سبت', 0: 'أحد', 1: 'إثنين', 2: 'ثلاثاء', 3: 'أربعاء', 4: 'خميس', 5: 'جمعة',
 };
+const DAY_LABEL_FULL: Record<number, string> = {
+  6: 'السبت', 0: 'الأحد', 1: 'الإثنين', 2: 'الثلاثاء', 3: 'الأربعاء', 4: 'الخميس', 5: 'الجمعة',
+};
 const MEAL_SHORT: Record<MealType, string> = { breakfast: 'فطور', lunch: 'غداء', dinner: 'عشاء' };
 const MEAL_BADGE: Record<MealType, string> = {
   breakfast: 'bg-yellow-100 text-yellow-800',
@@ -100,14 +103,91 @@ function SectionTable({
   );
 }
 
+/** عرض «حسب اليوم»: بطاقة لكل يوم، وتحتها أقسامه بأصنافها وكمياتها */
+function DayCard({
+  day, label, blocks, hasAlt, hasFixed,
+}: {
+  day: KitchenDay; label: string; blocks: KitchenSectionBlock[]; hasAlt: boolean; hasFixed: boolean;
+}) {
+  const perSection = blocks
+    .map(b => ({
+      b,
+      rows: b.rows
+        .filter(r => (r.perDay[day.key]?.qty || 0) > 0)
+        .map(r => ({ r, c: r.perDay[day.key] }))
+        .sort((x, y) => y.c.qty - x.c.qty || x.r.name.localeCompare(y.r.name, 'ar')),
+    }))
+    .filter(x => x.rows.length > 0);
+
+  if (perSection.length === 0) {
+    return <div className="py-6 text-center text-slate-400 text-sm">لا توجد أصناف في المنيو لهذا اليوم ({label})</div>;
+  }
+  return (
+    <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4 print:grid-cols-2 print:gap-2 print:p-1">
+      {perSection.map(({ b, rows }) => {
+        const color = b.section?.color || DEFAULT_COLOR;
+        const total = rows.reduce((t, y) => t + y.c.qty, 0);
+        return (
+          <div key={b.section?.id ?? 'none'} className="rounded-lg border border-slate-200 overflow-hidden" style={{ borderTop: `3px solid ${color}`, breakInside: 'avoid' }}>
+            <div className="flex items-center justify-between px-3 py-2" style={{ background: `${color}14` }}>
+              <span className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ background: color }} />
+                {b.section?.name ?? 'بدون قسم'}
+              </span>
+              <span className="text-xs text-slate-500">المجموع <b className="text-slate-800">{total}</b></span>
+            </div>
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-slate-50">
+                  <th className="table-header text-right">الصنف</th>
+                  <th className="table-header text-center w-16">الكمية</th>
+                  {hasAlt && <th className="table-header text-center w-16 text-orange-700">بدائل</th>}
+                  {hasFixed && <th className="table-header text-center w-16 text-violet-700">ثابت</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(({ r, c }) => (
+                  <tr key={r.name} className="border-b border-slate-100">
+                    <td className="table-cell">
+                      <span className="font-medium text-slate-800">{r.name}</span>
+                      {r.mealTypes.length > 0 && (
+                        <span className="text-[10px] text-slate-400 mr-1">({r.mealTypes.map(t => MEAL_SHORT[t]).join('+')})</span>
+                      )}
+                    </td>
+                    <td className="table-cell text-center font-bold" style={{ color }}>{c.qty}</td>
+                    {hasAlt && <td className="table-cell text-center text-orange-700">{c.alt || '—'}</td>}
+                    {hasFixed && <td className="table-cell text-center text-violet-700">{c.fixed || '—'}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type Layout = 'by_day' | 'by_section';
+
 export default function KitchenSectionsReportView({ grid, selections, totalSelectedDays, onClear }: Props) {
   const [mealType, setMealType] = useState<MealType | ''>('');
   const [entityType, setEntityType] = useState<EntityType | ''>('beneficiary');
   const [report, setReport] = useState<KitchenSectionsReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  /** null = لا طباعة؛ 'all' = كل الأقسام؛ وإلا مفتاح القسم */
+  /** null = لا طباعة؛ 'all' = كل البطاقات؛ وإلا مفتاح البطاقة (قسم أو يوم) */
   const [printKey, setPrintKey] = useState<string | null>(null);
+  /** طريقة عرض النتيجة — تُحفظ لكل متصفح */
+  const [layout, setLayoutState] = useState<Layout>(() => {
+    if (typeof window === 'undefined') return 'by_day';
+    try { return window.localStorage.getItem('kitchenReportLayout') === 'by_section' ? 'by_section' : 'by_day'; }
+    catch { return 'by_day'; }
+  });
+  const setLayout = (l: Layout) => {
+    setLayoutState(l);
+    try { window.localStorage.setItem('kitchenReportLayout', l); } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     if (!printKey) return;
@@ -157,10 +237,36 @@ export default function KitchenSectionsReportView({ grid, selections, totalSelec
     if (!report) return;
     const { exportWorkbook } = await import('@/lib/xlsx-utils');
     const used = new Set<string>();
-    const sheets = report.sections.filter(b => b.rows.length > 0).map(b => {
-      let name = (b.section?.name ?? 'بدون قسم').replace(/[\\/?*[\]:]/g, ' ').slice(0, 31);
+    const sheetName = (raw: string) => {
+      let name = raw.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31);
       while (used.has(name)) name = `${name.slice(0, 28)} ${used.size}`;
       used.add(name);
+      return name;
+    };
+    if (layout === 'by_day') {
+      const headers = ['القسم', 'الصنف', 'الوجبة', 'الكمية', 'منها بدائل', 'منها ثابت'];
+      const daySheets = report.days.map(d => {
+        const rows: Record<string, string | number>[] = [];
+        report.sections.forEach(b => {
+          b.rows
+            .filter(r => (r.perDay[d.key]?.qty || 0) > 0)
+            .sort((x, y) => y.perDay[d.key].qty - x.perDay[d.key].qty)
+            .forEach(r => rows.push({
+              'القسم': b.section?.name ?? 'بدون قسم',
+              'الصنف': r.name,
+              'الوجبة': r.mealTypes.map(t => MEAL_SHORT[t]).join(' + '),
+              'الكمية': r.perDay[d.key].qty,
+              'منها بدائل': r.perDay[d.key].alt,
+              'منها ثابت': r.perDay[d.key].fixed,
+            }));
+        });
+        return { name: sheetName(multiWeek ? `${DAY_SHORT[d.day]} أ${d.week}` : DAY_SHORT[d.day]), rows, headers };
+      });
+      await exportWorkbook(daySheets, `حصر_أقسام_المطبخ_حسب_اليوم_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      return;
+    }
+    const sheets = report.sections.filter(b => b.rows.length > 0).map(b => {
+      const name = sheetName(b.section?.name ?? 'بدون قسم');
       const dayCols = report.days.map(d => dayLabel(d, multiWeek));
       const headers = ['الصنف', 'الوجبة', ...dayCols, 'المجموع', 'منها بدائل', 'منها ثابت'];
       const rows = b.rows.map(r => {
@@ -260,9 +366,22 @@ export default function KitchenSectionsReportView({ grid, selections, totalSelec
                   </div>
                 ))}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex bg-slate-100 rounded-lg p-0.5 gap-0.5">
+                  {([['by_day', 'حسب اليوم'], ['by_section', 'حسب القسم']] as [Layout, string][]).map(([l, label]) => (
+                    <button
+                      key={l}
+                      onClick={() => setLayout(l)}
+                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${layout === l ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
                 <button onClick={exportExcel} className="btn-secondary text-sm">تصدير Excel</button>
-                <button onClick={() => setPrintKey('all')} className="btn-primary text-sm">طباعة كل الأقسام</button>
+                <button onClick={() => setPrintKey('all')} className="btn-primary text-sm">
+                  {layout === 'by_day' ? 'طباعة كل الأيام' : 'طباعة كل الأقسام'}
+                </button>
               </div>
             </div>
             <p className="text-xs text-slate-500 no-print">
@@ -270,7 +389,53 @@ export default function KitchenSectionsReportView({ grid, selections, totalSelec
               {hasAlt && <> · <span className="text-orange-600">(ب) = الكمية الجاية من بدائل المستبعدين</span></>}
             </p>
 
-            {visible.map((b, i) => {
+            {layout === 'by_day' && report.days.map((d, i) => {
+              const k = `day:${d.key}`;
+              const label = multiWeek ? `${DAY_LABEL_FULL[d.day]} — ${WEEK_TITLES[d.week as 1 | 2 | 3 | 4]}` : DAY_LABEL_FULL[d.day];
+              const dayTotal = visible.reduce((s, b) => s + b.rows.reduce((t, r) => t + (r.perDay[d.key]?.qty || 0), 0), 0);
+              const hiddenInPrint = printKey && printKey !== 'all' && printKey !== k;
+              const lastPrinted = printKey === 'all' ? i === report.days.length - 1 : printKey === k;
+              return (
+                <div
+                  key={k}
+                  className={`card overflow-hidden ${hiddenInPrint ? 'print:hidden' : ''} ${lastPrinted ? '' : 'print:break-after-page'}`}
+                  style={{ borderTop: '4px solid #334155', breakInside: 'auto' }}
+                >
+                  <div className="hidden print:block text-center pt-3 pb-2 border-b border-slate-300">
+                    <h1 className="text-xl font-bold">حصر أقسام المطبخ — {label}</h1>
+                    <p className="text-xs mt-1">
+                      {report.mealType ? `وجبة ${MEAL_TYPE_LABELS[report.mealType]}` : 'كل الوجبات'} · المجموع {dayTotal}
+                    </p>
+                  </div>
+                  <div className="px-5 py-3 flex items-center justify-between gap-2 bg-slate-50 print:hidden">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <h3 className="font-bold text-slate-800 text-base">{label}</h3>
+                      <span className="text-xs text-slate-500">المجموع <b className="text-slate-800">{dayTotal}</b></span>
+                      {visible.map(b => {
+                        const t = b.rows.reduce((s, r) => s + (r.perDay[d.key]?.qty || 0), 0);
+                        if (!t) return null;
+                        return (
+                          <span key={blockKey(b)} className="text-xs flex items-center gap-1 text-slate-600">
+                            <span className="w-2 h-2 rounded-full" style={{ background: b.section?.color || DEFAULT_COLOR }} />
+                            {b.section?.name ?? 'بدون قسم'} <b className="text-slate-800">{t}</b>
+                          </span>
+                        );
+                      })}
+                    </div>
+                    <button
+                      onClick={() => setPrintKey(k)}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 shrink-0"
+                    >
+                      طباعة هذا اليوم
+                    </button>
+                  </div>
+                  <DayCard day={d} label={label} blocks={visible} hasAlt={hasAlt} hasFixed={hasFixed} />
+                  <div className="hidden print:block text-[10px] text-slate-500 text-left px-2 py-1">{formatNow()}</div>
+                </div>
+              );
+            })}
+
+            {layout === 'by_section' && visible.map((b, i) => {
               const k = blockKey(b);
               const color = b.section?.color || DEFAULT_COLOR;
               const hiddenInPrint = printKey && printKey !== 'all' && printKey !== k;
