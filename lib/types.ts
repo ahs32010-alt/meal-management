@@ -105,6 +105,18 @@ export interface Meal {
   created_at: string;
 }
 
+/**
+ * قسم مطبخ (طبخ / أرز / سلطات / حلى …) — تجميع تنظيمي فقط للأصناف
+ * (kitchen-sections-migration). مستقل تماماً عن category (حار/بارد/سناك).
+ */
+export interface KitchenSection {
+  id: string;
+  name: string;
+  color?: string | null;
+  sort_order: number;
+  created_at?: string;
+}
+
 export interface Exclusion {
   id: string;
   beneficiary_id: string;

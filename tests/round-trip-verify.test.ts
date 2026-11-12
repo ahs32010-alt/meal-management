@@ -143,6 +143,7 @@ describe('تغطية النسخة الاحتياطية', () => {
       'order_items', 'sticker_splits',
       'raw_materials', 'meal_recipe_items', 'meal_pricing', 'order_cost_snapshots',
       'delivery_locations', 'delivery_orders', 'delivery_order_items',
+      'kitchen_sections', 'meal_kitchen_sections',
     ];
     expect([...BACKUP_TABLES].sort()).toEqual([...expected].sort());
   });
@@ -169,6 +170,8 @@ describe('تغطية النسخة الاحتياطية', () => {
       ['beneficiary_menu_overrides', 'beneficiaries'],
       ['beneficiary_menu_overrides', 'meals'],
       ['menu_items', 'meals'],
+      ['meal_kitchen_sections', 'meals'],
+      ['meal_kitchen_sections', 'kitchen_sections'],
       ['order_items', 'daily_orders'],
       ['sticker_splits', 'daily_orders'],
       ['meal_alternatives', 'meals'],

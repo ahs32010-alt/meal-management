@@ -99,8 +99,7 @@ export function prepareSticker(
 ): StickerData {
   const ben = detail.beneficiary;
   const items = detail.excludedItems ?? [];
-  // الصنف الثابت السناك يُوسم (snak) مثل المحظورات
-  const fixedToday = (detail.fixedItems ?? []).map(m => ({ name: m.meal.name, snack: m.category === 'snack' }));
+  const fixedMealsToday = (detail.fixedItems ?? []).map(m => m.meal.name);
   const altItems = items.filter(e => e.alternative);
 
   const excludedNames = items
@@ -115,7 +114,7 @@ export function prepareSticker(
     .join(' | ');
   const altNames = [
     ...altItems.map(e => `${e.alternative!.name}${e.meal.is_snack ? ' (snak)' : ''}`),
-    ...fixedToday.map(f => `${f.name}${f.snack ? ' (snak)' : ''}`),
+    ...fixedMealsToday,
   ].join('، ');
   const altTranslit = [
     ...altItems
@@ -124,12 +123,7 @@ export function prepareSticker(
         return tr ? (e.meal.is_snack ? `${tr} (snak)` : tr) : '';
       })
       .filter(Boolean),
-    ...fixedToday
-      .map(f => {
-        const tr = transliterate(f.name, customDict);
-        return tr ? (f.snack ? `${tr} (snak)` : tr) : '';
-      })
-      .filter(Boolean),
+    ...fixedMealsToday.map(n => transliterate(n, customDict)).filter(Boolean),
   ].join(' | ');
 
   return {

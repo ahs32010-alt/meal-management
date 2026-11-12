@@ -64,8 +64,6 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
   );
   const updateFixed = (idx: number, val: string) =>
     setFixedMeals(prev => prev.map((n, i) => i === idx ? val : n));
-  // الصنف الثابت السناك يُوسم (snak) مثل المحظورات — يبان أنه سناك لا وجبة
-  const fixedIsSnack = (detail.fixedItems ?? []).map(m => m.category === 'snack');
 
   const altNames = exclusions.map(e => e.alternativeName);
   const allBadil = [...altNames, ...fixedMeals];
@@ -84,12 +82,7 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
         const tr = transliterate(e.alternativeName, customDict);
         return tr ? (e.isSnack ? `${tr} (snak)` : tr) : '';
       }).filter(Boolean),
-    ...fixedMeals
-      .map((n, i) => {
-        const tr = n.trim() ? transliterate(n, customDict) : '';
-        return tr ? (fixedIsSnack[i] ? `${tr} (snak)` : tr) : '';
-      })
-      .filter(Boolean),
+    ...fixedMeals.filter(n => n.trim()).map(n => transliterate(n, customDict)).filter(Boolean),
   ];
 
   const inp = (val: string, onChange: (v: string) => void, dir: 'rtl' | 'ltr' = 'rtl') => (
@@ -199,7 +192,7 @@ function StickerCard({ detail, mealTypeAr, mealTypeEn, customDict, groupIndex = 
                   ? <input value={name} onChange={ev => updateFixed(i, ev.target.value)}
                       className="bg-yellow-50 border border-yellow-300 rounded px-1 focus:outline-none"
                       style={{ font: 'inherit', color: 'inherit', width: 80 }} />
-                  : <>{name}{fixedIsSnack[i] && <span style={{ color: '#f59e0b', fontWeight: 700, fontSize: '0.85em' }}> (snak)</span>}</>}
+                  : name}
               </span>
             ))}
           </div>
@@ -526,15 +519,13 @@ function StickerSplitter({
  *   • lunchDinner → نفس الستيكر والآلية بالضبط داخل تبويب «حسب الوجبة» في صفحة
  *     الغداء والعشاء: أوامر الغداء/العشاء فقط + اختيار «الوجبة» أو «السناك».
  */
-type StickerKind = 'all' | 'meal' | 'snack' | 'fixed';
+type StickerKind = 'all' | 'meal' | 'snack';
 const KIND_OPTIONS: { key: StickerKind; label: string }[] = [
   { key: 'all',   label: 'الكل' },
   { key: 'meal',  label: '🍽️ الوجبة' },
   { key: 'snack', label: '🍪 السناك' },
-  { key: 'fixed', label: '📌 الأصناف الثابتة' },
 ];
-const kindSuffix = (k: StickerKind) =>
-  (k === 'meal' ? '_الوجبة' : k === 'snack' ? '_السناك' : k === 'fixed' ? '_الأصناف_الثابتة' : '');
+const kindSuffix = (k: StickerKind) => (k === 'meal' ? '_الوجبة' : k === 'snack' ? '_السناك' : '');
 /** هل التصنيف من النوع المختار؟ الوجبة = حار/بارد، السناك = سناك. */
 const matchesKind = (k: StickerKind, c: ItemCategory) =>
   k === 'all' || (k === 'snack' ? c === 'snack' : c !== 'snack');
@@ -654,19 +645,12 @@ export default function StickersView({ variant = 'breakfast' }: { variant?: 'bre
     setLoading(false);
   };
 
-  // نوع الستيكر (الغداء/العشاء فقط): نُبقي أصناف النوع المختار ثم نكمل بنفس الآلية.
-  //   • الوجبة/السناك → المحظورات وبدائلها فقط — الأصناف الثابتة لها تبويبها
-  //   • الأصناف الثابتة → الثابتة وحدها (وجبة وسناك)، والفصل التلقائي بالتصنيف
-  //     تحت يعطي كل تصنيف ستيكره: حار ما يجتمع مع بارد، والسناك موسوم 🍿
+  // نوع الستيكر (الغداء/العشاء فقط): نُبقي أصناف النوع المختار ثم نكمل بنفس الآلية
   const stickerDetails = (report?.beneficiaryDetails ?? [])
-    .map(d => kind === 'all' ? d : kind === 'fixed' ? {
-      ...d,
-      excludedItems: [],
-      fixedItems: d.fixedItems ?? [],
-    } : {
+    .map(d => kind === 'all' ? d : {
       ...d,
       excludedItems: d.excludedItems.filter(i => matchesKind(kind, i.category)),
-      fixedItems: [],
+      fixedItems: (d.fixedItems ?? []).filter(f => matchesKind(kind, f.category)),
     })
     .filter(d => d.excludedItems.length > 0 || (d.fixedItems ?? []).length > 0);
   const mealTypeAr = report ? MEAL_TYPE_LABELS[report.order.meal_type] : '';

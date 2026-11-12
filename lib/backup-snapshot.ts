@@ -25,7 +25,7 @@ export type BackupTriggerType = 'auto_daily' | 'manual' | 'pre_restore';
  * يفشل لو أُنشئ جدول جديد في supabase/*.sql ولم يدخل هنا أو في الاستثناءات.
  *
  * ⚠️ قائمة السيرفر backup_logical_tables() (للنسخ التلقائية والاستعادة الذرّية)
- * لازم تطابقها حرفياً — آخر تعريف في supabase/sticker-flag-meals-removal-migration.sql.
+ * لازم تطابقها حرفياً — آخر تعريف في supabase/kitchen-sections-migration.sql.
  */
 export const BACKUP_TABLES = [
   // ── جداول مستقلة (لا تعتمد على غيرها) ──
@@ -62,6 +62,9 @@ export const BACKUP_TABLES = [
   'delivery_locations',   // ← cities
   'delivery_orders',      // ← delivery_locations + daily_orders + delivery_creators
   'delivery_order_items', // ← delivery_orders
+  // ── أقسام المطبخ (تجميع تنظيمي للأصناف) ──
+  'kitchen_sections',
+  'meal_kitchen_sections', // ← meals + kitchen_sections
 ] as const;
 
 export type BackupTableName = (typeof BACKUP_TABLES)[number];
@@ -102,6 +105,8 @@ export const BACKUP_TABLE_LABELS: Record<BackupTableName, string> = {
   delivery_locations: 'مواقع التسليم',
   delivery_orders: 'أوامر التسليم',
   delivery_order_items: 'أصناف أوامر التسليم',
+  kitchen_sections: 'أقسام المطبخ',
+  meal_kitchen_sections: 'توزيع الأصناف على أقسام المطبخ',
 };
 
 /**
@@ -210,6 +215,8 @@ const TABLE_KEY: Record<BackupTableName, string> = {
   delivery_locations: 'id',
   delivery_orders: 'id',
   delivery_order_items: 'id',
+  kitchen_sections: 'id',
+  meal_kitchen_sections: 'meal_id',
 };
 
 /**
@@ -543,7 +550,7 @@ export async function restoreFromSnapshot(
       if (uncovered.length > 0) {
         warnings.push(
           `دالة الاستعادة على السيرفر لا تشمل: ${uncovered.join(', ')} — استُعيدت من المتصفح. ` +
-          'شغّل supabase/sticker-flag-meals-removal-migration.sql.'
+          'شغّل supabase/kitchen-sections-migration.sql.'
         );
         await clientRestoreTables(supabase, snapshot, uncovered, inserted, warnings);
       }

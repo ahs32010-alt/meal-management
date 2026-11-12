@@ -20,6 +20,10 @@ import { MEAL_HEADERS, MEAL_REQUIRED_HEADERS, MEAL_TEMPLATE_ROW, buildMealRow, p
 
 const MealModal = dynamic(() => import('./MealModal'), { ssr: false });
 const ImportModal = dynamic(() => import('@/components/shared/ImportModal'), { ssr: false });
+const KitchenSectionsView = dynamic(() => import('./KitchenSectionsView'), { ssr: false });
+
+// طريقة العرض: حسب الوجبة (الأصلي) أو حسب أقسام المطبخ (تجميع تنظيمي إضافي)
+type ViewMode = 'by_meal' | 'by_section';
 
 const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner'];
 
@@ -313,6 +317,16 @@ export default function MealList() {
   const [duplicateResult, setDuplicateResult] = useState<{ name: string; excl: number; fixed: number } | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message: string; confirmLabel?: string; onConfirm: () => void } | null>(null);
   const [search, setSearch] = useState('');
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    if (typeof window === 'undefined') return 'by_meal';
+    try {
+      return window.localStorage.getItem('mealsViewMode') === 'by_section' ? 'by_section' : 'by_meal';
+    } catch { return 'by_meal'; }
+  });
+  const switchView = (next: ViewMode) => {
+    setViewMode(next);
+    try { window.localStorage.setItem('mealsViewMode', next); } catch { /* ignore */ }
+  };
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.is_admin === true;
   const canAdd    = can(currentUser, 'meals', 'add');
@@ -898,7 +912,31 @@ export default function MealList() {
         </div>
       </div>
 
-      {MEAL_TYPES.map(mealType => {
+      {/* تبديل طريقة العرض */}
+      <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl w-fit">
+        {([['by_meal', 'حسب الوجبة'], ['by_section', 'أقسام المطبخ']] as [ViewMode, string][]).map(([mode, label]) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => switchView(mode)}
+            className={`px-4 py-1.5 text-sm font-semibold rounded-lg transition-colors ${
+              viewMode === mode ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {viewMode === 'by_section' && (
+        <KitchenSectionsView
+          meals={meals}
+          search={search}
+          canManage={canEdit && !editNeedsApproval}
+        />
+      )}
+
+      {viewMode === 'by_meal' && MEAL_TYPES.map(mealType => {
         const colors = TYPE_COLORS[mealType];
         return (
           <div key={mealType} className="space-y-3">
