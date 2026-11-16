@@ -55,3 +55,25 @@ describe('ستيكرات العينات — جنب بعض على A4', async () =
     expect(a4Fit(30, 30).perPage).toBe(1);
   });
 });
+
+describe('ستيكرات العينات — البدائل', async () => {
+  const { buildAltItems } = await import('@/components/sample-stickers/sample-stickers');
+  const m = (id: string, name: string, is_snack = false) => ({ id, name, is_snack });
+  it('بديل المحظور + الثابت المعلَّم بديل، بلا تكرار، وبلا ما هو موجود في الأمر (بالمعرّف أو الاسم)', () => {
+    const alts = buildAltItems([
+      { excludedItems: [
+        { meal: m('a', 'رز'), alternative: m('b', 'سباغيتي'), category: 'hot' },
+        { meal: m('s', 'بسكويت', true), alternative: m('t', 'تفاح'), category: 'snack' },
+        { meal: m('a', 'رز'), alternative: m('x', 'فاكهة متنوعة'), category: 'cold' },
+        { meal: m('a', 'رز'), alternative: null, category: 'hot' },
+      ], fixedItems: [
+        { meal: m('z', 'زبادي', true), is_alternative: true },
+        { meal: m('k', 'خبز'), is_alternative: false },
+      ] },
+      { excludedItems: [{ meal: m('a', 'رز'), alternative: m('b', 'سباغيتي'), category: 'hot' }] },
+    ], [{ mealId: 'main-1', nameAr: 'فاكهة  متنوعة' }]);
+    expect(alts.map(a => [a.nameAr, a.isSnack, a.isAlt])).toEqual([
+      ['تفاح', true, true], ['زبادي', true, true], ['سباغيتي', false, true],
+    ]);
+  });
+});

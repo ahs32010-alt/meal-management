@@ -1,8 +1,8 @@
 'use client';
 
 /**
- * صفحة «ستيكرات العينات» — ستيكر لكل صنف من أمر التشغيل (الرئيسية + السناكات،
- * بلا البدائل) فيه: العنوان (عينة SAMPLE)، الوجبة، الفئة (مستفيدين/مرافقين)،
+ * صفحة «ستيكرات العينات» — ستيكر لكل صنف من أمر التشغيل (الرئيسية + السناكات
+ * وبدائلهما) فيه: العنوان (عينة SAMPLE)، الوجبة، الفئة (مستفيدين/مرافقين)،
  * اسم الصنف عربي وإنجليزي، وتاريخ الانتهاء (تاريخ الأمر + مدة الصلاحية).
  *
  * قراءة فقط — لا تكتب في أي جدول، ولا تمسّ صفحات الستيكرات الأخرى. تستخدم
@@ -25,7 +25,7 @@ import SampleStickerCard from './SampleStickerCard';
 import SampleDesignPanel, { useSampleDesign } from './SampleDesignPanel';
 import { a4Fit, type SampleArrange } from './sample-export';
 import {
-  addDaysISO, buildSampleItems, expandStickers,
+  addDaysISO, buildAltItems, buildSampleItems, type SampleAltDetail, expandStickers,
   type SampleItem, type SampleOrderItemRow,
 } from './sample-stickers';
 
@@ -93,17 +93,29 @@ export default function SampleStickersView() {
   const entity: EntityType = order?.entity_type === 'companion' ? 'companion' : 'beneficiary';
 
   // ── أصناف الأمر ─────────────────────────────────────────────────────────────
+  // آخر أمر مطلوب — لو تنقّلت بسرعة بين الأوامر ما يكتب ردّ قديم فوق الجديد
+  const latestOrder = useRef('');
   const loadItems = useCallback(async (id: string) => {
+    latestOrder.current = id;
     setLoadingItems(true); setError(''); setItems([]);
     const read = (full: boolean) => supabase.from('order_items')
       .select(full
         ? 'id, meal_id, display_name, category, meals(id, name, english_name, is_snack, category)'
         : 'id, meal_id, display_name, meals(id, name, english_name, is_snack)')
       .eq('order_id', id);
+    // البدائل من تقرير الأمر نفسه (نفس مصدر ستيكرات الفطور) — بالتوازي مع الأصناف
+    const reportP = fetch(`/api/orders/${id}/report`)
+      .then(async r => (r.ok ? ((await r.json()).beneficiaryDetails ?? []) as SampleAltDetail[] : null))
+      .catch(() => null);
     let res = await read(true);
     if (res.error && /category|column/i.test(res.error.message)) res = await read(false);
+    const details = await reportP;
+    if (latestOrder.current !== id) return;
     if (res.error) { setError(res.error.message); setLoadingItems(false); return; }
-    const built = buildSampleItems((res.data ?? []) as unknown as SampleOrderItemRow[], dict);
+    const main = buildSampleItems((res.data ?? []) as unknown as SampleOrderItemRow[], dict);
+    const alts = details ? buildAltItems(details, main, dict) : [];
+    if (!details) setError('تعذّر تحميل البدائل — الأصناف الرئيسية والسناكات ظاهرة، أعد اختيار الأمر لمحاولة ثانية.');
+    const built = [...main, ...alts];
     setItems(built);
     setSelected(new Set(built.map(i => i.key)));
     setCopies({});
@@ -125,8 +137,16 @@ export default function SampleStickersView() {
     () => items.map(i => (enOverride[i.key] !== undefined ? { ...i, nameEn: enOverride[i.key] } : i)),
     [items, enOverride],
   );
-  const mains = itemsView.filter(i => !i.isSnack);
-  const snacks = itemsView.filter(i => i.isSnack);
+  const mains = itemsView.filter(i => !i.isSnack && !i.isAlt);
+  const mainAlts = itemsView.filter(i => !i.isSnack && i.isAlt);
+  const snacks = itemsView.filter(i => i.isSnack && !i.isAlt);
+  const snackAlts = itemsView.filter(i => i.isSnack && i.isAlt);
+  const groups = [
+    { title: '🍽️ الأصناف الرئيسية', color: 'text-emerald-700', list: mains },
+    { title: '🔁 بدائل الأصناف', color: 'text-sky-700', list: mainAlts },
+    { title: '🍪 السناكات', color: 'text-amber-600', list: snacks },
+    { title: '🔁 بدائل السناكات', color: 'text-orange-600', list: snackAlts },
+  ];
   const stickers = useMemo(() => expandStickers(itemsView, selected, copies), [itemsView, selected, copies]);
 
   const expiryISO = expiryOverride || (productionISO ? addDaysISO(productionISO, design.expiryDays) : '');
@@ -274,7 +294,7 @@ export default function SampleStickersView() {
       <div className="no-print flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">ستيكرات العينات</h1>
-          <p className="text-slate-500 text-sm mt-0.5">ستيكر عينة لكل صنف رئيسي وسناك في أمر التشغيل (بدون البدائل)</p>
+          <p className="text-slate-500 text-sm mt-0.5">ستيكر عينة لكل صنف وسناك في أمر التشغيل وبدائلها</p>
         </div>
         {order && (
           <span className={`badge ${ENTITY_BADGE_STYLES[entity]}`}>{ENTITY_TYPE_LABELS_PLURAL[entity]}</span>
@@ -303,8 +323,10 @@ export default function SampleStickersView() {
             </div>
             <div className="flex items-center gap-1.5 flex-wrap">
               <button type="button" onClick={() => selectOnly(itemsView)} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">الكل</button>
-              <button type="button" onClick={() => selectOnly(mains)} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">الرئيسية فقط</button>
-              <button type="button" onClick={() => selectOnly(snacks)} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">السناكات فقط</button>
+              <button type="button" onClick={() => selectOnly([...mains, ...snacks])} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">بدون البدائل</button>
+              <button type="button" onClick={() => selectOnly([...mainAlts, ...snackAlts])} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">البدائل فقط</button>
+              <button type="button" onClick={() => selectOnly([...mains, ...mainAlts])} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">الأصناف وبدائلها</button>
+              <button type="button" onClick={() => selectOnly([...snacks, ...snackAlts])} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">السناكات وبدائلها</button>
               <button type="button" onClick={() => setSelected(new Set())} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-slate-200 hover:bg-red-50 hover:text-red-600 text-slate-500">إلغاء الكل</button>
             </div>
           </div>
@@ -315,14 +337,12 @@ export default function SampleStickersView() {
             <div className="py-8 text-center text-slate-400 text-sm">لا توجد أصناف في هذا الأمر.</div>
           ) : (
             <div className="grid gap-4 lg:grid-cols-2">
-              <div className="space-y-1.5">
-                <div className="text-xs font-bold text-emerald-700">🍽️ الأصناف الرئيسية ({mains.length})</div>
-                {mains.length ? mains.map(itemRow) : <div className="text-xs text-slate-400">لا يوجد</div>}
-              </div>
-              <div className="space-y-1.5">
-                <div className="text-xs font-bold text-amber-600">🍪 السناكات ({snacks.length})</div>
-                {snacks.length ? snacks.map(itemRow) : <div className="text-xs text-slate-400">لا يوجد</div>}
-              </div>
+              {groups.map(g => (
+                <div key={g.title} className="space-y-1.5">
+                  <div className={`text-xs font-bold ${g.color}`}>{g.title} ({g.list.length})</div>
+                  {g.list.length ? g.list.map(itemRow) : <div className="text-xs text-slate-400">لا يوجد</div>}
+                </div>
+              ))}
             </div>
           )}
 

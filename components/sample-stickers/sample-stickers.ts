@@ -120,6 +120,8 @@ export interface SampleItem {
   nameAr: string;
   nameEn: string;
   isSnack: boolean;
+  /** بديل (من محظورات المستفيدين أو صنف ثابت معلَّم كبديل) لا صنف في الأمر */
+  isAlt?: boolean;
   category: ItemCategory | null;
 }
 
@@ -179,4 +181,53 @@ export function expandStickers<T extends { key: string }>(
     for (let c = 1; c <= n; c++) out.push({ item: it, copy: c, uid: `${it.key}#${c}` });
   }
   return out;
+}
+
+/** تفاصيل مستفيد كما يرجعها تقرير الأمر — الحقول اللي نحتاجها فقط */
+export interface SampleAltDetail {
+  excludedItems?: { meal?: Pick<Meal, 'id' | 'name' | 'is_snack'> | null; alternative?: (Pick<Meal, 'id' | 'name' | 'is_snack'> & { english_name?: string | null }) | null; category?: ItemCategory | null }[];
+  fixedItems?: { meal?: (Pick<Meal, 'id' | 'name' | 'is_snack'> & { english_name?: string | null }) | null; category?: ItemCategory | null; is_alternative?: boolean }[];
+}
+
+/**
+ * بدائل الأمر — كل بديل مرّة وحدة مهما تكرّر بين المستفيدين:
+ *   • بديل المحظور (excludedItems[].alternative)
+ *   • الصنف الثابت المعلَّم «بديل» (fixedItems[].is_alternative)
+ * البديل سناك لو المحظور اللي حلّ محلّه سناك (أو البديل نفسه سناك).
+ * ما يتكرّر صنف موجود أصلاً في أصناف الأمر (`skip`: بالمعرّف أو بنفس الاسم —
+ * فيه أصناف بنفس الاسم بسجلّين، مثل نسخة سناك). مرتّبة أبجدياً.
+ */
+export function buildAltItems(
+  details: SampleAltDetail[], skip: Pick<SampleItem, 'mealId' | 'nameAr'>[], dict: Record<string, string> = {},
+): SampleItem[] {
+  const key = (n: string) => n.replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').replace(/\s+/g, ' ').trim();
+  const skipIds = new Set(skip.map(x => x.mealId));
+  const skipNames = new Set(skip.map(x => key(x.nameAr)));
+  const out = new Map<string, SampleItem>();
+  const add = (
+    m: (Pick<Meal, 'id' | 'name' | 'is_snack'> & { english_name?: string | null }) | null | undefined,
+    snack: boolean, category: ItemCategory | null,
+  ) => {
+    const nameAr = m?.name?.trim();
+    if (!m || !nameAr || skipIds.has(m.id) || skipNames.has(key(nameAr))) return;
+    const prev = out.get(m.id);
+    if (prev) { if (snack && !prev.isSnack) prev.isSnack = true; return; }
+    const en = m.english_name?.trim();
+    out.set(m.id, {
+      key: `alt:${m.id}`, mealId: m.id, nameAr,
+      nameEn: en || titleCase(dict[nameAr] ?? transliterate(nameAr, dict)),
+      isSnack: snack, isAlt: true, category,
+    });
+  };
+  for (const d of details) {
+    for (const ex of d.excludedItems ?? []) {
+      const snack = !!ex.meal?.is_snack || !!ex.alternative?.is_snack || ex.category === 'snack';
+      add(ex.alternative, snack, ex.category ?? null);
+    }
+    for (const f of d.fixedItems ?? []) {
+      if (!f.is_alternative) continue;
+      add(f.meal, !!f.meal?.is_snack || f.category === 'snack', f.category ?? null);
+    }
+  }
+  return [...out.values()].sort((a, b) => a.nameAr.localeCompare(b.nameAr, 'ar'));
 }
