@@ -22,6 +22,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/reports':         'التقارير',
   '/stickers':      'ستيكرات الفطور',
   '/lunch-dinner-stickers': 'ستيكرات الغداء والعشاء',
+  '/sample-stickers': 'ستيكرات العينات',
   '/approvals':     'الموافقات',
   '/assistant':     'المساعد الذكي',
   '/settings':      'الإعدادات',

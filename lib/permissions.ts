@@ -20,6 +20,7 @@ export type PageKey =
   | 'kitchen_report'
   | 'stickers'
   | 'lunch_dinner_stickers'
+  | 'sample_stickers'
   | 'assistant'
   | 'settings';
 
@@ -63,6 +64,7 @@ export const PAGES: { key: PageKey; label: string; href: string }[] = [
   { key: 'kitchen_report',  label: 'حصر الأقسام (داخل التقارير)', href: '/reports' },
   { key: 'stickers',      label: 'ستيكرات الفطور', href: '/stickers' },
   { key: 'lunch_dinner_stickers', label: 'ستيكرات الغداء والعشاء', href: '/lunch-dinner-stickers' },
+  { key: 'sample_stickers', label: 'ستيكرات العينات', href: '/sample-stickers' },
   { key: 'assistant',     label: 'المساعد الذكي', href: '/assistant' },
   { key: 'settings',      label: 'الإعدادات',    href: '/settings' },
 ];
@@ -98,6 +100,7 @@ export const PAGE_AVAILABLE_ACTIONS: Record<PageKey, PermissionAction[]> = {
   kitchen_report:  ['view'],
   stickers:      ['view'],
   lunch_dinner_stickers: ['view'],
+  sample_stickers: ['view'],
   assistant:     ['view'],
   settings:      ['view', 'edit'],
 };

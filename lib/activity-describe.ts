@@ -42,6 +42,7 @@ export const PAGE_LABELS: Record<string, string> = {
   '/reports': 'التقارير',
   '/stickers': 'ستيكرات الفطور',
   '/lunch-dinner-stickers': 'ستيكرات الغداء والعشاء',
+  '/sample-stickers': 'ستيكرات العينات',
   '/approvals': 'الموافقات',
   '/settings': 'الإعدادات',
 };

@@ -77,6 +77,12 @@ export const PAGE_CATALOG: PageEntry[] = [
     aliases: ['ستيكرات الغداء', 'ستيكرات العشاء', 'ستيكرات الغداء والعشاء', 'ملصقات الغداء'],
   },
   {
+    permission: 'sample_stickers',
+    href: '/sample-stickers',
+    label: 'ستيكرات العينات',
+    aliases: ['ستيكرات العينات', 'ستيكر العينة', 'ستيكرات العينة', 'ملصقات العينات', 'العينات'],
+  },
+  {
     permission: null,
     href: '/approvals',
     label: 'الموافقات',
