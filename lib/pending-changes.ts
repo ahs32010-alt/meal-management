@@ -22,6 +22,38 @@ export interface PendingChange {
   kind: 'add' | 'remove' | 'change';
   /** جزء لا يقبل الفصل (إنشاء السجل نفسه، الحذف) — يُعتمد مع أي اعتماد */
   locked?: boolean;
+  /** الوجبات اللي يمسّها التغيير (فطور/غداء/عشاء) — تظهر شارات بجانبه */
+  meals?: MealType[];
+  /** تفاصيل إضافية تحت التغيير (مثلاً قرارات المنيو المخصّص واحداً واحداً) */
+  details?: string[];
+}
+
+const MEAL_ORDER: MealType[] = ['breakfast', 'lunch', 'dinner'];
+const sortMeals = (s: Iterable<string>): MealType[] =>
+  MEAL_ORDER.filter(m => new Set(s).has(m));
+
+/**
+ * في أي وجبة يطلع كل صنف حسب المنيو. المحظور يُطبَّق على الصنف في كل وجبة
+ * يجي فيها، فالمنيو هو اللي يحدد «هذا التعديل يمسّ الغداء والعشاء» مثلاً.
+ * entity: نقتصر على منيو الفئة (مستفيد/مرافق)؛ لو العمود غائب نأخذ الكل.
+ */
+async function mealTypesOf(
+  supabase: SupabaseClient, ids: (string | null | undefined)[], entity?: 'beneficiary' | 'companion',
+): Promise<Map<string, MealType[]>> {
+  const unique = Array.from(new Set(ids.filter((x): x is string => !!x)));
+  const out = new Map<string, MealType[]>();
+  if (unique.length === 0) return out;
+  type Row = { meal_id: string; meal_type: string; entity_type?: string | null };
+  let res = await supabase.from('menu_items').select('meal_id, meal_type, entity_type').in('meal_id', unique);
+  if (res.error) res = await supabase.from('menu_items').select('meal_id, meal_type').in('meal_id', unique) as typeof res;
+  const acc = new Map<string, Set<string>>();
+  for (const r of (res.data ?? []) as Row[]) {
+    if (entity && r.entity_type && r.entity_type !== entity) continue;
+    if (!acc.has(r.meal_id)) acc.set(r.meal_id, new Set());
+    acc.get(r.meal_id)!.add(r.meal_type);
+  }
+  for (const [id, set] of acc) out.set(id, sortMeals(set));
+  return out;
 }
 
 export interface ChangeSet {
@@ -101,10 +133,14 @@ function fieldChanges(
   cur: Record<string, unknown> | null,
   next: Record<string, unknown>,
   mealName: (id: string) => string,
+  /** عرض الطلب كما أُرسل: نتجاهل الحقول الفاضية/المطفأة عشان ما تزحم القائمة */
+  skipEmpty = false,
 ): PendingChange[] {
   const out: PendingChange[] = [];
   for (const k of Object.keys(next)) {
+    if (k === REVIEW_KEY || k === 'id') continue;
     if (cur && norm(cur[k]) === norm(next[k])) continue;
+    if (skipEmpty && (norm(next[k]) === '' || next[k] === false)) continue;
     const label = FIELD_LABELS[k] ?? k;
     out.push({
       id: `field:${k}`,
@@ -122,20 +158,25 @@ function pickFields(next: Record<string, unknown>, selected: Set<string>) {
 }
 
 /** فرق الاستبعادات (صنف ← بديل) — مشترك بين المستفيد والنظام الغذائي */
-function exclusionChanges(before: ExRow[], after: ExRow[], mealName: (id: string) => string): PendingChange[] {
+function exclusionChanges(
+  before: ExRow[], after: ExRow[], mealName: (id: string) => string,
+  typesOf: (id: string) => MealType[] = () => [],
+): PendingChange[] {
   const out: PendingChange[] = [];
+  // الصنف المحظور غير موجود في المنيو → ننبّه بدل ما نترك الوجبة فاضية
+  const where = (mid: string) => (typesOf(mid).length ? '' : ' (غير موجود في المنيو حالياً)');
   const b = new Map(before.map(e => [e.meal_id, e.alternative_meal_id ?? null]));
   const a = new Map(after.map(e => [e.meal_id, e.alternative_meal_id ?? null]));
   const alt = (id: string | null) => (id ? mealName(id) : 'بدون بديل');
   for (const [mid, newAlt] of a) {
     if (!b.has(mid)) {
-      out.push({ id: `ex:${mid}`, kind: 'add', label: `حظر ${mealName(mid)} — البديل: ${alt(newAlt)}` });
+      out.push({ id: `ex:${mid}`, kind: 'add', meals: typesOf(mid), label: `حظر ${mealName(mid)} — البديل: ${alt(newAlt)}${where(mid)}` });
     } else if ((b.get(mid) ?? null) !== newAlt) {
-      out.push({ id: `ex:${mid}`, kind: 'change', label: `تغيير بديل ${mealName(mid)}: ${alt(b.get(mid) ?? null)} ← ${alt(newAlt)}` });
+      out.push({ id: `ex:${mid}`, kind: 'change', meals: typesOf(mid), label: `تغيير بديل ${mealName(mid)}: ${alt(b.get(mid) ?? null)} ← ${alt(newAlt)}${where(mid)}` });
     }
   }
   for (const [mid, oldAlt] of b) {
-    if (!a.has(mid)) out.push({ id: `ex:${mid}`, kind: 'remove', label: `إلغاء حظر ${mealName(mid)}${oldAlt ? ` (كان بديله ${mealName(oldAlt)})` : ''}` });
+    if (!a.has(mid)) out.push({ id: `ex:${mid}`, kind: 'remove', meals: typesOf(mid), label: `إلغاء حظر ${mealName(mid)}${oldAlt ? ` (كان بديله ${mealName(oldAlt)})` : ''}` });
   }
   return out;
 }
@@ -154,7 +195,7 @@ function applyExclusions(before: ExRow[], after: ExRow[], selected: Set<string>)
 
 // ── المستفيد / المرافق ──────────────────────────────────────────────────────
 
-async function beneficiaryChangeSet(supabase: SupabaseClient, pa: PendingAction): Promise<ChangeSet> {
+async function beneficiaryChangeSet(supabase: SupabaseClient, pa: PendingAction, asSent = false): Promise<ChangeSet> {
   const cp = pa.payload as unknown as CreatePayload | null;
   const noun = pa.entity_type === 'companion' ? 'المرافق' : 'المستفيد';
   if (!cp?.beneficiary) return { changes: [], build: () => null, note: 'الطلب ما يحمل بيانات.' };
@@ -166,7 +207,7 @@ async function beneficiaryChangeSet(supabase: SupabaseClient, pa: PendingAction)
   let curDiets: string[] = [];
   let curOv: unknown[] | null = null;
 
-  if (!isCreate && pa.entity_id) {
+  if (!isCreate && pa.entity_id && !asSent) {
     const id = pa.entity_id;
     const exWithDiet = supabase.from('exclusions').select('meal_id, alternative_meal_id, diet_id').eq('beneficiary_id', id);
     const [bRes, exRes0, fmRes, dRes, ovRes] = await Promise.all([
@@ -203,7 +244,14 @@ async function beneficiaryChangeSet(supabase: SupabaseClient, pa: PendingAction)
     ...(cp.exclusions ?? []).flatMap(e => [e.meal_id, e.alternative_meal_id]),
     ...curFm.map(f => f.meal_id),
     ...(cp.fixed_meals ?? []).map(f => f.meal_id),
+    ...[...(curOv ?? []), ...(cp.menu_overrides ?? [])].flatMap(r => {
+      const o = r as Record<string, unknown>;
+      return [o.base_meal_id as string | null, o.target_meal_id as string | null];
+    }),
   ]);
+  const exIds = [...curEx, ...(cp.exclusions ?? [])].map(e => e.meal_id);
+  const types = await mealTypesOf(supabase, exIds, pa.entity_type === 'companion' ? 'companion' : 'beneficiary');
+  const typesOf = (id: string) => types.get(id) ?? [];
   const diets = await nameMap(supabase, 'diet_systems', [...curDiets, ...(cp.diet_ids ?? [])]);
   const mealName = (id: string) => meals.get(id) ?? 'صنف محذوف';
   const dietName = (id: string) => diets.get(id) ?? 'نظام محذوف';
@@ -212,10 +260,10 @@ async function beneficiaryChangeSet(supabase: SupabaseClient, pa: PendingAction)
   if (isCreate) {
     changes.push({ id: 'base', kind: 'add', locked: true, label: `إضافة ${noun} «${pa.entity_name ?? ''}» بالبيانات الأساسية` });
   } else {
-    changes.push(...fieldChanges(curBen, cp.beneficiary, mealName));
+    changes.push(...fieldChanges(curBen, cp.beneficiary, mealName, asSent));
   }
 
-  changes.push(...exclusionChanges(curEx, cp.exclusions ?? [], mealName));
+  changes.push(...exclusionChanges(curEx, cp.exclusions ?? [], mealName, typesOf));
 
   // الأصناف الثابتة
   const fmLabel = (f: FmRow) =>
@@ -225,11 +273,12 @@ async function beneficiaryChangeSet(supabase: SupabaseClient, pa: PendingAction)
   const aFm = new Map((cp.fixed_meals ?? []).map(f => [fmKey(f), f]));
   for (const [k, f] of aFm) {
     const old = bFm.get(k);
-    if (!old) changes.push({ id: `fm:${k}`, kind: 'add', label: `إضافة صنف ثابت: ${fmLabel(f)}` });
-    else if (fmSig(old) !== fmSig(f)) changes.push({ id: `fm:${k}`, kind: 'change', label: `تعديل صنف ثابت: ${fmLabel(old)} ← ${fmLabel(f)}` });
+    const meals = sortMeals([f.meal_type]);
+    if (!old) changes.push({ id: `fm:${k}`, kind: 'add', meals, label: `إضافة صنف ثابت: ${fmLabel(f)}` });
+    else if (fmSig(old) !== fmSig(f)) changes.push({ id: `fm:${k}`, kind: 'change', meals, label: `تعديل صنف ثابت: ${fmLabel(old)} ← ${fmLabel(f)}` });
   }
   for (const [k, f] of bFm) {
-    if (!aFm.has(k)) changes.push({ id: `fm:${k}`, kind: 'remove', label: `إزالة صنف ثابت: ${fmLabel(f)}` });
+    if (!aFm.has(k)) changes.push({ id: `fm:${k}`, kind: 'remove', meals: sortMeals([f.meal_type]), label: `إزالة صنف ثابت: ${fmLabel(f)}` });
   }
 
   // الأنظمة الغذائية — غياب المفتاح = الطلب ما يمسّها
@@ -240,15 +289,32 @@ async function beneficiaryChangeSet(supabase: SupabaseClient, pa: PendingAction)
 
   // قرارات المنيو المخصّص — كتلة واحدة (تُكتب استبدالاً كاملاً)
   if (cp.menu_overrides !== undefined) {
-    const sig = (rows: unknown[]) => rows
-      .map(r => {
-        const o = r as Record<string, unknown>;
-        return JSON.stringify([o.week_number, o.day_of_week, o.meal_type, o.action, o.base_meal_id ?? null, o.target_meal_id ?? null, o.quantity ?? 1, !!o.is_alternative]);
-      })
-      .sort().join('\n');
-    const differs = curOv === null ? cp.menu_overrides.length > 0 : sig(curOv) !== sig(cp.menu_overrides);
-    if (differs) {
-      changes.push({ id: 'ov', kind: 'change', label: `تعديل قرارات المنيو المخصّص (${cp.menu_overrides.length} قرار بعد التعديل)` });
+    type Ov = NonNullable<CreatePayload['menu_overrides']>[number];
+    const one = (r: unknown) => {
+      const o = r as Ov;
+      return JSON.stringify([o.week_number, o.day_of_week, o.meal_type, o.action, o.base_meal_id ?? null, o.target_meal_id ?? null, o.quantity ?? 1, !!o.is_alternative]);
+    };
+    const before = new Map((curOv ?? []).map(r => [one(r), r as Ov]));
+    const after = new Map(cp.menu_overrides.map(r => [one(r), r as Ov]));
+    const added = [...after].filter(([k]) => !before.has(k)).map(([, r]) => r);
+    const removed = [...before].filter(([k]) => !after.has(k)).map(([, r]) => r);
+    if (added.length || removed.length) {
+      // «أ2 الإثنين غداء: استبدال رز ← برغل ×2 · بديل»
+      const desc = (o: Ov) => {
+        const slot = `أ${o.week_number} ${DAY_LABELS[o.day_of_week] ?? o.day_of_week} ${MEAL_TYPE_LABELS[o.meal_type as MealType] ?? o.meal_type}`;
+        const base = o.base_meal_id ? mealName(o.base_meal_id) : '';
+        const target = o.target_meal_id ? mealName(o.target_meal_id) : '';
+        const what = o.action === 'replace' ? `استبدال ${base} ← ${target}`
+          : o.action === 'remove' ? `حذف ${base || target}`
+          : `إضافة ${target || base}`;
+        return `${slot}: ${what}${(o.quantity ?? 1) > 1 ? ` ×${o.quantity}` : ''}${o.is_alternative ? ' · بديل' : ''}`;
+      };
+      changes.push({
+        id: 'ov', kind: 'change',
+        meals: sortMeals([...added, ...removed].map(o => o.meal_type)),
+        label: `تعديل قرارات المنيو المخصّص (${cp.menu_overrides.length} قرار بعد التعديل)`,
+        details: [...added.map(o => `+ ${desc(o)}`), ...removed.map(o => `− إلغاء: ${desc(o)}`)],
+      });
     }
   }
 
@@ -337,14 +403,14 @@ async function dietContext(supabase: SupabaseClient, dietId: string): Promise<Ch
   };
 }
 
-async function dietChangeSet(supabase: SupabaseClient, pa: PendingAction): Promise<ChangeSet> {
+async function dietChangeSet(supabase: SupabaseClient, pa: PendingAction, asSent = false): Promise<ChangeSet> {
   const p = pa.payload as unknown as DietPayload | null;
   if (!p?.diet) return { changes: [], build: () => null, note: 'الطلب ما يحمل بيانات.' };
   const isCreate = pa.action === 'create';
   let cur: Record<string, unknown> | null = null;
   let curEx: ExRow[] = [];
   let curFx: DietFx[] = [];
-  if (!isCreate && pa.entity_id) {
+  if (!isCreate && pa.entity_id && !asSent) {
     const [dRes, exRes, fxRes] = await Promise.all([
       supabase.from('diet_systems').select('*').eq('id', pa.entity_id).maybeSingle(),
       supabase.from('diet_system_exclusions').select('meal_id, alternative_meal_id').eq('diet_id', pa.entity_id),
@@ -363,12 +429,14 @@ async function dietChangeSet(supabase: SupabaseClient, pa: PendingAction): Promi
     ...(p.fixed_meals ?? []).map(r => r.meal_id),
   ]);
   const mealName = (id: string) => meals.get(id) ?? 'صنف محذوف';
+  // النظام يمسّ المستفيدين والمرافقين → منيو الفئتين
+  const types = await mealTypesOf(supabase, [...curEx, ...(p.exclusions ?? [])].map(e => e.meal_id));
 
   const changes: PendingChange[] = isCreate
     ? [{ id: 'base', kind: 'add', locked: true, label: `إنشاء النظام الغذائي «${p.diet.name ?? ''}»${p.diet.description ? ` — ${p.diet.description}` : ''}` }]
-    : fieldChanges(cur, p.diet, mealName);
-  const context = !isCreate && pa.entity_id ? await dietContext(supabase, pa.entity_id) : undefined;
-  changes.push(...exclusionChanges(curEx, p.exclusions ?? [], mealName));
+    : fieldChanges(cur, p.diet, mealName, asSent);
+  const context = !isCreate && pa.entity_id && !asSent ? await dietContext(supabase, pa.entity_id) : undefined;
+  changes.push(...exclusionChanges(curEx, p.exclusions ?? [], mealName, id => types.get(id) ?? []));
 
   // الأصناف الثابتة — تغيير لكل صف (صنف + وجبة + يوم)
   const fxKey = (r: DietFx) => `${r.day_of_week}|${r.meal_type}|${r.meal_id}`;
@@ -380,13 +448,14 @@ async function dietChangeSet(supabase: SupabaseClient, pa: PendingAction): Promi
   if (p.fixed_meals) {
     for (const [k, r] of aFx) {
       const old = bFx.get(k);
-      if (!old) changes.push({ id: `dfx:${k}`, kind: 'add', label: `صنف ثابت للنظام: ${fxLabel(r)}` });
+      const meals = sortMeals([r.meal_type]);
+      if (!old) changes.push({ id: `dfx:${k}`, kind: 'add', meals, label: `صنف ثابت للنظام: ${fxLabel(r)}` });
       else if (old.quantity !== r.quantity || old.is_alternative !== r.is_alternative) {
-        changes.push({ id: `dfx:${k}`, kind: 'change', label: `تعديل صنف ثابت للنظام: ${fxLabel(old)} ← ${fxLabel(r)}` });
+        changes.push({ id: `dfx:${k}`, kind: 'change', meals, label: `تعديل صنف ثابت للنظام: ${fxLabel(old)} ← ${fxLabel(r)}` });
       }
     }
     for (const [k, r] of bFx) {
-      if (!aFx.has(k)) changes.push({ id: `dfx:${k}`, kind: 'remove', label: `إزالة صنف ثابت من النظام: ${fxLabel(r)}` });
+      if (!aFx.has(k)) changes.push({ id: `dfx:${k}`, kind: 'remove', meals: sortMeals([r.meal_type]), label: `إزالة صنف ثابت من النظام: ${fxLabel(r)}` });
     }
   }
 
@@ -413,8 +482,8 @@ async function dietChangeSet(supabase: SupabaseClient, pa: PendingAction): Promi
 
 // ── الأصناف وبنود المنيو (payload = أعمدة الجدول مباشرة) ──────────────────
 
-async function rowChangeSet(supabase: SupabaseClient, pa: PendingAction): Promise<ChangeSet> {
-  const payload = pa.payload ?? {};
+async function rowChangeSet(supabase: SupabaseClient, pa: PendingAction, asSent = false): Promise<ChangeSet> {
+  const { [REVIEW_KEY]: _snap, ...payload } = pa.payload ?? {};
   const table = pa.entity_type === 'menu_item' ? 'menu_items' : 'meals';
   if (pa.action === 'create') {
     const meals = await nameMap(supabase, 'meals', [payload.meal_id as string | undefined]);
@@ -427,6 +496,10 @@ async function rowChangeSet(supabase: SupabaseClient, pa: PendingAction): Promis
     };
   }
   if (!pa.entity_id) return { changes: [], build: () => null, note: 'الطلب ناقص.' };
+  if (asSent) {
+    const meals = await nameMap(supabase, 'meals', [payload.meal_id as string | undefined]);
+    return { changes: fieldChanges(null, payload, id => meals.get(id) ?? 'صنف محذوف', true), build: () => null };
+  }
   const { data: cur } = await supabase.from(table).select('*').eq('id', pa.entity_id).maybeSingle();
   if (!cur) return { changes: [], build: () => null, note: '⚠ السجل غير موجود حالياً — يحتمل أنه انحذف. ارفض الطلب.' };
   const meals = await nameMap(supabase, 'meals', [payload.meal_id as string | undefined, (cur as Record<string, unknown>).meal_id as string | undefined]);
@@ -441,18 +514,82 @@ const NOUNS: Record<string, string> = {
 };
 
 /** تفكيك الطلب لتغييرات مستقلة مقابل حالة القاعدة الآن */
-export async function loadChangeSet(supabase: SupabaseClient, pa: PendingAction): Promise<ChangeSet> {
+export async function loadChangeSet(
+  supabase: SupabaseClient, pa: PendingAction,
+  /** للطلبات القديمة المنتهية بلا لقطة: محتوى الطلب نفسه بدون مقارنة بالقاعدة */
+  opts: { asSent?: boolean } = {},
+): Promise<ChangeSet> {
+  const asSent = !!opts.asSent;
   if (pa.action === 'delete') {
     return {
       changes: [{ id: 'base', kind: 'remove', locked: true, label: `حذف ${NOUNS[pa.entity_type] ?? ''} «${pa.entity_name ?? ''}»` }],
       build: () => null,
       // حذف نظام غذائي يمسّ كل من هو مسند له — نعرّف بالنظام قبل القرار
-      context: pa.entity_type === 'diet' && pa.entity_id ? await dietContext(supabase, pa.entity_id) : undefined,
+      context: pa.entity_type === 'diet' && pa.entity_id && !asSent ? await dietContext(supabase, pa.entity_id) : undefined,
     };
   }
-  if (pa.entity_type === 'diet') return dietChangeSet(supabase, pa);
-  if (pa.entity_type === 'meal' || pa.entity_type === 'menu_item') return rowChangeSet(supabase, pa);
-  return beneficiaryChangeSet(supabase, pa);
+  if (pa.entity_type === 'diet') return dietChangeSet(supabase, pa, asSent);
+  if (pa.entity_type === 'meal' || pa.entity_type === 'menu_item') return rowChangeSet(supabase, pa, asSent);
+  return beneficiaryChangeSet(supabase, pa, asSent);
+}
+
+// ── لقطة القرار ────────────────────────────────────────────────────────────
+//
+// بعد التنفيذ تصير التغييرات هي حالة القاعدة، فالمقارنة ما تطلع شيء. عشان
+// نقدر نرجع نشوف «وش انطلب ووش اعتُمد ووش انرفض» نحفظ قائمة التغييرات لحظة
+// القرار داخل payload الطلب نفسه (مفتاح _review) — بلا ترقية جداول.
+
+export const REVIEW_KEY = '_review';
+
+export interface ReviewSnapshot {
+  at: string;
+  by?: string;
+  changes: (Omit<PendingChange, 'locked'> & { decision: 'approved' | 'rejected' })[];
+  context?: ChangeSet['context'];
+  note?: string;
+}
+
+export function readSnapshot(pa: PendingAction): ReviewSnapshot | null {
+  const s = (pa.payload as Record<string, unknown> | null)?.[REVIEW_KEY] as ReviewSnapshot | undefined;
+  return s && Array.isArray(s.changes) ? s : null;
+}
+
+/** الحفظ ما يفشّل القرار — لو ما انكتب، يرجع العرض لمحتوى الطلب كما أُرسل */
+async function saveSnapshot(
+  supabase: SupabaseClient, admin: AppUser, pa: PendingAction, cs: ChangeSet | null, approved: Set<string>,
+) {
+  if (!cs) return;
+  const snap: ReviewSnapshot = {
+    at: new Date().toISOString(),
+    by: admin.full_name ?? undefined,
+    changes: cs.changes.map(({ locked, ...c }) => ({
+      ...c,
+      decision: (locked ? approved.size > 0 || approved.has(c.id) : approved.has(c.id)) ? 'approved' : 'rejected',
+    })),
+    ...(cs.context ? { context: cs.context } : {}),
+    ...(cs.note ? { note: cs.note } : {}),
+  };
+  try {
+    await supabase.from('pending_actions')
+      .update({ payload: { ...(pa.payload ?? {}), [REVIEW_KEY]: snap } })
+      .eq('id', pa.id);
+  } catch { /* تجاهل */ }
+}
+
+/** رفض الطلب كله مع حفظ لقطة بالتغييرات المرفوضة */
+export async function rejectAll(
+  supabase: SupabaseClient, admin: AppUser, pa: PendingAction, reason?: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const cs = await loadChangeSet(supabase, pa).catch(() => null);
+  const { error } = await rejectAction(supabase, admin, pa, reason);
+  if (error) return { ok: false, error: error.message };
+  await saveSnapshot(supabase, admin, pa, cs, new Set());
+  return { ok: true };
+}
+
+/** قبول الطلب كله مع حفظ اللقطة */
+export function approveAll(supabase: SupabaseClient, admin: AppUser, pa: PendingAction) {
+  return approveSelected(supabase, admin, pa, 'all');
 }
 
 /**
@@ -466,23 +603,123 @@ export async function approveSelected(
   supabase: SupabaseClient,
   admin: AppUser,
   pa: PendingAction,
-  selected: Set<string>,
+  selected: Set<string> | 'all',
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const cs = await loadChangeSet(supabase, pa);
-  const chosen = cs.changes.filter(c => c.locked || selected.has(c.id));
-  const rejected = cs.changes.filter(c => !c.locked && !selected.has(c.id));
-
-  if (chosen.length === 0) {
-    const { error } = await rejectAction(supabase, admin, pa, 'رُفضت كل التغييرات المطلوبة');
-    return error ? { ok: false, error: error.message } : { ok: true };
+  // قبول الكل ما يتعطّل لو تحليل التغييرات فشل — بس تضيع اللقطة
+  const cs = await loadChangeSet(supabase, pa).catch(() => null);
+  if (!cs) {
+    if (selected !== 'all') return { ok: false, error: 'تعذّر تحليل الطلب' };
+    return approveAction(supabase, admin, pa);
   }
-  if (rejected.length === 0) return approveAction(supabase, admin, pa);
+  const isOn = (c: PendingChange) => c.locked || selected === 'all' || selected.has(c.id);
+  const chosen = cs.changes.filter(isOn);
+  const rejected = cs.changes.filter(c => !isOn(c));
+  const chosenIds = new Set(chosen.map(c => c.id));
 
-  const payload = cs.build(new Set(chosen.map(c => c.id)));
+  if (chosen.length === 0 && selected !== 'all') {
+    const { error } = await rejectAction(supabase, admin, pa, 'رُفضت كل التغييرات المطلوبة');
+    if (error) return { ok: false, error: error.message };
+    await saveSnapshot(supabase, admin, pa, cs, chosenIds);
+    return { ok: true };
+  }
+  if (rejected.length === 0) {
+    const r = await approveAction(supabase, admin, pa);
+    if (r.ok) await saveSnapshot(supabase, admin, pa, cs, chosenIds);
+    return r;
+  }
+
+  const payload = cs.build(chosenIds);
   const r = await approveAction(supabase, admin, { ...pa, payload });
   if (!r.ok) return r;
   const { error } = await supabase.from('pending_actions')
     .update({ reject_reason: `اعتُمد جزئياً — رُفض: ${rejected.map(c => c.label).join('، ')}` })
     .eq('id', pa.id);
+  await saveSnapshot(supabase, admin, pa, cs, chosenIds);
   return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+// ── الطلبات المنتهية قبل حفظ اللقطات ───────────────────────────────────────
+
+export type DecidedSource = 'log' | 'diff' | 'sent';
+
+const MEAL_BY_LABEL = new Map(
+  (Object.entries(MEAL_TYPE_LABELS) as [MealType, string][]).map(([k, v]) => [v, k]),
+);
+
+/**
+ * تفاصيل طلب منتهي ما له لقطة:
+ *   • مقبول → سجل النشاط (approveAction يكتب الفرق الفعلي وقت التنفيذ)
+ *   • مرفوض → مقارنة الطلب بالبيانات الحالية (ما انطبق، فالفرق لسا له معنى)
+ *   • وإلا  → محتوى الطلب كما أُرسل
+ */
+export async function loadDecidedChangeSet(
+  supabase: SupabaseClient, pa: PendingAction,
+): Promise<ChangeSet & { source: DecidedSource }> {
+  if (pa.status === 'approved' && pa.action === 'update' && pa.entity_id && pa.reviewed_at) {
+    const fromLog = await changesFromLog(supabase, pa).catch(() => null);
+    if (fromLog && fromLog.changes.length > 0) return { ...fromLog, source: 'log' };
+  }
+  if (pa.status === 'rejected' && pa.action !== 'create') {
+    const cs = await loadChangeSet(supabase, pa).catch(() => null);
+    if (cs && !cs.note && cs.changes.length > 0) return { ...cs, source: 'diff' };
+  }
+  return { ...(await loadChangeSet(supabase, pa, { asSent: true })), source: 'sent' };
+}
+
+async function changesFromLog(supabase: SupabaseClient, pa: PendingAction): Promise<ChangeSet | null> {
+  const t = new Date(pa.reviewed_at!).getTime();
+  const { data } = await supabase.from('activity_log')
+    .select('details, created_at')
+    .eq('entity_id', pa.entity_id!)
+    .gte('created_at', new Date(t - 5 * 60_000).toISOString())
+    .lte('created_at', new Date(t + 5 * 60_000).toISOString());
+  const rows = ((data ?? []) as { details: Record<string, unknown> | null; created_at: string }[])
+    .filter(r => r.details?.source === 'approval')
+    .sort((a, b) => Math.abs(new Date(a.created_at).getTime() - t) - Math.abs(new Date(b.created_at).getTime() - t));
+  const d = rows[0]?.details;
+  if (!d) return null;
+
+  const changes: PendingChange[] = [];
+  const fieldsChanged = (d.__changes ?? {}) as Record<string, { before: unknown; after: unknown }>;
+  for (const [k, v] of Object.entries(fieldsChanged)) {
+    const fmt = (x: unknown) => show(x, id => id, k);
+    changes.push({ id: `field:${k}`, kind: 'change', label: `${FIELD_LABELS[k] ?? k}: «${fmt(v?.before)}» ← «${fmt(v?.after)}»` });
+  }
+
+  const list = (key: string) => (Array.isArray(d[key]) ? (d[key] as unknown[]).map(String) : []);
+  // «لبن (البديل: عصير)» → لبن
+  const exName = (l: string) => l.split(' (البديل:')[0].trim();
+  const exLabels = [...list('added_exclusions'), ...list('removed_exclusions'), ...list('added_diet_exclusions'), ...list('removed_diet_exclusions')];
+  const names = Array.from(new Set(exLabels.map(exName)));
+  const typesByName = new Map<string, MealType[]>();
+  if (names.length) {
+    const { data: ms } = await supabase.from('meals').select('id, name').in('name', names);
+    const idsByName = new Map(((ms ?? []) as { id: string; name: string }[]).map(m => [m.name, m.id]));
+    const types = await mealTypesOf(supabase, [...idsByName.values()],
+      pa.entity_type === 'companion' ? 'companion' : pa.entity_type === 'beneficiary' ? 'beneficiary' : undefined);
+    for (const [n, id] of idsByName) typesByName.set(n, types.get(id) ?? []);
+  }
+  // «فطيرة جبن · فطور · السبت · كمية 2» → فطور
+  const fixedMeal = (l: string): MealType[] => {
+    const m = l.split(' · ').map(x => MEAL_BY_LABEL.get(x.trim())).find(Boolean);
+    return m ? [m] : [];
+  };
+
+  const push = (key: string, kind: PendingChange['kind'], prefix: string, meals: (l: string) => MealType[]) =>
+    list(key).forEach((l, i) => changes.push({ id: `${key}:${i}`, kind, label: `${prefix}${l}`, meals: meals(l) }));
+  const exMeals = (l: string) => typesByName.get(exName(l)) ?? [];
+  push('added_exclusions', 'add', 'حظر ', exMeals);
+  push('removed_exclusions', 'remove', 'إلغاء حظر ', exMeals);
+  push('added_diet_exclusions', 'add', 'حظر ', exMeals);
+  push('removed_diet_exclusions', 'remove', 'إلغاء حظر ', exMeals);
+  push('added_fixed_meals', 'add', 'إضافة صنف ثابت: ', fixedMeal);
+  push('removed_fixed_meals', 'remove', 'إزالة صنف ثابت: ', fixedMeal);
+  push('added_diet_fixed_meals', 'add', 'صنف ثابت للنظام: ', fixedMeal);
+  push('removed_diet_fixed_meals', 'remove', 'إزالة صنف ثابت من النظام: ', fixedMeal);
+  push('added_diets', 'add', 'إسناد النظام الغذائي ', () => []);
+  push('removed_diets', 'remove', 'إلغاء إسناد النظام الغذائي ', () => []);
+  push('added_menu_overrides', 'add', 'قرار منيو مخصّص: ', fixedMeal);
+  push('removed_menu_overrides', 'remove', 'إلغاء قرار منيو مخصّص: ', fixedMeal);
+
+  return { changes, build: () => null };
 }

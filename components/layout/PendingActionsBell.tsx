@@ -7,11 +7,10 @@ import { useState, useEffect, useCallback, useRef, useId } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { useCurrentUser } from '@/lib/use-current-user';
 import Link from 'next/link';
+import { approveAll, rejectAll } from '@/lib/pending-changes';
 import {
   type PendingAction,
   PENDING_ENTITY_LABELS,
-  approveAction,
-  rejectAction,
 } from '@/lib/pending-actions';
 
 function timeAgo(iso: string): string {
@@ -79,7 +78,7 @@ export default function PendingActionsBell() {
     if (!user) return;
     setBusyId(pa.id);
     setError(null);
-    const r = await approveAction(supabase, user, pa);
+    const r = await approveAll(supabase, user, pa);
     if (!r.ok) setError(r.error);
     setBusyId(null);
     fetchPending();
@@ -90,8 +89,8 @@ export default function PendingActionsBell() {
     const reason = window.prompt('سبب الرفض (اختياري):') ?? '';
     setBusyId(pa.id);
     setError(null);
-    const { error: rejErr } = await rejectAction(supabase, user, pa, reason);
-    if (rejErr) setError(rejErr.message);
+    const rj = await rejectAll(supabase, user, pa, reason);
+    if (!rj.ok) setError(rj.error);
     setBusyId(null);
     fetchPending();
   };

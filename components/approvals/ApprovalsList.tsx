@@ -8,8 +8,13 @@
 import { useState, useEffect, useCallback, useRef, useId } from 'react';
 import { supabase } from '@/lib/supabase-client';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { type PendingAction, PENDING_ENTITY_LABELS, approveAction, rejectAction } from '@/lib/pending-actions';
-import { type ChangeSet, type PendingChange, loadChangeSet, approveSelected } from '@/lib/pending-changes';
+import { type PendingAction, PENDING_ENTITY_LABELS } from '@/lib/pending-actions';
+import {
+  type ChangeSet, type PendingChange, type ReviewSnapshot,
+  loadChangeSet, loadDecidedChangeSet, approveSelected, approveAll, rejectAll, readSnapshot,
+  type DecidedSource,
+} from '@/lib/pending-changes';
+import { MEAL_TYPE_LABELS, type MealType } from '@/lib/types';
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -41,6 +46,99 @@ const KIND_THEME: Record<PendingChange['kind'], { icon: string; cls: string }> =
   change: { icon: '✎', cls: 'text-blue-700 bg-blue-50 border-blue-200' },
 };
 
+// شارة الوجبة اللي يمسّها التغيير — لون ثابت لكل وجبة عشان تنقرأ بنظرة
+const MEAL_BADGE: Record<MealType, string> = {
+  breakfast: 'bg-amber-100 text-amber-800 border-amber-300',
+  lunch:     'bg-orange-100 text-orange-800 border-orange-300',
+  dinner:    'bg-indigo-100 text-indigo-800 border-indigo-300',
+};
+const MEAL_ICON: Record<MealType, string> = { breakfast: '🌅', lunch: '☀️', dinner: '🌙' };
+
+function MealBadges({ meals }: { meals?: MealType[] }) {
+  if (!meals?.length) return null;
+  return (
+    <span className="flex flex-wrap gap-1 shrink-0">
+      {meals.map(m => (
+        <span key={m} className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${MEAL_BADGE[m]}`}>
+          {MEAL_ICON[m]} {MEAL_TYPE_LABELS[m]}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function MealSummary({ changes }: { changes: { meals?: MealType[] }[] }) {
+  const all = new Set(changes.flatMap(c => c.meals ?? []));
+  if (all.size === 0) return null;
+  return (
+    <div className="flex items-center gap-2 text-[11px] text-slate-600">
+      <span className="font-semibold">الوجبات المتأثرة:</span>
+      <MealBadges meals={(['breakfast', 'lunch', 'dinner'] as const).filter(m => all.has(m))} />
+    </div>
+  );
+}
+
+/** سطر تغيير للعرض فقط (طلب منتهي) — decision يحدد ✓ أو ✕ */
+function ChangeRow({ c, decision }: {
+  c: Pick<PendingChange, 'kind' | 'label' | 'meals' | 'details'>;
+  decision?: 'approved' | 'rejected';
+}) {
+  const theme = KIND_THEME[c.kind];
+  const rejected = decision === 'rejected';
+  return (
+    <div className={`flex items-start gap-2 text-xs rounded-lg border px-2 py-1.5 ${
+      rejected ? 'bg-red-50/60 border-red-200' : decision === 'approved' ? 'bg-emerald-50/50 border-emerald-200' : 'bg-white border-slate-200'
+    }`}>
+      {decision && (
+        <span className={`shrink-0 w-5 h-5 grid place-items-center rounded-full text-[11px] font-bold text-white ${
+          rejected ? 'bg-red-500' : 'bg-emerald-600'
+        }`} title={rejected ? 'مرفوض' : 'مقبول'}>{rejected ? '✕' : '✓'}</span>
+      )}
+      <span className={`shrink-0 w-5 h-5 grid place-items-center rounded border font-bold ${theme.cls}`}>{theme.icon}</span>
+      <span className="flex-1 min-w-0">
+        <span className={rejected ? 'text-slate-500 line-through' : 'text-slate-700'}>{c.label}</span>
+        {c.details && c.details.length > 0 && (
+          <span className="block mt-1 space-y-0.5">
+            {c.details.map((d, i) => <span key={i} className="block text-[11px] text-slate-500">{d}</span>)}
+          </span>
+        )}
+      </span>
+      <MealBadges meals={c.meals} />
+    </div>
+  );
+}
+
+/** تفاصيل طلب منتهي من اللقطة المحفوظة لحظة القرار */
+function DecidedReview({ snap }: { snap: ReviewSnapshot }) {
+  const ok = snap.changes.filter(c => c.decision === 'approved').length;
+  const no = snap.changes.length - ok;
+  return (
+    <div className="space-y-2">
+      {snap.context && (
+        <div className="rounded-lg border border-teal-200 bg-teal-50/50 px-3 py-2 space-y-1">
+          <p className="text-xs font-bold text-slate-700">{snap.context.title} (وقت القرار)</p>
+          {snap.context.lines.map(l => (
+            <p key={l.label} className="text-[11px] text-slate-600 leading-relaxed">
+              <span className="font-semibold text-slate-700">{l.label}: </span>{l.value}
+            </p>
+          ))}
+        </div>
+      )}
+      {snap.note && <p className="text-xs text-amber-700">{snap.note}</p>}
+      <div className="flex items-center gap-3 text-[11px] flex-wrap">
+        {ok > 0 && <span className="font-bold text-emerald-700">✓ مقبول: {ok}</span>}
+        {no > 0 && <span className="font-bold text-red-600">✕ مرفوض: {no}</span>}
+        {snap.by && <span className="text-slate-400">بواسطة {snap.by}</span>}
+      </div>
+      <MealSummary changes={snap.changes} />
+      {snap.changes.length === 0 && <p className="text-xs text-slate-500">— ما كان فيه تغييرات فعلية وقت القرار.</p>}
+      <ul className="space-y-1">
+        {snap.changes.map(c => <li key={c.id}><ChangeRow c={c} decision={c.decision} /></li>)}
+      </ul>
+    </div>
+  );
+}
+
 /**
  * مراجعة الطلب تغييراً تغييراً. للأدمن على طلب معلّق: خانة لكل تغيير
  * (محظور، بديل، صنف ثابت، حقل…) فيعتمد المختار ويُرفض الباقي.
@@ -58,22 +156,33 @@ function ChangeReview({
   onApproveSelected: (selected: Set<string>) => void;
 }) {
   const [cs, setCs] = useState<ChangeSet | null>(null);
+  const [source, setSource] = useState<DecidedSource | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loadErr, setLoadErr] = useState<string | null>(null);
+
+  // المنتهي وله لقطة → نعرضها بلا تحميل؛ القديم بلا لقطة → محتوى الطلب كما أُرسل
+  const snap = pa.status === 'pending' ? null : readSnapshot(pa);
 
   useEffect(() => {
     let cancelled = false;
     setCs(null);
-    loadChangeSet(supabase, pa)
+    setLoadErr(null);
+    if (snap) return;
+    const load = pa.status === 'pending'
+      ? loadChangeSet(supabase, pa).then(r => ({ ...r, source: null }))
+      : loadDecidedChangeSet(supabase, pa);
+    load
       .then(r => {
         if (cancelled) return;
         setCs(r);
+        setSource(r.source);
         setSelected(new Set(r.changes.filter(c => !c.locked).map(c => c.id)));
       })
       .catch(e => { if (!cancelled) setLoadErr(e instanceof Error ? e.message : String(e)); });
     return () => { cancelled = true; };
-  }, [pa]);
+  }, [pa, snap]);
 
+  if (snap) return <DecidedReview snap={snap} />;
   if (loadErr) return <div className="text-xs text-red-600">تعذّر تحليل الطلب: {loadErr}</div>;
   if (!cs) return <div className="text-xs text-slate-400">جاري تحليل التغييرات...</div>;
 
@@ -88,12 +197,24 @@ function ChangeReview({
     </div>
   );
 
-  // بعد التنفيذ، المقارنة مع القاعدة ما عاد لها معنى (التغييرات صارت هي الحالة)
+  // طلب منتهي قبل حفظ اللقطات: نعرض محتواه كما أُرسل (بلا تحديد المقبول/المرفوض)
   if (pa.status !== 'pending') {
     return (
-      <p className="text-xs text-slate-500">
-        {pa.status === 'approved' ? 'تم تنفيذ الطلب.' : 'الطلب مرفوض.'}
-      </p>
+      <div className="space-y-2">
+        <p className="text-[11px] text-slate-500 bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+          {source === 'log' ? '📋 التغييرات اللي انطبقت فعلاً — من سجل النشاط وقت القبول.'
+            : source === 'diff' ? '📋 اللي كان مطلوب — مقارنة بالبيانات الحالية (الطلب مرفوض فما انطبق).'
+            : '📄 محتوى الطلب كما أُرسل — الطلب قديم وما انحفظ له تفصيل القرار وقتها.'}
+        </p>
+        {cs.note && <p className="text-xs text-amber-700">{cs.note}</p>}
+        <MealSummary changes={cs.changes} />
+        {cs.changes.length === 0 && <p className="text-xs text-slate-500">— ما فيه تفاصيل.</p>}
+        <ul className="space-y-1">
+          {cs.changes.map(c => (
+            <li key={c.id}><ChangeRow c={c} /></li>
+          ))}
+        </ul>
+      </div>
     );
   }
 
@@ -122,6 +243,8 @@ function ChangeReview({
         </div>
       )}
 
+      <MealSummary changes={cs.changes} />
+
       <ul className="space-y-1">
         {cs.changes.map(c => {
           const theme = KIND_THEME[c.kind];
@@ -141,7 +264,17 @@ function ChangeReview({
                   />
                 )}
                 <span className={`shrink-0 w-5 h-5 grid place-items-center rounded border font-bold ${theme.cls}`}>{theme.icon}</span>
-                <span className={`flex-1 ${on ? 'text-slate-700' : 'text-slate-500 line-through'}`}>{c.label}</span>
+                <span className="flex-1 min-w-0">
+                  <span className={on ? 'text-slate-700' : 'text-slate-500 line-through'}>{c.label}</span>
+                  {c.details && c.details.length > 0 && (
+                    <span className="block mt-1 space-y-0.5">
+                      {c.details.map((d, i) => (
+                        <span key={i} className="block text-[11px] text-slate-500">{d}</span>
+                      ))}
+                    </span>
+                  )}
+                </span>
+                <MealBadges meals={c.meals} />
                 {c.locked && <span className="text-[10px] text-slate-400 shrink-0">أساسي</span>}
               </label>
             </li>
@@ -230,7 +363,7 @@ export default function ApprovalsList({ limit, statusFilter = 'all', hideFilters
     if (!user) return;
     setBusyId(pa.id);
     setError(null);
-    const r = await approveAction(supabase, user, pa);
+    const r = await approveAll(supabase, user, pa);
     if (!r.ok) setError(r.error);
     setBusyId(null);
     fetchData();
@@ -253,8 +386,8 @@ export default function ApprovalsList({ limit, statusFilter = 'all', hideFilters
     const reason = window.prompt('سبب الرفض (اختياري):') ?? '';
     setBusyId(pa.id);
     setError(null);
-    const { error: rejErr } = await rejectAction(supabase, user, pa, reason);
-    if (rejErr) setError(rejErr.message);
+    const rj = await rejectAll(supabase, user, pa, reason);
+    if (!rj.ok) setError(rj.error);
     setBusyId(null);
     fetchData();
     onChange?.();
