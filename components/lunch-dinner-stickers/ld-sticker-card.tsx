@@ -11,7 +11,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { Beneficiary } from '@/lib/types';
 import { STICKER_FLAGS } from '@/lib/sticker-flags';
-import { hasCustomization, LD_CATEGORY, type LdMealCustomization } from './ld-types';
+import { dietEnglishNames, hasCustomization, LD_CATEGORY, type LdMealCustomization } from './ld-types';
 import { colorsBackground } from './ld-diet-order';
 
 // ترجمة إنجليزية لأنواع الأنظمة الغذائية الشائعة — تُعرض كسطر ثانٍ تحت العربي.
@@ -42,14 +42,18 @@ export const DIET_TYPE_EN: Record<string, string> = {
   'حساسية السمك': 'Fish allergy',
 };
 
+/** الإنجليزي من صفحة الأنظمة الغذائية أولاً، ثم جدول الترجمة الثابت */
+const dietEn = (ar: string): string | undefined => dietEnglishNames.get(ar) || DIET_TYPE_EN[ar];
+
 /**
  * سطرا النظام في الستيكر. أكثر من نظام («أ - ب») → ترجمة كل جزء؛ لو جزء
  * ما له ترجمة يبقى السطر الإنجليزي فاضياً بدل ترجمة ناقصة.
  */
 export function dietLines(diet?: string): { ar: string; en: string } {
   const ar = (diet ?? '').trim() || 'نظام غذائي عادي';
-  if (DIET_TYPE_EN[ar]) return { ar, en: DIET_TYPE_EN[ar] };
-  const parts = ar.split(' - ').map(p => DIET_TYPE_EN[p.trim()]);
+  const whole = dietEn(ar);
+  if (whole) return { ar, en: whole };
+  const parts = ar.split(' - ').map(p => dietEn(p.trim()));
   return { ar, en: parts.length > 1 && parts.every(Boolean) ? parts.join(' - ') : '' };
 }
 
@@ -277,7 +281,7 @@ export default function StickerCard({ ben, headerUrl, widthCm, heightCm, bgColor
   const [k, setK] = useState(1);
   const [nk, setNk] = useState(1);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const fitKey = `${widthCm}|${heightCm}|${ben.id}|${ben.name}|${ben.english_name ?? ''}|${ben.notes ?? ''}|${JSON.stringify(custom ?? null)}`;
+  const fitKey = `${widthCm}|${heightCm}|${ben.id}|${ben.name}|${ben.english_name ?? ''}|${ben.notes ?? ''}|${ben.allergies ?? ''}|${JSON.stringify(custom ?? null)}`;
   const [lastKey, setLastKey] = useState(fitKey);
   if (lastKey !== fitKey) { setLastKey(fitKey); setK(1); setNk(1); }
   useLayoutEffect(() => {
@@ -350,6 +354,12 @@ export default function StickerCard({ ben, headerUrl, widthCm, heightCm, bgColor
           <span dir="ltr">Food Allergy:</span>
           <span>حساسيات وموانع:</span>
         </div>
+        {ben.allergies?.trim() && (
+          <div dir="rtl" className="text-center shrink-0 whitespace-pre-wrap break-words font-bold"
+            style={{ fontSize: 12 * s2, color: '#B91C1C' }}>
+            {ben.allergies.trim()}
+          </div>
+        )}
 
         {/* الملاحظات */}
         <div className="text-center shrink-0">

@@ -72,6 +72,8 @@ export default function DietSystemList() {
   const [displayReady, setDisplayReady] = useState(true);
   // false = عمود لون الستيكر غير موجود (diet-system-color-migration)
   const [colorReady, setColorReady] = useState(true);
+  // false = عمود الاسم الإنجليزي غير موجود (allergies-diet-english-migration)
+  const [englishReady, setEnglishReady] = useState(true);
 
   const load = useCallback(async () => {
     setError('');
@@ -80,13 +82,18 @@ export default function DietSystemList() {
       (async () => {
         let withDisplay = true;
         let withColor = true;
+        let withEnglish = true;
         const read = (withFixed: boolean) => supabase
           .from('diet_systems')
-          .select(`id, name, description${withDisplay ? ', display_only' : ''}${withColor ? ', color' : ''}, created_at, exclusions:diet_system_exclusions(id, meal_id, alternative_meal_id)${withFixed
+          .select(`id, name${withEnglish ? ', english_name' : ''}, description${withDisplay ? ', display_only' : ''}${withColor ? ', color' : ''}, created_at, exclusions:diet_system_exclusions(id, meal_id, alternative_meal_id)${withFixed
             ? ', fixed_meals:diet_system_fixed_meals(id, day_of_week, meal_type, meal_id, quantity, is_alternative)' : ''}, beneficiary_diets(beneficiary_id)`)
           .order('name');
         let withFixed = true;
         let r = await read(withFixed);
+        if (r.error && /english_name/i.test(r.error.message)) {
+          withEnglish = false;
+          r = await read(withFixed);
+        }
         if (r.error && /color/i.test(r.error.message)) {
           withColor = false;
           r = await read(withFixed);
@@ -101,6 +108,7 @@ export default function DietSystemList() {
         }
         setDisplayReady(withDisplay);
         setColorReady(withColor);
+        setEnglishReady(withEnglish);
         setFixedReady(withFixed);
         return r;
       })(),
@@ -297,6 +305,7 @@ export default function DietSystemList() {
                       {myPending.hasDelete(d.id) && <span className="pending-badge pending-badge-delete mr-2">⏳ حذف</span>}
                       {!myPending.hasDelete(d.id) && myPending.hasUpdate(d.id) && <span className="pending-badge pending-badge-update mr-2">⏳ تعديل</span>}
                     </h3>
+                    {d.english_name && <p dir="ltr" className="text-xs font-semibold text-slate-500 text-right">{d.english_name}</p>}
                     {d.description && <p className="text-xs text-slate-500 mt-0.5">{d.description}</p>}
                     <div className="flex flex-wrap gap-2 mt-2 text-xs">
                       {colorReady && (
@@ -426,6 +435,7 @@ export default function DietSystemList() {
           fixedReady={fixedReady}
           displayReady={displayReady}
           colorReady={colorReady}
+          englishReady={englishReady}
           existingNames={diets.filter(d => editing === 'new' || d.id !== editing.id).map(d => d.name)}
           onClose={() => setEditing(null)}
           approvalUser={
@@ -443,12 +453,13 @@ function approvalError(r: Extract<EnqueueResult, { ok: false }>) {
   return isEntityTypeConstraintError(r.error) ? DIET_APPROVAL_MIGRATION_HINT : r.error;
 }
 
-function DietModal({ diet, meals, fixedReady, displayReady, colorReady, existingNames, approvalUser, onClose, onSaved }: {
+function DietModal({ diet, meals, fixedReady, displayReady, colorReady, englishReady, existingNames, approvalUser, onClose, onSaved }: {
   diet: DietSystem | null;
   meals: Meal[];
   fixedReady: boolean;
   displayReady: boolean;
   colorReady: boolean;
+  englishReady: boolean;
   existingNames: string[];
   /** موجود = الحفظ يحتاج موافقة → يُرسل طلباً بدل الكتابة المباشرة */
   approvalUser: AppUser | null;
@@ -457,6 +468,7 @@ function DietModal({ diet, meals, fixedReady, displayReady, colorReady, existing
 }) {
   const [name, setName] = useState(diet?.name ?? '');
   const [description, setDescription] = useState(diet?.description ?? '');
+  const [englishName, setEnglishName] = useState(diet?.english_name ?? '');
   // الافتراضي: للعرض فقط — الأصناف ما تنعكس على المستفيد إلا لو شِيل الخيار
   const [displayOnly, setDisplayOnly] = useState(diet?.display_only ?? true);
   const [color, setColor] = useState<string | null>(diet?.color ?? null);
@@ -480,10 +492,18 @@ function DietModal({ diet, meals, fixedReady, displayReady, colorReady, existing
       setError('يوجد نظام بنفس الاسم'); return;
     }
     setSaving(true); setError('');
+    const englishTrimmed = englishName.trim() || null;
+    const dietFields = {
+      name: trimmed,
+      ...(englishReady ? { english_name: englishTrimmed } : {}),
+      description: description.trim() || null,
+      ...(displayReady ? { display_only: displayOnly } : {}),
+      ...(colorReady ? { color } : {}),
+    };
 
     if (approvalUser) {
       const payload: DietPayload = {
-        diet: { name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}), ...(colorReady ? { color } : {}) },
+        diet: dietFields,
         exclusions: items.map(x => ({ meal_id: x.meal_id, alternative_meal_id: x.alternative_meal_id || null })),
         ...(fixedReady ? {
           fixed_meals: rowsFromDrafts(fixedDrafts).map(r => ({
@@ -508,11 +528,11 @@ function DietModal({ diet, meals, fixedReady, displayReady, colorReady, existing
       let dietId = diet?.id;
       if (diet) {
         const { error: e } = await supabase.from('diet_systems')
-          .update({ name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}), ...(colorReady ? { color } : {}) }).eq('id', diet.id);
+          .update(dietFields).eq('id', diet.id);
         if (e) throw e;
       } else {
         const { data, error: e } = await supabase.from('diet_systems')
-          .insert({ name: trimmed, description: description.trim() || null, ...(displayReady ? { display_only: displayOnly } : {}), ...(colorReady ? { color } : {}) }).select('id').single();
+          .insert(dietFields).select('id').single();
         if (e) throw e;
         dietId = (data as { id: string }).id;
       }
@@ -568,6 +588,8 @@ function DietModal({ diet, meals, fixedReady, displayReady, colorReady, existing
         entity_name: trimmed,
         details: {
           ...(diet && diet.name !== trimmed ? { name: { from: diet.name, to: trimmed } } : {}),
+          ...(englishReady && (diet?.english_name ?? null) !== englishTrimmed
+            ? { english_name: { from: diet?.english_name ?? null, to: englishTrimmed } } : {}),
           ...(displayReady && (diet?.display_only ?? true) !== displayOnly
             ? { display_only: { from: diet ? (diet.display_only ?? true) : null, to: displayOnly } } : {}),
           ...(colorReady && (diet?.color ?? null) !== color
@@ -606,6 +628,18 @@ function DietModal({ diet, meals, fixedReady, displayReady, colorReady, existing
               <input value={name} onChange={e => setName(e.target.value)} className="input-field" placeholder="مثال: سكري" autoFocus />
             </div>
             <div>
+              <label className="label">الاسم بالإنجليزي (يطلع في الستيكر)</label>
+              {englishReady ? (
+                <input value={englishName} onChange={e => setEnglishName(e.target.value)} dir="ltr"
+                  className="input-field text-left" placeholder="e.g. Diabetic diet" />
+              ) : (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  يحتاج تفعيل في القاعدة: شغّل supabase/allergies-diet-english-migration.sql في Supabase SQL Editor
+                </p>
+              )}
+              <p className="text-[11px] text-slate-500 mt-1">يُطبع تحت الاسم العربي في ستيكرات الغداء والعشاء.</p>
+            </div>
+            <div className="sm:col-span-2">
               <label className="label">وصف (اختياري)</label>
               <input value={description} onChange={e => setDescription(e.target.value)} className="input-field" placeholder="ملاحظة قصيرة عن النظام" />
             </div>

@@ -19,6 +19,8 @@ interface MealRow {
   id: string; name: string; english_name?: string | null;
   type: MealType; is_snack: boolean; category?: ItemCategory | null;
   entity_type?: EntityType; created_at?: string;
+  /** حالة غذائية (meal-textures-migration) — تظهر في خانة صنفها الأصلي */
+  texture_of?: string | null; texture_name?: string | null; texture_diet_id?: string | null;
 }
 
 interface BeneficiaryRow {
@@ -191,12 +193,24 @@ function buildBeneficiariesSheet(
     ));
 }
 
-function buildMealsSheet(meals: MealRow[], entityType: EntityType): Record<string, string>[] {
+function buildMealsSheet(meals: MealRow[], entityType: EntityType, diets: DietSystemRow[] = []): Record<string, string>[] {
   // نفس صيغة صفحة الأصناف حرفياً (lib/meal-sheet) — السناك دائماً «سناك»
   // حتى لو بقيت له فئة قديمة، فتُستورد الورقة في الصفحة بلا فروق.
+  // الحالات الغذائية ما تطلع كصفوف — تطلع في خانة «الحالات الغذائية» لأصلها.
+  const dietName = new Map(diets.map(d => [d.id, d.name] as const));
+  const texByParent = new Map<string, { name: string; diet: string | null }[]>();
+  for (const m of meals) {
+    if (!m.texture_of || !m.texture_name) continue;
+    const list = texByParent.get(m.texture_of) ?? [];
+    list.push({ name: m.texture_name, diet: m.texture_diet_id ? dietName.get(m.texture_diet_id) ?? null : null });
+    texByParent.set(m.texture_of, list);
+  }
   return meals
-    .filter(m => (m.entity_type ?? 'beneficiary') === entityType)
-    .map(m => buildMealRow({ ...m, english_name: m.english_name ?? undefined, category: m.category ?? undefined }));
+    .filter(m => (m.entity_type ?? 'beneficiary') === entityType && !m.texture_of)
+    .map(m => buildMealRow(
+      { ...m, english_name: m.english_name ?? undefined, category: m.category ?? undefined },
+      texByParent.get(m.id),
+    ));
 }
 
 function buildMenuSheets(
@@ -582,8 +596,8 @@ export function buildBackupSheets(snapshot: BackupSnapshot): BackupSheet[] {
   add('تعديلات منيو المستفيدين', buildMenuOverridesSheet(overrides, bens, meals));
 
   // 2) أصناف كل فئة
-  add('أصناف المستفيدين', buildMealsSheet(meals, 'beneficiary'));
-  add('أصناف المرافقين',  buildMealsSheet(meals, 'companion'));
+  add('أصناف المستفيدين', buildMealsSheet(meals, 'beneficiary', diets));
+  add('أصناف المرافقين',  buildMealsSheet(meals, 'companion', diets));
 
   // 3) المنيو لكل فئة — جدول مسطّح للقراءة البشرية
   for (const sheet of buildMenuSheets(menu, meals, 'beneficiary')) {

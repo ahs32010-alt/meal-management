@@ -283,3 +283,15 @@ describe('normalizeSheetRow', () => {
     });
   });
 });
+
+describe('ملف المستفيدين — حساسيات وموانع', async () => {
+  const sheet = await import('@/lib/beneficiary-sheet');
+  it('العمود بعد الملاحظات، ويُصدَّر بقيمته', () => {
+    const h = sheet.BENEFICIARY_HEADERS;
+    expect(h.indexOf(sheet.COL_ALLERGIES)).toBe(h.indexOf('ملاحظات') + 1);
+    const row = sheet.buildBeneficiaryRow(
+      { name: 'أ', code: '1', allergies: 'حساسية مكسرات' }, [], [], new Map(),
+    );
+    expect(row[sheet.COL_ALLERGIES]).toBe('حساسية مكسرات');
+  });
+});

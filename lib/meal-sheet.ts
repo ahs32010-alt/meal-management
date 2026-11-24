@@ -1,5 +1,6 @@
 import type { ItemCategory, Meal, MealType, EntityType } from '@/lib/types';
 import { MEAL_TYPE_LABELS, CATEGORY_LABELS } from '@/lib/types';
+import { formatTextures, parseTextures, type TextureSpec } from '@/lib/meal-textures';
 
 /**
  * صيغة ملف الأصناف — مصدر واحد للتصدير والاستيراد والقالب، فلا تنحرف
@@ -11,10 +12,12 @@ export const MEAL_COL_ENGLISH  = 'الاسم الإنجليزي';
 export const MEAL_COL_TYPE     = 'نوع الوجبة';
 export const MEAL_COL_SNACK    = 'سناك';
 export const MEAL_COL_CATEGORY = 'الفئة';
+/** «مهروس = شبه المهروس، خلاط = الخلاط» — الحالات الغذائية والنظام المربوط بكل وحدة */
+export const MEAL_COL_TEXTURES = 'الحالات الغذائية';
 
-export const MEAL_HEADERS = [MEAL_COL_NAME, MEAL_COL_ENGLISH, MEAL_COL_TYPE, MEAL_COL_SNACK, MEAL_COL_CATEGORY];
+export const MEAL_HEADERS = [MEAL_COL_NAME, MEAL_COL_ENGLISH, MEAL_COL_TYPE, MEAL_COL_SNACK, MEAL_COL_CATEGORY, MEAL_COL_TEXTURES];
 export const MEAL_REQUIRED_HEADERS = [MEAL_COL_NAME, MEAL_COL_TYPE];
-export const MEAL_TEMPLATE_ROW = ['أرز بالدجاج', 'Rice with Chicken', 'غداء', 'لا', 'حار'];
+export const MEAL_TEMPLATE_ROW = ['أرز بالدجاج', 'Rice with Chicken', 'غداء', 'لا', 'حار', ''];
 
 const TYPE_FROM_TEXT: Record<string, MealType> = {
   ...Object.fromEntries((Object.entries(MEAL_TYPE_LABELS) as [MealType, string][]).map(([k, v]) => [v, k])),
@@ -38,13 +41,17 @@ export function mealCategoryOf(m: Pick<Meal, 'category' | 'is_snack'>): ItemCate
   return m.category === 'cold' ? 'cold' : 'hot';
 }
 
-export function buildMealRow(m: Pick<Meal, 'name' | 'english_name' | 'type' | 'is_snack' | 'category'>): Record<string, string> {
+export function buildMealRow(
+  m: Pick<Meal, 'name' | 'english_name' | 'type' | 'is_snack' | 'category'>,
+  textures?: TextureSpec[] | null,
+): Record<string, string> {
   return {
     [MEAL_COL_NAME]:     m.name,
     [MEAL_COL_ENGLISH]:  m.english_name ?? '',
     [MEAL_COL_TYPE]:     MEAL_TYPE_LABELS[m.type] ?? m.type,
     [MEAL_COL_SNACK]:    m.is_snack ? 'نعم' : 'لا',
     [MEAL_COL_CATEGORY]: CATEGORY_LABELS[mealCategoryOf(m)],
+    [MEAL_COL_TEXTURES]: formatTextures(textures),
   };
 }
 
@@ -63,7 +70,12 @@ export function parseMealRow(
   row: Record<string, string>,
   entityType: EntityType,
   rowLabel: string,
-): { payload: MealPayload | null; error: string | null } {
+): {
+  payload: MealPayload | null;
+  /** غائب = عمود الحالات غير موجود في الملف، فلا نلمس حالات الصنف */
+  textures?: TextureSpec[];
+  error: string | null;
+} {
   const name = clean(row[MEAL_COL_NAME]);
   if (!name) return { payload: null, error: `${rowLabel}: الاسم مطلوب` };
 
@@ -91,7 +103,10 @@ export function parseMealRow(
 
   const payload: MealPayload = { name, type, is_snack, category: finalCategory, entity_type: entityType };
   if (MEAL_COL_ENGLISH in row) payload.english_name = clean(row[MEAL_COL_ENGLISH]) || null;
-  return { payload, error: null };
+  if (!(MEAL_COL_TEXTURES in row)) return { payload, error: null };
+  const tx = parseTextures(row[MEAL_COL_TEXTURES]);
+  if (tx.error) return { payload: null, error: `${rowLabel} (${name}): الحالات الغذائية — ${tx.error}` };
+  return { payload, textures: tx.textures, error: null };
 }
 
 /** مفتاح التفرّد في الجدول: (entity_type, type, is_snack, name) */

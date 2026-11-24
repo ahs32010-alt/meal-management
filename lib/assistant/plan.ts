@@ -589,6 +589,13 @@ async function planPersonField(
   const person = resolvePerson(cmd.person, people);
   if (!person.ok) return person.problem;
 
+  // diet_type صار يُكتب من «النظام الغذائي الأساسي» (beneficiary_diets) بالقاعدة —
+  // كتابته مباشرة تنمسح، فنوجّه للمكان الصحيح بدل خطة ما لها أثر
+  if (cmd.field === 'diet_type') {
+    return problem('النظام الغذائي يتعدّل من النظام الأساسي',
+      `غيّر نظام ${person.item.name} من نافذة المستفيد ← «النظام الغذائي الأساسي».`);
+  }
+
   const before = ((person.item as unknown as Record<string, unknown>)[cmd.field] ?? '') as string;
   if (before.trim() === cmd.value.trim()) {
     return problem('لا تغيير', `${FIELD_LABELS[cmd.field]} لـ${person.item.name} هي «${cmd.value}» أصلاً.`);
@@ -861,7 +868,6 @@ async function planCreatePerson(
         category: 'عام',
         entity_type: cmd.entityType,
         villa: cmd.villa ?? null,
-        diet_type: cmd.dietType ?? null,
         is_active: true,
       },
     },

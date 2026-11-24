@@ -11,7 +11,6 @@ import { enqueueCreate, enqueueUpdate, type CreatePayload } from '@/lib/pending-
 import type { Beneficiary, Meal, MealType, ItemCategory, EntityType, DietSystem } from '@/lib/types';
 import { MEAL_TYPE_LABELS, DAY_LABELS, DAYS_ORDER, ENTITY_TYPE_LABELS, CATEGORY_LABELS } from '@/lib/types';
 import { STICKER_FLAGS, CUSTOM_LD_MEALS_LABEL } from '@/lib/sticker-flags';
-import DietTypeSelect from '@/components/shared/DietTypeSelect';
 import ExclusionSectionsEditor from '@/components/shared/ExclusionSectionsEditor';
 import { WEEK_TITLES, type WeekNumber } from '@/lib/menu-utils';
 
@@ -136,7 +135,7 @@ const slotLabel = (ov: MenuOverrideEntry) =>
  * صف القاعدة يحمل أعمدة تقنية (id, created_at, entity_type) ما تعني القارئ.
  */
 const LOGGED_BENEFICIARY_FIELDS = [
-  'name', 'english_name', 'code', 'category', 'villa', 'diet_type', 'notes',
+  'name', 'english_name', 'code', 'category', 'villa', 'notes', 'allergies',
   'no_fish', 'no_pasta', 'no_sandwich', 'low_carb', 'custom_ld_meals', 'is_active',
 ];
 
@@ -428,8 +427,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
   const [code, setCode] = useState(beneficiary?.code ?? '');
   const [category, setCategory] = useState(beneficiary?.category ?? '');
   const [villa, setVilla] = useState(beneficiary?.villa ?? '');
-  const [dietType, setDietType] = useState(beneficiary?.diet_type ?? '');
   const [notes, setNotes] = useState(beneficiary?.notes ?? '');
+  const [allergies, setAllergies] = useState(beneficiary?.allergies ?? '');
   const [noFish, setNoFish] = useState(beneficiary?.no_fish ?? false);
   const [noPasta, setNoPasta] = useState(beneficiary?.no_pasta ?? false);
   const [noSandwich, setNoSandwich] = useState(beneficiary?.no_sandwich ?? false);
@@ -736,7 +735,7 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
     const payload: Record<string, unknown> = {
       name: name.trim(), english_name: englishName.trim() || null,
       code: code.trim(), category: category.trim(),
-      villa: villa.trim() || null, diet_type: dietType.trim() || null,
+      villa: villa.trim() || null,
       notes: notes.trim() || null,
       no_fish: noFish,
       no_pasta: noPasta,
@@ -745,6 +744,9 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
       custom_ld_meals: customLdMeals,
       is_active: isActive,
     };
+    // «حساسيات وموانع» — نرسلها فقط لو فيها قيمة أو كان لها قيمة: قبل ترقية
+    // العمود يبقى حفظ من ما كتب فيها شيئاً شغّال كما هو
+    if (allergies.trim() || beneficiary?.allergies) payload.allergies = allergies.trim() || null;
     // فقط نضيف entity_type عند الإنشاء — التعديل ما يغيّر النوع.
     if (!beneficiary) payload.entity_type = entityType;
 
@@ -759,6 +761,9 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
       }
       if (m.includes('unique') || m.includes('duplicate key')) {
         return 'البيانات المدخلة مكررة — تحقق من الكود أو الاسم';
+      }
+      if (m.includes('allergies')) {
+        return 'خانة «حساسيات وموانع» تحتاج تفعيل في القاعدة أولاً — شغّل supabase/allergies-diet-english-migration.sql في Supabase SQL Editor';
       }
       return msg;
     };
@@ -984,8 +989,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
             code: beneficiary.code,
             category: beneficiary.category,
             villa: beneficiary.villa,
-            diet_type: beneficiary.diet_type,
             notes: beneficiary.notes,
+            allergies: beneficiary.allergies,
             no_fish: beneficiary.no_fish,
             no_pasta: beneficiary.no_pasta,
             no_sandwich: beneficiary.no_sandwich,
@@ -1153,12 +1158,8 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                 <div><label className="label">رقم الفيلا</label>
                   <input value={villa} onChange={e => setVilla(e.target.value)} className="input-field" placeholder="42" /></div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="label">الفئة</label>
-                  <input value={category} onChange={e => setCategory(e.target.value)} className="input-field" placeholder="موظف، طالب..." /></div>
-                <div><label className="label">النظام الغذائي</label>
-                  <DietTypeSelect value={dietType} onChange={setDietType} /></div>
-              </div>
+              <div><label className="label">الفئة</label>
+                <input value={category} onChange={e => setCategory(e.target.value)} className="input-field" placeholder="موظف، طالب..." /></div>
               <div className="border border-green-200 rounded-xl p-4 bg-green-50/40">
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <label className="label mb-0">النظام الغذائي الأساسي</label>
@@ -1172,6 +1173,13 @@ export default function BeneficiaryModal({ beneficiary, meals, entityType = 'ben
                 <p className="text-[11px] text-slate-500 mt-2">
                   اختر نظاماً أو أكثر. النظام «للعرض فقط» يُسجَّل للشخص بدون ما يغيّر محظوراته — أما النظام اللي شِيل منه خيار «لا تعكس الأصناف» فمحظوراته وبدائله وأصنافه الثابتة تنطبق على منيوه تلقائياً.
                 </p>
+              </div>
+              <div>
+                <label className="label">حساسيات وموانع</label>
+                <textarea value={allergies} onChange={e => setAllergies(e.target.value)}
+                  className="input-field h-16 resize-none border-red-200 focus:border-red-400"
+                  placeholder="مثال: حساسية مكسرات، ممنوع الملح..." />
+                <p className="text-[11px] text-slate-500 mt-1">تُطبع بالأحمر في ستيكرات الغداء والعشاء تحت «حساسيات وموانع».</p>
               </div>
               <div><label className="label">ملاحظات</label>
                 <textarea value={notes} onChange={e => setNotes(e.target.value)} className="input-field h-20 resize-none" placeholder="أي ملاحظات إضافية..." /></div>

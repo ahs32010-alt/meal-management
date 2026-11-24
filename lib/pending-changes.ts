@@ -74,6 +74,7 @@ const FIELD_LABELS: Record<string, string> = {
   villa: 'الفيلا',
   diet_type: 'النظام الغذائي',
   notes: 'الملاحظات',
+  allergies: 'حساسيات وموانع',
   no_fish: 'بدون سمك',
   no_pasta: 'لا يفضل المكرونة',
   no_sandwich: 'لا يفضل الساندويش',

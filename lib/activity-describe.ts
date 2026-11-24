@@ -230,6 +230,7 @@ export const DETAIL_LABELS: Record<string, string> = {
   english_name: 'الاسم بالإنجليزية',
   diet_type: 'نوع الحمية',
   notes: 'الملاحظات',
+  allergies: 'حساسيات وموانع',
   no_fish: 'بدون سمك',
   no_pasta: 'بدون مكرونة',
   no_sandwich: 'بدون ساندويش',

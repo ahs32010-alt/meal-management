@@ -393,7 +393,13 @@ export default function MenuView() {
     }
 
     const loadedItems = itemsRes.data ? (itemsRes.data as unknown as MenuItem[]) : null;
-    const loadedMeals = mealsRes.data ? (mealsRes.data as unknown as Meal[]) : null;
+    // الحالات الغذائية («فول (مهروس)») بدائل تلقائية، ما تنحط في المنيو — نخفيها
+    // من اختيار الأصناف. قبل meal-textures-migration الاستعلام يفشل فما يتغيّر شيء.
+    const texRes = await supabase.from('meals').select('id').not('texture_of', 'is', null);
+    const variantIds = new Set(texRes.error ? [] : ((texRes.data ?? []) as { id: string }[]).map(t => t.id));
+    const loadedMeals = mealsRes.data
+      ? (mealsRes.data as unknown as Meal[]).filter(m => !variantIds.has(m.id))
+      : null;
     if (loadedItems) setAllItems(loadedItems);
     if (loadedMeals) setMeals(loadedMeals);
     if (loadedItems && loadedMeals) writeSnapshot(snapKey, { items: loadedItems, meals: loadedMeals });

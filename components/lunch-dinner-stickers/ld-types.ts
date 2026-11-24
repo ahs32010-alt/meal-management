@@ -34,5 +34,12 @@ export interface LdMealCustomization {
   alternatives: { ar: string; en: string }[];
 }
 
+/**
+ * اسم النظام العربي ← اسمه الإنجليزي من صفحة الأنظمة الغذائية. يتعبّى مع
+ * قراءة أنظمة المستفيدين (ld-fetch)، ويقرأه dietLines (ستيكر الصفحة وملف
+ * Word) قبل جدول الترجمة الثابت. هنا لا في ld-fetch عشان يبقى بلا تبعيات.
+ */
+export const dietEnglishNames = new Map<string, string>();
+
 export const hasCustomization = (c?: LdMealCustomization | null): boolean =>
   !!c && (c.excluded.length > 0 || c.alternatives.length > 0);

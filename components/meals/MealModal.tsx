@@ -7,6 +7,7 @@ import { changeDetails, valueDetails } from '@/lib/activity-diff';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { needsApproval } from '@/lib/permissions';
 import { enqueueGenericCreate, enqueueGenericUpdate } from '@/lib/pending-actions';
+import MealTexturesEditor from '@/components/meals/MealTexturesEditor';
 import type { Meal, MealType, EntityType, ItemCategory } from '@/lib/types';
 import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES, CATEGORY_LABELS } from '@/lib/types';
 
@@ -133,7 +134,7 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
+      <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <div className="flex items-center gap-2 flex-wrap">
             <h2 className="text-lg font-bold text-slate-800">
@@ -228,6 +229,16 @@ export default function MealModal({ meal, defaultType = 'lunch', defaultIsSnack 
               </>
             )}
           </div>
+
+          {/* الحالات الغذائية (مهروس/خلاط/…) — للصنف المحفوظ فقط، ومن يعدّل بلا موافقة */}
+          {meal && !meal.texture_of && (
+            editNeedsApproval ? null : <MealTexturesEditor meal={meal} />
+          )}
+          {!meal && (
+            <p className="text-[11px] text-violet-600 bg-violet-50 rounded-lg px-3 py-2">
+              🥣 بعد حفظ الصنف، افتحه للتعديل وأضف له حالاته الغذائية (مهروس، خلاط…).
+            </p>
+          )}
 
           {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>}
 

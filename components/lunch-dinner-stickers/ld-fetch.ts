@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase-client';
 import { fetchAllRows } from '@/lib/fetch-all';
 import type { Beneficiary } from '@/lib/types';
+import { dietEnglishNames } from './ld-types';
 
 const COLS = 'id, name, english_name, code, category, villa, diet_type, notes, created_at';
 const FLAG_COLS = 'no_fish, no_pasta, no_sandwich, low_carb';
@@ -33,7 +34,9 @@ export async function fetchStickerBeneficiaries(
 
   // تدرّج: مع الأعمدة الجديدة → بدونها (الـmigration ما اشتغل) → بدون entity_type
   // custom_ld_meals (علامة فرز «وجبات غداء وعشاء مخصصة») اختياري قبل ترقيته
-  let res = await attempt(`${COLS}, ${FLAG_COLS}, custom_ld_meals, is_active, entity_type`, entityFilter);
+  // allergies («حساسيات وموانع») اختياري قبل allergies-diet-english-migration
+  let res = await attempt(`${COLS}, ${FLAG_COLS}, custom_ld_meals, allergies, is_active, entity_type`, entityFilter);
+  if (res.error) res = await attempt(`${COLS}, ${FLAG_COLS}, custom_ld_meals, is_active, entity_type`, entityFilter);
   if (res.error) res = await attempt(`${COLS}, ${FLAG_COLS}, is_active, entity_type`, entityFilter);
   if (res.error) res = await attempt(`${COLS}, is_active, entity_type`, entityFilter);
   if (res.error) res = await attempt(`${COLS}, entity_type`, entityFilter);
@@ -64,14 +67,20 @@ export function fetchDietLabels(): Promise<Map<string, string>> {
 let labelsInflight: Promise<Map<string, string>> | null = null;
 
 async function readDietLabels(): Promise<Map<string, string>> {
-  const res = await fetchAllRows((from, to) =>
-    supabase.from('beneficiary_diets').select('beneficiary_id, diet_id, diet_systems(name)')
+  const read = (cols: string) => fetchAllRows((from, to) =>
+    supabase.from('beneficiary_diets').select(`beneficiary_id, diet_id, diet_systems(${cols})`)
       .order('beneficiary_id').order('diet_id').range(from, to));
+  // english_name اختياري قبل allergies-diet-english-migration
+  let res = await read('name, english_name');
+  if (res.error) res = await read('name');
   const names = new Map<string, string[]>();
   if (res.error) return new Map();
-  for (const r of (res.data ?? []) as unknown as { beneficiary_id: string; diet_systems: { name: string } | null }[]) {
+  type Row = { beneficiary_id: string; diet_systems: { name: string; english_name?: string | null } | null };
+  for (const r of (res.data ?? []) as unknown as Row[]) {
     const n = r.diet_systems?.name?.trim();
     if (!n) continue;
+    const en = r.diet_systems?.english_name?.trim();
+    if (en) dietEnglishNames.set(n, en); else dietEnglishNames.delete(n);
     const list = names.get(r.beneficiary_id) ?? [];
     if (!list.includes(n)) list.push(n);
     names.set(r.beneficiary_id, list);

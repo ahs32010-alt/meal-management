@@ -33,9 +33,13 @@ export const COL_CUSTOM_LD = 'وجبات غداء وعشاء مخصصة';
 
 /**
  * الأنظمة الغذائية المسندة (diet_systems) بأسمائها، مفصولة بـ" - ".
- * غير «النظام الغذائي» (diet_type) الذي هو نص حر — التسمية هي نفسها في النافذة.
+ * هو المرجع الوحيد للنظام الغذائي — عمود «النظام الغذائي» النصي القديم انشال،
+ * وملف قديم فيه هذا العمود يُتجاهل (diet_type تكتبه القاعدة من الأنظمة).
  */
 export const COL_DIETS = 'النظام الغذائي الأساسي';
+
+/** «حساسيات وموانع» — تُطبع في ستيكرات الغداء والعشاء؛ عمود اختياري */
+export const COL_ALLERGIES = 'حساسيات وموانع';
 
 /** قرارات «المنيو المخصّص» على خانة محددة (أسبوع/يوم/وجبة) — عمود اختياري */
 export const COL_MENU_OVERRIDES = 'تعديلات المنيو لخانات محددة';
@@ -67,12 +71,13 @@ export const FIXED_COLUMNS = MEAL_COLS.flatMap(m => ([
 
 /** ترتيب أعمدة الملف — التصدير والقالب والاستيراد كلها تقرأ من هنا */
 export const BENEFICIARY_HEADERS: string[] = [
-  'الاسم', 'الاسم الإنجليزي', 'الكود', 'الفئة', 'الفيلا', 'النظام الغذائي',
+  'الاسم', 'الاسم الإنجليزي', 'الكود', 'الفئة', 'الفيلا',
   COL_DIETS,
   ...EXCLUSION_COLUMNS.map(c => c.col),
   ...FIXED_COLUMNS.map(c => c.col),
   COL_MENU_OVERRIDES,
   'ملاحظات',
+  COL_ALLERGIES,
   COL_ACTIVE,
   ...STICKER_FLAG_COLUMNS.map(c => c.col),
   COL_CUSTOM_LD,
@@ -88,7 +93,6 @@ const TEMPLATE_SAMPLE: Record<string, string> = {
   'الكود': 'B001',
   'الفئة': 'عائلة',
   'الفيلا': '5',
-  'النظام الغذائي': '',
   // أسماء أنظمة موجودة في صفحة «النظام الغذائي»، مفصولة بـ" - "
   [COL_DIETS]: '',
   // محظور؛بديله — والمحظورات مفصولة بـ" - "
@@ -102,6 +106,7 @@ const TEMPLATE_SAMPLE: Record<string, string> = {
   // أسبوع؛يوم؛وجبة؛إجراء؛الصنف — الإجراء: استبدال (قديم←جديد) / حذف / إضافة
   [COL_MENU_OVERRIDES]: 'أسبوع1؛سبت؛فطور؛استبدال؛فول←بيض - أسبوع2؛احد؛فطور؛حذف؛شكشوكة - أسبوع3؛خميس؛فطور؛إضافة؛فول×2',
   'ملاحظات': '',
+  [COL_ALLERGIES]: 'حساسية مكسرات',
   // مفعّل + خيارات الستيكر — أعمدة اختيارية، غيابها يعني مفعّل/لا
   [COL_ACTIVE]: 'نعم',
 };
@@ -170,6 +175,7 @@ export interface SheetBeneficiary {
   villa?: string | null;
   diet_type?: string | null;
   notes?: string | null;
+  allergies?: string | null;
   is_active?: boolean | null;
   no_fish?: boolean | null;
   no_pasta?: boolean | null;
@@ -371,13 +377,13 @@ export function buildBeneficiaryRow(
     'الكود': ben.code,
     'الفئة': ben.category ?? '',
     'الفيلا': ben.villa ?? '',
-    'النظام الغذائي': ben.diet_type ?? '',
     [COL_DIETS]: (ben.diet_names ?? []).filter(Boolean).join(' - '),
   };
   for (const c of EXCLUSION_COLUMNS) row[c.col] = buildExclusionCell(exclusions, mealsById, c.type, c.isSnack);
   for (const c of FIXED_COLUMNS)     row[c.col] = buildFixedCell(fixed, mealsById, c.type, c.isSnack);
   row[COL_MENU_OVERRIDES] = buildOverridesCell(overrides, mealsById);
   row['ملاحظات'] = ben.notes ?? '';
+  row[COL_ALLERGIES] = ben.allergies ?? '';
   // `is_active` غير محدّد = مفعّل (الترقية ما اتشغّلت) — نفس ما تفترضه كل الصفحات
   row[COL_ACTIVE] = formatYesNo(ben.is_active !== false);
   for (const f of STICKER_FLAG_COLUMNS) row[f.col] = formatYesNo(ben[f.key] === true);
@@ -490,6 +496,9 @@ export function verifyBeneficiaryRoundTrip(
       if (parseYesNo(row[f.col], false) !== (ben[f.key] === true)) {
         issues.push(`${who}: الخيار «${f.col}» لا يعبر الملف`);
       }
+    }
+    if ((row[COL_ALLERGIES] ?? '').trim() !== (ben.allergies ?? '').trim()) {
+      issues.push(`${who}: «${COL_ALLERGIES}» لا تعبر الملف`);
     }
     if (parseYesNo(row[COL_CUSTOM_LD], false) !== (ben.custom_ld_meals === true)) {
       issues.push(`${who}: العلامة «${COL_CUSTOM_LD}» لا تعبر الملف`);

@@ -232,6 +232,12 @@ function bottomCell(ben: Beneficiary, ctx: Ctx, bg?: string, custom?: LdMealCust
     })],
   }));
 
+  // نص الحساسيات والموانع — بالأحمر مثل ستيكر الصفحة
+  const allergies = ben.allergies?.trim();
+  if (allergies) {
+    children.push(center([new TextRun({ text: allergies, bold: true, color: 'B91C1C', size: sz(10 * scale), rightToLeft: true })], 0, 40));
+  }
+
   // الملاحظات
   children.push(center([new TextRun({ text: 'Notes - الملاحظات', bold: true, size: sz(11 * scale), underline: {}, rightToLeft: true })], 0, 60));
   if (ben.notes) {

@@ -16,7 +16,9 @@ import { MEAL_TYPE_LABELS, ENTITY_TYPE_LABELS_PLURAL, ENTITY_BADGE_STYLES } from
 import ConfirmDialog from '@/components/shared/ConfirmDialog';
 import type { ImportMode } from '@/components/shared/ImportModeDialog';
 import { exportXLSX } from '@/lib/xlsx-utils';
-import { MEAL_HEADERS, MEAL_REQUIRED_HEADERS, MEAL_TEMPLATE_ROW, buildMealRow, parseMealRow, type MealPayload } from '@/lib/meal-sheet';
+import { MEAL_HEADERS, MEAL_REQUIRED_HEADERS, MEAL_TEMPLATE_ROW, buildMealRow, parseMealRow, mealKey, type MealPayload } from '@/lib/meal-sheet';
+import { saveMealTexture, type TextureSpec } from '@/lib/meal-textures';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 const MealModal = dynamic(() => import('./MealModal'), { ssr: false });
 const ImportModal = dynamic(() => import('@/components/shared/ImportModal'), { ssr: false });
@@ -34,6 +36,9 @@ const TYPE_COLORS: Record<MealType, { bg: string; text: string; border: string }
   lunch: { bg: 'bg-blue-50', text: 'text-blue-800', border: 'border-blue-200' },
   dinner: { bg: 'bg-purple-50', text: 'text-purple-800', border: 'border-purple-200' },
 };
+
+/** شارة حالة غذائية تحت صنفها الأصلي: اسم الحالة + النظام المربوط فيها */
+interface MealTextureChip { name: string; diet: string | null }
 
 interface MealSectionProps {
   title: string;
@@ -162,6 +167,19 @@ function MealSection({ title, meals, isSnack, mealType, colors, onAdd, onBulkAdd
                 {meal.english_name && (
                   <span className="text-slate-400 text-xs font-mono">({meal.english_name})</span>
                 )}
+                {(meal as Meal & { _textures?: MealTextureChip[] })._textures?.map(t => (
+                  <span
+                    key={t.name}
+                    className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700"
+                    title={t.diet ? `حالة غذائية «${t.name}» — مربوطة بنظام «${t.diet}»` : `حالة غذائية «${t.name}» — بدون نظام`}
+                  >
+                    🥣 {t.name}
+                    <span className="font-normal text-violet-400">←</span>
+                    {t.diet
+                      ? <span className="font-semibold text-violet-600">{t.diet}</span>
+                      : <span className="font-semibold text-red-500">بدون نظام</span>}
+                  </span>
+                ))}
               </div>
               <div className="flex items-center gap-1">
                 {!isPendingCreate && canEdit && (
@@ -385,7 +403,34 @@ export default function MealList() {
       }
       if (res.error) throw res.error;
       if (res.data) {
-        const fresh = res.data as unknown as Meal[];
+        // الحالات الغذائية («فول (مهروس)») ما تظهر كأصناف مستقلة — تظهر كشارات
+        // تحت صنفها الأصلي. قبل تشغيل meal-textures-migration الاستعلام يفشل
+        // بصمت فتظهر القائمة كما كانت.
+        const [texRes, dietRes] = await Promise.all([
+          supabase.from('meals')
+            .select('id, texture_of, texture_name, texture_diet_id')
+            .not('texture_of', 'is', null)
+            .order('created_at'),
+          supabase.from('diet_systems').select('id, name'),
+        ]);
+        const dietName = new Map<string, string>(
+          ((dietRes.data ?? []) as { id: string; name: string }[]).map(d => [d.id, d.name]),
+        );
+        const texByParent = new Map<string, MealTextureChip[]>();
+        const variantIds = new Set<string>();
+        if (!texRes.error) {
+          for (const t of (texRes.data ?? []) as { id: string; texture_of: string; texture_name: string; texture_diet_id: string | null }[]) {
+            variantIds.add(t.id);
+            const chip: MealTextureChip = {
+              name: t.texture_name,
+              diet: t.texture_diet_id ? dietName.get(t.texture_diet_id) ?? null : null,
+            };
+            texByParent.set(t.texture_of, [...(texByParent.get(t.texture_of) ?? []), chip]);
+          }
+        }
+        const fresh = (res.data as unknown as Meal[])
+          .filter(m => !variantIds.has(m.id))
+          .map(m => texByParent.has(m.id) ? { ...m, _textures: texByParent.get(m.id) } : m);
         setMeals(fresh);
         writeSnapshot(snapKey, fresh);
       }
@@ -732,7 +777,8 @@ export default function MealList() {
   // ── Export ──────────────────────────────────────────────────────────────
   // صيغة الملف في lib/meal-sheet.ts — نفسها يقرأها الاستيراد ويبني منها القالب.
   const handleExport = () => {
-    const rows = meals.map(buildMealRow);
+    // الحالات الغذائية تنصدّر في خانة صنفها الأصلي («مهروس = شبه المهروس»)
+    const rows = meals.map(m => buildMealRow(m, (m as Meal & { _textures?: MealTextureChip[] })._textures));
     const tag = entityType === 'companion' ? 'مرافقون' : 'مستفيدون';
     exportXLSX(rows, `أصناف_${tag}_${new Date().toISOString().slice(0, 10)}.xlsx`, `أصناف ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`);
   };
@@ -744,11 +790,33 @@ export default function MealList() {
 
     // نتحقق من كل الصفوف أولاً — قبل أي حذف. كان «استبدال» يحذف الأصناف ثم
     // يكتشف أن الملف كله غير صالح، فتضيع الأصناف (وما يرتبط بها) بلا بديل.
-    const payloads: { payload: MealPayload; label: string }[] = [];
+    const payloads: { payload: MealPayload; label: string; textures?: TextureSpec[] }[] = [];
     for (let i = 0; i < rows.length; i++) {
-      const { payload, error } = parseMealRow(rows[i], entityType, `صف ${i + 2}`);
+      const { payload, textures, error } = parseMealRow(rows[i], entityType, `صف ${i + 2}`);
       if (error) errors.push(error);
-      else if (payload) payloads.push({ payload, label: `صف ${i + 2} (${payload.name})` });
+      else if (payload) payloads.push({ payload, label: `صف ${i + 2} (${payload.name})`, textures });
+    }
+
+    // الحالات الغذائية: أسماء الأنظمة لازم تكون موجودة — نتحقق قبل أي حذف
+    const withTextures = payloads.filter(p => (p.textures?.length ?? 0) > 0);
+    const dietIdByName = new Map<string, string>();
+    if (withTextures.length > 0) {
+      const { data: dietRows, error: dietErr } = await supabase.from('diet_systems').select('id, name');
+      if (dietErr) {
+        errors.push(`تعذّر قراءة الأنظمة الغذائية للحالات: ${dietErr.message}`);
+      } else {
+        for (const d of (dietRows ?? []) as { id: string; name: string }[]) dietIdByName.set(d.name.trim(), d.id);
+        for (const p of withTextures) {
+          for (const t of p.textures ?? []) {
+            if (t.diet && !dietIdByName.has(t.diet)) {
+              errors.push(`${p.label}: النظام الغذائي «${t.diet}» للحالة «${t.name}» غير موجود — أنشئه أولاً من صفحة الأنظمة الغذائية`);
+            }
+          }
+        }
+        // لو فيه خطأ في الحالات نشيل الصف كامل — ما نحفظ الصنف بنص حالاته
+        const bad = new Set(errors.map(e => e.split(':')[0]));
+        for (let i = payloads.length - 1; i >= 0; i--) if (bad.has(payloads[i].label)) payloads.splice(i, 1);
+      }
     }
     if (mode === 'replace' && errors.length > 0) {
       return { imported: 0, errors: ['لم يُحذف أي شيء — صحّح الأخطاء التالية ثم أعد الاستيراد:', ...errors] };
@@ -802,12 +870,40 @@ export default function MealList() {
       if (error) { errors.push(`${label}: ${error.message}`); continue; }
       imported++;
     }
+    // الحالات الغذائية — بعد حفظ الأصناف الأصلية. «إضافة» تضيف الناقص فقط،
+    // و«تحديث/استبدال» تحدّث نظام الحالة الموجودة. ما نحذف حالة غائبة عن الملف
+    // (في «استبدال» انحذفت أصلاً مع أصنافها).
+    let texturesSaved = 0;
+    if (withTextures.length > 0) {
+      const all = await fetchAllRows((from, to) => supabase.from('meals')
+        .select('id, name, type, is_snack, entity_type').eq('entity_type', entityType)
+        .order('id').range(from, to));
+      const byKey = new Map(((all.data ?? []) as unknown as Meal[]).map(m => [
+        mealKey({ entity_type: (m.entity_type ?? entityType) as EntityType, type: m.type, is_snack: m.is_snack, name: m.name }), m,
+      ]));
+      for (const p of withTextures) {
+        const parent = byKey.get(mealKey(p.payload));
+        if (!parent) continue; // فشل حفظ الصنف نفسه — خطؤه مسجّل فوق
+        let existingNames = new Set<string>();
+        if (mode === 'append') {
+          const { data } = await supabase.from('meals').select('texture_name').eq('texture_of', parent.id);
+          existingNames = new Set(((data ?? []) as { texture_name: string }[]).map(r => r.texture_name.trim()));
+        }
+        for (const t of p.textures ?? []) {
+          if (mode === 'append' && existingNames.has(t.name)) continue;
+          const r = await saveMealTexture(supabase, parent, t.name, t.diet ? dietIdByName.get(t.diet) ?? null : null);
+          if (r.error) errors.push(`${p.label}: الحالة «${t.name}» — ${r.error}`);
+          else texturesSaved++;
+        }
+      }
+    }
+
     if (imported > 0) {
       void logActivity({
         action: 'create',
         entity_type: 'meal',
         entity_name: `استيراد أصناف (${imported}) — ${ENTITY_TYPE_LABELS_PLURAL[entityType]}`,
-        details: { imported, errors_count: errors.length, for_entity: entityType, mode, source: 'excel_import' },
+        details: { imported, textures: texturesSaved, errors_count: errors.length, for_entity: entityType, mode, source: 'excel_import' },
       });
     }
     return { imported, errors };
@@ -1026,7 +1122,8 @@ export default function MealList() {
           defaultType={modalDefaults.type}
           defaultIsSnack={modalDefaults.isSnack}
           entityType={entityType}
-          onClose={() => setModalOpen(false)}
+          // الحالات الغذائية تنحفظ فوراً داخل النافذة — نحدّث القائمة حتى لو انقفلت بلا «حفظ»
+          onClose={() => { setModalOpen(false); if (editingMeal) fetchMeals(); }}
           onSaved={() => { setModalOpen(false); fetchMeals(); myPending.refresh(); }}
         />
       )}

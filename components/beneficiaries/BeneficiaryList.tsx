@@ -17,6 +17,7 @@ import {
   STICKER_FLAG_COLUMNS,
   LEGACY_PASTA_SANDWICH_COL,
   COL_CUSTOM_LD,
+  COL_ALLERGIES,
   buildBeneficiaryRow,
   normalizeSheetRow,
   parseFixedToken,
@@ -200,12 +201,15 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       let withFixedDiet = true;
       // علامة «وجبات غداء وعشاء مخصصة» (custom-ld-meals-migration) — تُسقط وحدها لو غابت
       let withCustomLd = true;
+      // «حساسيات وموانع» (allergies-diet-english-migration) — تُسقط وحدها لو غابت
+      let withAllergies = true;
       // details=false → أعمدة المستفيد وحدها (خفيفة، تُرسم فوراً).
       // details=true  → مع المحظورات والثوابت والأنظمة — بلا id/beneficiary_id
       // للصفوف المتداخلة: ما يستخدمها أحد، وهي ~٧٠ بايت × آلاف الصفوف.
       const fetchBens = (withFixedCategory: boolean, withEntityType: boolean, withFlags: boolean, details: boolean) => {
         const flagCols = (withFlags ? ', no_fish, no_pasta, no_sandwich, low_carb, is_active' : '') +
-          (withFlags && withCustomLd ? ', custom_ld_meals' : '');
+          (withFlags && withCustomLd ? ', custom_ld_meals' : '') +
+          (withAllergies ? ', allergies' : '');
         const fixedCols =
           `day_of_week, meal_type, meal_id, quantity` +
           `${withFixedCategory ? ', category, suppress_if_meal_ids' : ''}${withFixedAlt ? ', is_alternative' : ''}` +
@@ -235,6 +239,10 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
         companionsNeedMigration?: boolean;
       }> => {
         let res = await fetchBens(true, true, true, details);
+        if (res.error && /allergies/i.test(res.error.message)) {
+          withAllergies = false;
+          res = await fetchBens(true, true, true, details);
+        }
         if (res.error && /diet_id/i.test(res.error.message)) {
           withFixedDiet = false;
           res = await fetchBens(true, true, true, details);
@@ -398,7 +406,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
             ? {
                 ...valueDetails(ben as unknown as Record<string, unknown>, [
                   'name', 'english_name', 'code', 'category', 'villa', 'diet_type',
-                  'notes', 'no_fish', 'no_pasta', 'no_sandwich', 'low_carb', 'is_active',
+                  'notes', 'allergies', 'no_fish', 'no_pasta', 'no_sandwich', 'low_carb', 'is_active',
                 ]),
                 exclusions_count: ben.exclusions?.length ?? 0,
                 fixed_meals_count: ben.fixed_meals?.length ?? 0,
@@ -547,6 +555,7 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
       b.villa,
       b.diet_type,
       b.notes,
+      b.allergies,
       b.fixed_items,
       exclusionMealNames,
       alternativeMealNames,
@@ -1025,7 +1034,6 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                   code,
                   category: row['الفئة']?.toString().trim() || '',
                   villa: row['الفيلا']?.toString().trim() || null,
-                  diet_type: row['النظام الغذائي']?.toString().trim() || null,
                   notes: row['ملاحظات']?.toString().trim() || null,
                   entity_type: entityType,
                   // أعمدة اختيارية — تُكتب فقط لو العمود في الملف. الملف القديم
@@ -1043,6 +1051,8 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
                       .map(f => [f.key, parseYesNo(row[f.col], false)]),
                   ),
                   ...(fileHas(COL_CUSTOM_LD) ? { custom_ld_meals: parseYesNo(row[COL_CUSTOM_LD], false) } : {}),
+                  // ملف قديم بلا العمود → ما نمسح حساسيات الموجودين في «تحديث الموجود»
+                  ...(fileHas(COL_ALLERGIES) ? { allergies: row[COL_ALLERGIES]?.toString().trim() || null } : {}),
                 },
                 exclCols:  EXCL_COLS.map(c => ({ type: c.type, isSnack: c.isSnack, raw: row[c.col]?.toString().trim() || '' })),
                 fixedCols: FIXED_COLS.map(c => ({ type: c.type, isSnack: c.isSnack, raw: row[c.col]?.toString().trim() || '' })),
@@ -1071,6 +1081,16 @@ export default function BeneficiaryList({ entityType = 'beneficiary' }: Benefici
               const probe = await supabase.from('beneficiaries').select('custom_ld_meals').limit(1);
               if (probe.error && /custom_ld_meals/i.test(probe.error.message)) {
                 for (const r of parsed) delete r.payload.custom_ld_meals;
+              }
+            }
+
+            // عمود allergies قبل allergies-diet-english-migration غير موجود — نسقطه
+            // من الصفوف بدل ما يفشل الاستيراد كله
+            if (parsed.some(r => 'allergies' in r.payload)) {
+              const probe = await supabase.from('beneficiaries').select('allergies').limit(1);
+              if (probe.error && /allergies/i.test(probe.error.message)) {
+                for (const r of parsed) delete r.payload.allergies;
+                errors.push(`عمود «${COL_ALLERGIES}» ما انحفظ — شغّل supabase/allergies-diet-english-migration.sql في Supabase`);
               }
             }
 

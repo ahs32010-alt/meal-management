@@ -131,6 +131,11 @@ export function rowsForClientInsert(
   rows: Record<string, unknown>[],
 ): Record<string, unknown>[] {
   if (table === 'exclusions') return rows.filter(r => r.diet_id == null);
+  // الحالة الغذائية («فول (مهروس)») تشير لصنفها الأصلي (texture_of) — الإدراج
+  // على دفعات يحتاج الأصل قبلها، وإلا يفشل مفتاح الربط وتضيع الحالة.
+  if (table === 'meals') {
+    return [...rows].sort((a, b) => Number(a.texture_of != null) - Number(b.texture_of != null));
+  }
   return rows;
 }
 

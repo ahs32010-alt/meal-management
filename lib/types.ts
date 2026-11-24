@@ -70,6 +70,8 @@ export interface Beneficiary {
   diet_type?: string;
   fixed_items?: string;
   notes?: string;
+  /** «حساسيات وموانع» — تُطبع في ستيكرات الغداء والعشاء (allergies-diet-english-migration) */
+  allergies?: string | null;
   // خيارات الستيكر — تظهر كرموز في ستيكرات الغداء والعشاء (انظر lib/sticker-flags.ts)
   no_fish?: boolean;
   no_pasta?: boolean;
@@ -102,6 +104,13 @@ export interface Meal {
   category?: ItemCategory;
   // اختياري للحفاظ على التوافق قبل تشغيل companions-meals-migration.sql
   entity_type?: EntityType;
+  /**
+   * «حالة غذائية» (meal-textures-migration): الصف حالة لصنف أصلي — مثل
+   * «فول (مهروس)». الاسم يُبنى من الأصل، والربط بالنظام يكتب الاستبعاد تلقائياً.
+   */
+  texture_of?: string | null;
+  texture_name?: string | null;
+  texture_diet_id?: string | null;
   created_at: string;
 }
 
@@ -135,6 +144,8 @@ export interface Exclusion {
 export interface DietSystem {
   id: string;
   name: string;
+  /** الاسم الإنجليزي — يُطبع تحت العربي في ستيكر الغداء والعشاء (allergies-diet-english-migration) */
+  english_name?: string | null;
   description?: string | null;
   /**
    * «لا تعكس الأصناف على المستفيد» (diet-display-only-migration) — true = النظام
